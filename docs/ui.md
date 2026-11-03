@@ -26,7 +26,11 @@ Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their
 
 ### Bodies and charsets
 
-Gmail returns body parts as base64url bytes in the part's own charset. `gmail.rs` passes them through unchanged along with the charset from `Content-Type`. `decodeBody()` decodes them with `TextDecoder(charset)`, which covers windows-1251, KOI8-R, ISO-8859-x and the rest, and falls back to UTF-8 for unknown labels. HTML is preferred. Plain text is escaped, wrapped in `<pre>`, and its URLs are turned into links.
+Gmail returns body parts as base64url bytes. `gmail.rs` passes them through unchanged along with the charset from the part's `Content-Type`. That header can't be trusted on its own: Gmail may already have converted the bytes to UTF-8 while the header still names the original charset. A Russian Google email declaring KOI8-R came out garbled when decoded as KOI8-R. So `decodeBody()` works in two steps:
+1. It first tries strict UTF-8 (`TextDecoder('utf-8', { fatal: true })`).
+2. If the bytes aren't valid UTF-8, it decodes them with the declared charset, via `TextDecoder(charset)`, which covers windows-1251, KOI8-R, ISO-8859-x and the rest. Unknown labels fall back to UTF-8.
+
+Text really in a legacy charset is almost never valid UTF-8, so step 2 still handles it. HTML is preferred. Plain text is escaped, wrapped in `<pre>`, and its URLs are turned into links.
 
 ### Sandbox
 

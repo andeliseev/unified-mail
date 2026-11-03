@@ -33,8 +33,9 @@ pub struct FullMessage {
     pub text: Option<Body>,
 }
 
-/// A body part exactly as Gmail returns it: base64url bytes in the part's own charset.
-/// The webview decodes it with `TextDecoder`, which knows every legacy charset.
+/// A body part exactly as Gmail returns it: base64url bytes, plus the charset its header
+/// declares. Gmail may already have converted the bytes to UTF-8 despite that header, so
+/// the webview tries UTF-8 first, then the declared charset (`decodeBody` in app.js).
 #[derive(Serialize)]
 pub struct Body {
     pub data: String,

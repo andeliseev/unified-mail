@@ -541,10 +541,18 @@ function showBody(full) {
   $('#m-body').replaceChildren(frame);
 }
 
-/** Gmail body parts are base64url bytes in the part's charset. */
+/**
+ * Gmail body parts are base64url bytes. Gmail may already have converted a part to UTF-8
+ * while its header still names the original charset (seen with KOI8-R), so valid UTF-8
+ * wins. Text really in a legacy charset (KOI8-R, windows-1251, Latin-1) is almost never
+ * valid UTF-8, so it falls through to the declared charset.
+ */
 function decodeBody(body) {
   const binary = atob(body.data.replace(/-/g, '+').replace(/_/g, '/'));
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch { /* not UTF-8: use the declared charset */ }
   let decoder;
   try { decoder = new TextDecoder(body.charset || 'utf-8'); } catch { decoder = new TextDecoder('utf-8'); }
   return decoder.decode(bytes);
