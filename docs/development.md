@@ -97,14 +97,33 @@ The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`,
 
 `build.rs` reads them and bakes the client into the app, just as it does with the local file. The workflow refuses to run without them, so a release can never ship without a client.
 
-**To release:** **Actions → Release → Run workflow**. Enter a new version (e.g. `0.2.0`), or leave it empty to release the version currently in `package.json`. The workflow then:
+**To release:** **Actions → Release → Run workflow**, choose what to raise, and run it:
 
-1. Sets the version with [`scripts/set-version.mjs`](../scripts/set-version.mjs) and commits "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
-2. Creates a draft release `vX.Y.Z`. It stops if that version is already released, and replaces a draft left by a failed run.
-3. Builds Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel) in parallel, and uploads them to the draft.
-4. Publishes the release only if both builds succeeded.
+| Choice | From 1.2.3 | Use for |
+| --- | --- | --- |
+| `patch` (default) | 1.2.4 | Fixes |
+| `minor` | 1.3.0 | New features |
+| `major` | 2.0.0 | Big changes |
 
-To set the version locally instead: `node scripts/set-version.mjs 0.2.0`. It updates `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`. Versions must be plain `X.Y.Z`, because MSI installers reject suffixes like `-beta`.
+Or type an exact version (e.g. `0.2.0`) in the second box; it wins over the choice. Versions must be plain `X.Y.Z`, because MSI installers reject suffixes like `-beta`.
+
+To see what a run would release, from the repo root:
+
+```bash
+node scripts/next-version.mjs patch
+```
+
+It prints the last release and the next version. The last release is the highest `vX.Y.Z` tag on GitHub (`git ls-remote --tags origin` lists them). An installed app shows its own version at the bottom of Settings. The run is named "Release (patch)" or "Release (0.2.0)" in the Actions list, and its summary page names the version.
+
+The workflow then:
+
+1. Works out the version with [`scripts/next-version.mjs`](../scripts/next-version.mjs). It stops if that isn't newer than the last release.
+2. Sets it with [`scripts/set-version.mjs`](../scripts/set-version.mjs) in `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`, and commits "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
+3. Creates a draft release `vX.Y.Z`, replacing a draft left by a failed run.
+4. Builds Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel) in parallel, and uploads them to the draft.
+5. Publishes the release only if both builds succeeded. Only then does the `vX.Y.Z` tag exist.
+
+**If a run fails,** fix the cause and run it again with the same choice. The tag doesn't exist yet, so the same version comes out, and its draft is replaced. Don't set the version locally: the workflow does it, and it refuses to go below a version already in `package.json`.
 
 **Notes:**
 

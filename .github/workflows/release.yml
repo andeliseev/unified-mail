@@ -2,12 +2,18 @@
 # Builds the Windows and macOS installers and publishes them as a GitHub Release.
 # Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets (see docs/development.md).
 name: Release
+run-name: Release (${{ inputs.version || inputs.bump }})
 
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Raise the last released version: patch for fixes (1.2.3 → 1.2.4), minor for new features (→ 1.3.0), major (→ 2.0.0)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
       version:
-        description: New version, e.g. 0.2.0. Leave empty to release the current version.
+        description: Or enter an exact version instead, e.g. 0.2.0. Leave empty to use the choice above.
         required: false
         type: string
 
@@ -45,23 +51,19 @@ jobs:
       - name: Set version
         id: version
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+          EXACT: ${{ inputs.version }}
         run: |
-          if [ -n "$INPUT_VERSION" ]; then
-            node scripts/set-version.mjs "$INPUT_VERSION"
+          next=$(node scripts/next-version.mjs "$BUMP" "$EXACT")
+          echo "$next" >> "$GITHUB_OUTPUT"
+          version=$(echo "$next" | sed -n 's/^version=//p')
+          last=$(echo "$next" | sed -n 's/^last=//p')
+          # After a failed run package.json may already have this version.
+          if [ "$version" != "$(node -p "require('./package.json').version")" ]; then
+            node scripts/set-version.mjs "$version"
           fi
-          echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - name: Check this version isn't released yet
-        uses: actions/github-script@v9
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        with:
-          script: |
-            const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
-            if (releases.some((r) => r.tag_name === process.env.TAG && !r.draft)) {
-              core.setFailed(`${process.env.TAG} is already released. Run again and enter a new version.`);
-            }
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing **v$version** (last release: v$last)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit version change
         id: commit
@@ -167,9 +169,10 @@ jobs:
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         with:
           script: |
-            await github.rest.repos.updateRelease({
+            const { data } = await github.rest.repos.updateRelease({
               ...context.repo,
               release_id: Number(process.env.RELEASE_ID),
               draft: false,
               make_latest: 'true',
             });
+            await core.summary.addRaw(`Published [${data.name}](${data.html_url})`, true).write();
