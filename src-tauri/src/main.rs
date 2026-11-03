@@ -7,7 +7,7 @@ mod oauth;
 mod state;
 
 use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Trashed};
+use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
@@ -166,6 +166,25 @@ async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Re
     app.restart()
 }
 
+/// Settings → Appearance. The window's theme also sets the page's `prefers-color-scheme`
+/// (on Windows Tauri passes it on to WebView2), so the CSS's dark mode follows it as is.
+#[tauri::command]
+fn set_theme(window: WebviewWindow, state: State<'_, AppState>, theme: Theme) -> Result<(), String> {
+    window
+        .set_theme(window_theme(theme))
+        .map_err(|e| format!("Couldn't change the appearance: {e}"))?;
+    state.save_theme(theme)
+}
+
+/// None follows the system.
+fn window_theme(theme: Theme) -> Option<tauri::Theme> {
+    match theme {
+        Theme::System => None,
+        Theme::Light => Some(tauri::Theme::Light),
+        Theme::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -194,7 +213,14 @@ fn main() {
         .manage(PendingUpdate::default())
         .setup(|app| {
             let state = AppState::load(app.path().app_data_dir()?);
-            let accounts = state.setup().accounts;
+            let Setup { accounts, theme, .. } = state.setup();
+            // The window is created here, not from tauri.conf.json ("create": false), so it starts
+            // in the chosen theme. Setting a theme on a window that already exists misses its
+            // title bar on Windows.
+            let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("No main window in tauri.conf.json")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                .theme(window_theme(theme))
+                .build()?;
             app.manage(state);
             app.manage(idle::Watchers::default());
             for account in &accounts {
@@ -229,6 +255,7 @@ fn main() {
             notify,
             check_update,
             install_update,
+            set_theme,
             open_external,
         ])
         .run(tauri::generate_context!())

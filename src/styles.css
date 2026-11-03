@@ -10,6 +10,8 @@
   --accent: #2f6df6;
   --accent-text: #ffffff;
   --danger: #d93025;
+  --update: #c2410c;
+  --update-text: #ffffff;
   --shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
   color-scheme: light;
 }
@@ -27,6 +29,8 @@
     --accent: #5b8cff;
     --accent-text: #0b1020;
     --danger: #f2766b;
+    --update: #fb923c;
+    --update-text: #1a1c20;
     --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
@@ -298,11 +302,17 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #account-list li button { padding: 3px 10px; font-size: 12.5px; }
 #account-list li button.confirm { color: var(--danger); border-color: var(--danger); }
 #account-list:empty::after { content: "No accounts yet."; color: var(--muted); }
+/* A row of buttons where one is chosen (Settings → Appearance). */
+.segmented { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; }
+.segmented button { border: 0; border-radius: 6px; padding: 5px 14px; }
+.segmented button[aria-checked="true"] { background: var(--selected); font-weight: 600; }
+
 #about { margin-top: 24px; color: var(--muted); font-size: 12.5px; }
 #about p { margin: 4px 0; }
-#update { margin: 0 2px; padding: 1px 9px; border-radius: 999px; border-color: var(--accent); color: var(--accent); font-size: 12px; font-weight: 600; }
+#update { margin: 0 4px; padding: 1px 10px; border: 0; border-radius: 999px; background: var(--update); color: var(--update-text); font-size: 12px; font-weight: 600; }
+#update:hover { filter: brightness(1.1); }
 /* A dot on the Settings button while an update is waiting there. */
-#open-settings.has-update::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--accent); }
+#open-settings.has-update::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--update); }
 
 .spinner {
   width: 28px; height: 28px;

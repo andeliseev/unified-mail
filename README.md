@@ -6,6 +6,7 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - **New mail appears within seconds**, with no need to refresh, and a **notification** tells you about it when the app is in the background
 - The **unread count** shows on the app's taskbar / Dock icon
 - **Updates itself:** when a new version is out, Settings shows an **Update** button, and one click installs it
+- Light or dark look, or follow the system (Settings → Appearance)
 - **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
 - **Mark as unread** to come back to a message later
 - Right-click a message for its actions
@@ -53,7 +54,7 @@ Unified Mail runs entirely on your computer and talks only to Google, plus GitHu
 
 - **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain.
 - **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved.
-- **Updates:** a few times a day the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
+- **Updates:** when it starts, every few hours, and when you open Settings, the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
 - **Notifications** show the sender and subject of new mail. Windows and macOS keep recent notifications in their notification center until you clear them.
 - **Removing an account** in Settings revokes the app's access at Google and deletes its data from your computer.
 - **Email content** is shown with scripts and forms blocked, and links open in your browser.

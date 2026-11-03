@@ -1,7 +1,8 @@
 //! Accounts, tokens and the per-folder message caches.
 //!
 //! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (emails),
-//! `<folder>-cache.json` (last snapshot of each folder). Refresh tokens live in the OS keychain.
+//! `settings.json` (appearance), `<folder>-cache.json` (last snapshot of each folder).
+//! Refresh tokens live in the OS keychain.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,6 +19,7 @@ use crate::oauth;
 const KEYRING_SERVICE: &str = "unified-mail";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
+const SETTINGS_FILE: &str = "settings.json";
 /// Newest messages shown per account in each folder.
 const PAGE_SIZE: u32 = 50;
 /// Parallel metadata requests per account (Gmail allows ~50/s per user).
@@ -47,6 +49,25 @@ pub struct Setup {
     pub built_in_client: bool,
     pub client_id: Option<String>,
     pub accounts: Vec<String>,
+    pub theme: Theme,
+}
+
+/// Settings → Appearance.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    /// Follow the system's light or dark mode.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// Choices kept in `settings.json`. Missing fields get their defaults, so new ones can be added.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Settings {
+    theme: Theme,
 }
 
 /// A mail list the app shows, unified across accounts.
@@ -136,6 +157,7 @@ pub struct AppState {
     dir: PathBuf,
     creds: Mutex<Option<ClientCreds>>,
     accounts: Mutex<Vec<String>>,
+    settings: Mutex<Settings>,
     tokens: Mutex<HashMap<String, AccessToken>>,
     /// Current contents of each folder, for every account.
     cache: Mutex<HashMap<Folder, FolderCache>>,
@@ -169,6 +191,7 @@ impl AppState {
                 .expect("failed to build HTTP client"),
             creds: Mutex::new(read_json(&dir.join(CLIENT_FILE))),
             accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
+            settings: Mutex::new(read_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
             cache: Mutex::new(cache),
             reported_failures: Mutex::new(HashSet::new()),
@@ -181,7 +204,14 @@ impl AppState {
             built_in_client: ClientCreds::embedded().is_some(),
             client_id: self.creds.lock().unwrap().as_ref().map(|c| c.client_id.clone()),
             accounts: self.accounts.lock().unwrap().clone(),
+            theme: self.settings.lock().unwrap().theme,
         }
+    }
+
+    pub fn save_theme(&self, theme: Theme) -> Result<(), String> {
+        let mut settings = self.settings.lock().unwrap();
+        settings.theme = theme;
+        write_json(&self.dir.join(SETTINGS_FILE), &*settings)
     }
 
     pub fn save_client(&self, creds: ClientCreds) -> Result<(), String> {

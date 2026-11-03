@@ -5,7 +5,7 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 | File | Contents |
 | --- | --- |
 | `index.html` | Three-pane layout (sidebar, list, reader) plus Settings, sign-in wait overlay, toast |
-| `styles.css` | Theme tokens on `:root`, a dark palette under `prefers-color-scheme: dark`, layout |
+| `styles.css` | Theme tokens on `:root`, a dark palette under `prefers-color-scheme: dark`, layout. Settings → Appearance changes what `prefers-color-scheme` reports, so the stylesheet needs no theme classes |
 | `app.js` | All behavior, in one file split into sections |
 
 ## Layout
@@ -136,12 +136,20 @@ Clicking a notification while it's on screen brings the window forward and sends
 
 ## Settings and first run
 
+- **Appearance:** System, Light or Dark, as a three-way switch (`#theme`). `set_theme` sets the window's theme and saves it in `settings.json`.
+  - The window's theme decides the native title bar and what the page's `prefers-color-scheme` reports. On Windows Tauri passes it on to WebView2; on macOS the page follows the window. So the CSS dark palette follows it as is.
+  - At launch Rust creates the window itself, already in the saved theme (`"create": false` in the config). A theme set on a window that already exists reaches the page but not the Windows title bar.
+  - The email frame stays white either way.
+
 - With a built-in client, the OAuth section is hidden. First run shows the empty list with an **Add Gmail account** button.
 - Without one, Settings opens on first run and can't be closed until a client is saved. Pasting the downloaded client JSON into the Client ID field fills both fields.
 - **Remove** on an account asks for a second click to confirm. The app avoids `confirm()` dialogs.
 - **Add account** shows a "finish signing in in your browser" overlay. Cancel only hides the overlay: the backend keeps waiting until its 5-minute timeout, and a sign-in that completes later is still added.
-- **Updates:** `checkForUpdate` runs 10 s after launch (after the first sync), every 6 hours (`UPDATE_CHECK_MS`), and when Settings opens if the last check is over an hour old. When a newer version exists:
-  - an **Update to X** button appears next to the version, and the sidebar's Settings button gets a dot;
+- **Updates:** `checkForUpdate` runs 10 s after launch (after the first sync), every 6 hours (`UPDATE_CHECK_MS`), and every time Settings opens, so a release published while the app is open shows up there. When a newer version exists:
+  - an orange **Update to X** button (`--update`) appears next to the version, and the sidebar's Settings button gets an orange dot;
   - clicking the button shows "Updating…" and runs `install_update`; a failure shows a toast, brings the button back and checks again;
   - check failures (offline, nothing released yet, the test app's empty endpoint list) stay quiet.
-- At the bottom (`#about`): the app's version, from Tauri's `getVersion()` (the version in `tauri.conf.json`, which the Release workflow sets), and the copyright line from `LICENSE`. Below them are links to GitHub, Releases, the website and the privacy policy, opened in the browser like the other `data-href` links.
+- At the bottom (`#about`), three lines:
+  - the app's version, from Tauri's `getVersion()` (the version in `tauri.conf.json`, which the Release workflow sets), with the update controls;
+  - links to GitHub, Releases, the website and the privacy policy, opened in the browser like the other `data-href` links;
+  - the copyright line from `LICENSE`.

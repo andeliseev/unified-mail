@@ -4,6 +4,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Unified Mail (test)",
         "width": 1240,
         "height": 800,

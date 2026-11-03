@@ -203,7 +203,7 @@ If what the app accesses or stores changes, update `site/unified-mail/privacy.ht
 
 Never run a development build on your real Gmail accounts: a bug could archive, delete or mark real mail.
 
-- `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `io.unifiedmail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)".
+- `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `io.unifiedmail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
 - Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
 - Release builds (`npm run build`, `npx tauri build`) use the real identity, `io.unifiedmail.desktop`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
 - For the UI alone, use a fake backend, as described next.
@@ -240,7 +240,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
-- [ ] With an older release installed, publish a newer one: within a few hours (or on opening Settings) **Update to X** appears and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
+- [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)

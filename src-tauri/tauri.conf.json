@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Unified Mail",
         "width": 1240,
         "height": 800,

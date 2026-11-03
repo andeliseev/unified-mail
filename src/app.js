@@ -14,10 +14,8 @@ const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
 const UNDO_MS = 8000;
 // More new messages at once than this get one summary notification instead.
 const MAX_NOTIFICATIONS = 3;
-// How often to ask GitHub for a newer release while the app runs; opening Settings asks too
-// if the last check is older than UPDATE_RECHECK_MS.
+// How often to ask GitHub for a newer release while the app runs; opening Settings always asks too.
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
-const UPDATE_RECHECK_MS = 60 * 60 * 1000;
 // Emails wider than the reader are scaled down to fit, but not below this; past it they scroll.
 const MIN_EMAIL_ZOOM = 0.6;
 // HTML emails bring their own margins, so the frame adds little; plain text gets more room.
@@ -121,6 +119,7 @@ const ACTIONS = {
 const state = {
   builtInClient: false,  // OAuth client compiled into the app; Settings hides that section
   configured: false,
+  theme: 'system',       // Settings → Appearance: system, light or dark
   accounts: [],
   folder: 'inbox',       // folder on screen
   lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
@@ -139,7 +138,6 @@ const state = {
   newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
   badge: null,           // unread count shown on the app icon
   update: null,          // a newer version on GitHub, offered in Settings
-  updateCheckedAt: 0,
   loadingOlder: false,
   olderRetryAt: 0,       // after a failed load, don't retry before this time
   syncing: false,
@@ -180,6 +178,8 @@ async function init() {
   state.builtInClient = setup.builtInClient;
   state.configured = setup.builtInClient || Boolean(setup.clientId);
   state.accounts = setup.accounts;
+  state.theme = setup.theme;
+  renderTheme();
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
   getVersion().then((version) => { $('#app-version').textContent = version; });
@@ -221,6 +221,9 @@ function bindEvents() {
   });
   $('#toast-action').addEventListener('click', runUndo);
   $('#update').addEventListener('click', installUpdate);
+  for (const button of document.querySelectorAll('#theme button')) {
+    button.addEventListener('click', () => setTheme(button.dataset.theme));
+  }
   $('#client-form').addEventListener('submit', saveClient);
   $('#client-id').addEventListener('paste', pasteClientJson);
 
@@ -920,7 +923,8 @@ function copyText(text) {
 // ---------- Accounts & settings ----------
 
 function openSettings() {
-  if (Date.now() - state.updateCheckedAt > UPDATE_RECHECK_MS) checkForUpdate();
+  // Every time, so a release published while the app was open shows up here.
+  checkForUpdate();
   $('#settings').hidden = false;
   $('#close-settings').hidden = !state.configured;
   $('#client-secret').placeholder = state.configured ? 'Saved (enter again to change)' : 'GOCSPX-…';
@@ -931,6 +935,26 @@ function openSettings() {
 function closeSettings() {
   if (!state.configured) return;
   $('#settings').hidden = true;
+}
+
+/**
+ * Rust sets the window's theme and saves the choice. The window theme is also what the
+ * page's `prefers-color-scheme` reports, so the stylesheet's dark mode follows it.
+ */
+async function setTheme(theme) {
+  try {
+    await invoke('set_theme', { theme });
+    state.theme = theme;
+    renderTheme();
+  } catch (e) {
+    toast(String(e));
+  }
+}
+
+function renderTheme() {
+  for (const button of document.querySelectorAll('#theme button')) {
+    button.setAttribute('aria-checked', String(button.dataset.theme === state.theme));
+  }
 }
 
 function renderSettingsAccounts() {
@@ -1016,7 +1040,6 @@ async function addAccount() {
 
 /** Asks GitHub whether a newer release exists. Failures (offline, nothing released yet) stay quiet. */
 async function checkForUpdate() {
-  state.updateCheckedAt = Date.now();
   try {
     state.update = await invoke('check_update');
   } catch (e) {
