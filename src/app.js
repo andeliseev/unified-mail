@@ -11,6 +11,8 @@ const PUSH_DEBOUNCE_MS = 300;
 const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
 // How long Undo stays available after an action.
 const UNDO_MS = 8000;
+// More new messages at once than this get one summary notification instead.
+const MAX_NOTIFICATIONS = 3;
 const FRAME_CSS = `
   html { background: #fff; color: #202124; }
   body { margin: 0; padding: 18px 24px 28px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; word-wrap: break-word; }
@@ -126,6 +128,8 @@ const state = {
   // `more`, whether older mail exists. Scrolling pushes the frontier back.
   paging: { inbox: {}, all: {}, trash: {} },
   inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages
+  newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
+  badge: null,           // unread count shown on the app icon
   loadingOlder: false,
   olderRetryAt: 0,       // after a failed load, don't retry before this time
   syncing: false,
@@ -179,6 +183,7 @@ async function init() {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(refresh, PUSH_DEBOUNCE_MS);
   });
+  await listen('open-message', (e) => openFromNotification(e.payload));
   setInterval(() => { if (!document.hidden) refresh(); }, AUTO_REFRESH_MS);
   window.addEventListener('focus', () => {
     if (Date.now() - state.lastSync > REFRESH_ON_FOCUS_AFTER_MS) refresh();
@@ -235,6 +240,7 @@ async function refresh() {
       applySync(folder, results[i]);
       state.synced[folder] = true;
     });
+    notifyNewMail(results[0]);  // folders[0] is the Inbox
     state.lastSync = Date.now();
     render();
     setStatus('');
@@ -347,6 +353,70 @@ function maybeLoadOlder() {
   if (accountsWithMore(state.folder).length) loadOlder();
 }
 
+// ---------- New mail: notifications and the icon badge ----------
+
+/**
+ * Notifies about Inbox mail newer than any seen before for its account, if it's unread and
+ * the window isn't in front. An account's first sync (at launch, or after adding it) only
+ * sets the mark, so mail that's already there doesn't notify, nor does older mail that
+ * moves back into the Inbox.
+ */
+function notifyNewMail(result) {
+  const fresh = [];
+  for (const account of state.accounts) {
+    if (!result.more || !(account in result.more)) continue;  // its sync failed
+    const page = result.messages.filter((m) => m.account === account);
+    const seen = state.newestSeen[account];
+    if (seen !== undefined) fresh.push(...page.filter((m) => m.unread && m.date > seen));
+    state.newestSeen[account] = Math.max(seen ?? 0, ...page.map((m) => m.date));
+  }
+  if (!fresh.length || document.hasFocus()) return;
+  fresh.sort((a, b) => a.date - b.date);  // the newest ends up on top
+  const withAccount = state.accounts.length > 1;
+  const notes = fresh.length <= MAX_NOTIFICATIONS
+    ? fresh.map((m) => ({
+      title: senderName(m.from),
+      body: (m.subject || '(no subject)') + (withAccount ? `\n${m.account}` : ''),
+      account: m.account,
+      id: m.id,
+    }))
+    : [{ title: `${fresh.length} new messages`, body: [...new Set(fresh.map((m) => senderName(m.from)))].join(', ') }];
+  for (const note of notes) invoke('notify', note).catch((e) => console.warn(e));
+}
+
+/** A click on a notification: show the Inbox, and open the message if it names one. */
+async function openFromNotification(message) {
+  if (state.folder !== 'inbox') await openFolder('inbox');
+  if (state.filter && (!message || state.filter !== message.account)) setFilter(null);
+  if (message && byKey(keyOf(message))) select(keyOf(message));
+}
+
+/** Shows the Inbox's unread count, all accounts together, on the taskbar / Dock icon. */
+function renderBadge(count) {
+  if (count === state.badge) return;
+  state.badge = count;
+  const size = Math.min(32, Math.max(16, Math.round(16 * devicePixelRatio)));
+  invoke('set_badge', { count, icon: count ? badgeIcon(count, size) : [], size }).catch((e) => console.warn(e));
+}
+
+/** A red disc with the count, as RGBA bytes: the taskbar overlay icon on Windows. */
+function badgeIcon(count, size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#d93025';
+  g.beginPath();
+  g.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
+  g.fill();
+  g.fillStyle = '#fff';
+  g.font = `bold ${Math.round(size * 0.62)}px "Segoe UI", system-ui, sans-serif`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  // Wider counts are squeezed to fit the disc.
+  g.fillText(count > 99 ? '99+' : String(count), size / 2, size * 0.54, size * 0.8);
+  return Array.from(g.getImageData(0, 0, size, size).data);
+}
+
 async function openFolder(folder) {
   if (folder !== state.folder) {
     state.folder = folder;
@@ -396,6 +466,7 @@ function renderSidebar() {
   $('#list-title').textContent = title;
   $('#list-title').title = title;
   renderSettingsAccounts();
+  renderBadge([...unread.values()].reduce((a, b) => a + b, 0));
 }
 
 /** A sidebar entry: a folder (`icon`), an account (`color`), or "All accounts" (neither). */

@@ -25,6 +25,8 @@ url = "2"
 open = "5"
 async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
 tokio-native-tls = "0.3"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
 
 # Size-focused release build: https://v2.tauri.app/concept/size/
 [profile.release]

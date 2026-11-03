@@ -29,7 +29,7 @@ flowchart LR
 
 | Module | Responsibility |
 | --- | --- |
-| `main.rs` | Tauri setup, command handlers, starting push watchers at launch |
+| `main.rs` | Tauri setup, command handlers, starting push watchers at launch, notifications and the icon badge |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
@@ -56,7 +56,18 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `restore_message` | `account, id, fromTrash, toInbox` | Takes it out of Trash and/or adds `INBOX`: Undo, and "Move to Inbox" |
 | `open_external` | `url` | Opens `http(s):`/`mailto:` links in the default app |
 
-Event (Rust → UI): `mail-changed`, with the account email as payload.
+Two more commands are for the [new-mail alerts](ui.md#notifications-and-the-icon-badge):
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `notify` | `title, body, account?, id?` | Shows a desktop notification; clicking it opens that message |
+| `set_badge` | `count, icon, size` | Unread count on the app icon: Dock badge on macOS; on Windows `icon` (RGBA, `size`×`size`, drawn by the UI) becomes the taskbar overlay icon |
+
+Events (Rust → UI):
+- `mail-changed`, with the account email as payload.
+- `open-message`, `{ account, id }` or null, when a notification is clicked.
+
+Plugins: `tauri-plugin-notification` (Windows toasts, macOS notifications) and `tauri-plugin-single-instance`. The second keeps one copy of the app running: launching it again just brings the window forward.
 
 ## Storage
 

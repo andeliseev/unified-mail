@@ -7,6 +7,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] End-to-end with a real Google account: sign-in, sync, push, archive, trash
 - [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception and the right-click menu, including Copy, were only checked in Chromium/WebView2)
 - [ ] Mark as unread and the right-click menu in the real app with a test Gmail account (checked with a fake backend only so far)
+- [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
 - [ ] macOS `.dmg` from the Release workflow: first run on a real Mac (ad-hoc signing, Gatekeeper prompt)
 - [x] First run of the Release workflow on GitHub (v0.1.0)
@@ -33,8 +34,12 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 ## New features
 
-- [ ] Desktop **notifications** for new mail (`tauri-plugin-notification`), now that push exists
-- [ ] Unread **badge** on the taskbar / Dock icon
+- [x] Desktop **notifications** for new mail (`tauri-plugin-notification`)
+- [x] Unread **badge** on the taskbar / Dock icon
+- [ ] A setting to turn notifications off inside the app (Windows and macOS can already turn them off per app)
+- [ ] Clicking an old notification in the Windows Action Center only brings the window forward, without opening the message. That needs a COM activator, which the notification plugin doesn't have
+- [ ] The badge, like the sidebar, counts unread mail only among loaded messages (each account's newest 50 in the Inbox, plus older pages scrolled to). Gmail's `labels.get` for `INBOX` would give the exact count
+- [ ] macOS: notifications and the Dock badge are untested; notifications may need a signed app, and they're silent (no sound is set there)
 - [ ] **Tray icon**: keep running in the background when the window is closed
 - [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)
 - [ ] Star, move to label

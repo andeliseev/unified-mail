@@ -117,6 +117,21 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 
 The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
+## Notifications and the icon badge
+
+**Notifications** (`notifyNewMail`, after each Inbox sync):
+- `state.newestSeen[account]` is the date of the account's newest Inbox message so far. Unread mail newer than that notifies.
+- An account's first sync (at launch, or after adding it) only sets the mark. Mail that was already there doesn't notify, and neither does mail that arrived while the app was closed.
+- Older mail that moves back into the Inbox (Undo, Move to Inbox, moved in Gmail web) is older than the mark, so it doesn't notify either.
+- Nothing shows while the window is in front (`document.hasFocus()`).
+- Each message gets its own notification: the sender as title, the subject as body, plus the account when there are several. More than `MAX_NOTIFICATIONS` (3) at once become one "N new messages" summary listing the senders.
+
+Clicking a notification while it's on screen brings the window forward and sends `open-message`. `openFromNotification` then switches to the Inbox, drops an account filter that would hide the message, and opens it. On Windows, a click on an old notification in the Action Center isn't reported to the app. It launches the app instead, and the single-instance plugin turns that into bringing the window forward.
+
+**Badge** (`renderBadge`, from `renderSidebar`): the Inbox's unread count across all accounts, the same number as the sidebar's Inbox with no filter. It's sent only when it changes.
+- macOS shows it as a Dock badge.
+- Windows has no badge numbers for desktop apps. `badgeIcon` draws a red disc with the count (up to "99+") on a canvas, `16 × devicePixelRatio` pixels, between 16 and 32. Its RGBA bytes become the taskbar button's overlay icon.
+
 ## Settings and first run
 
 - With a built-in client, the OAuth section is hidden. First run shows the empty list with an **Add Gmail account** button.

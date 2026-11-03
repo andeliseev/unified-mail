@@ -8,7 +8,8 @@ mod state;
 
 use gmail::{FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Trashed};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_notification::NotificationExt;
 
 #[tauri::command]
 fn get_setup(state: State<'_, AppState>) -> Setup {
@@ -94,6 +95,55 @@ async fn restore_message(
     state.restore(&account, &id, from_trash, to_inbox).await
 }
 
+/// Shows the Inbox's unread count on the app icon. macOS draws a Dock badge from the number.
+/// Windows has no badge numbers for desktop apps, so the UI draws one (`icon`: RGBA,
+/// `size`×`size`) and it becomes the taskbar button's overlay icon.
+#[tauri::command]
+fn set_badge(window: WebviewWindow, count: u32, icon: Vec<u8>, size: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    let result = {
+        if count > 0 && icon.len() != (size * size * 4) as usize {
+            return Err("The unread badge image has the wrong size.".into());
+        }
+        window.set_overlay_icon((count > 0).then(|| tauri::image::Image::new_owned(icon, size, size)))
+    };
+    #[cfg(not(windows))]
+    let result = {
+        let _ = (icon, size);
+        window.set_badge_count((count > 0).then_some(i64::from(count)))
+    };
+    result.map_err(|e| format!("Couldn't show the unread count on the app icon: {e}"))
+}
+
+/// Shows a desktop notification. Clicking it while it's on screen brings the window forward
+/// and sends `open-message` with the message to open (`account`, `id`), or null for the Inbox.
+#[tauri::command]
+fn notify(
+    app: AppHandle,
+    title: String,
+    body: String,
+    account: Option<String>,
+    id: Option<String>,
+) -> Result<(), String> {
+    let mut notification = app.notification().builder().title(title).body(body);
+    // Windows toasts are silent unless they name a sound; this is the system's new-mail sound.
+    if cfg!(windows) {
+        notification = notification.sound("Mail");
+    }
+    if let (Some(account), Some(id)) = (account, id) {
+        notification = notification.extra("account", account).extra("id", id);
+    }
+    notification.show().map_err(|e| format!("Couldn't show a notification: {e}"))
+}
+
+fn show_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 /// Opens links from emails and the setup screen in the default browser / mail app.
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
@@ -106,6 +156,10 @@ fn open_external(url: String) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        // Launching the app again (also what clicking an old notification in the Action Center
+        // does on Windows) brings this window forward instead of starting a second copy.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state = AppState::load(app.path().app_data_dir()?);
             let accounts = state.setup().accounts;
@@ -114,6 +168,16 @@ fn main() {
             for account in &accounts {
                 idle::start(app.handle(), account);
             }
+            let handle = app.handle().clone();
+            app.notification().on_action(move |action| {
+                if action.action_id() != "tap" {
+                    return;
+                }
+                let extra = action.notification().map(|n| n.extra());
+                let message = extra.and_then(|e| Some(serde_json::json!({ "account": e.get("account")?, "id": e.get("id")? })));
+                show_window(&handle);
+                let _ = handle.emit("open-message", message);
+            })?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -129,6 +193,8 @@ fn main() {
             archive_message,
             trash_message,
             restore_message,
+            set_badge,
+            notify,
             open_external,
         ])
         .run(tauri::generate_context!())

@@ -79,6 +79,7 @@ The app's own actions (archive, delete, mark read or unread) also produce IDLE l
 ## UI side
 
 - `mail-changed` → sync after `PUSH_DEBOUNCE_MS` (300 ms). Gmail often sends several lines for one change, and this collapses them into one sync.
+- After each Inbox sync, new unread mail may show a desktop notification (see [ui.md](ui.md#notifications-and-the-icon-badge)).
 - Safety net: sync every `AUTO_REFRESH_MS` (5 min) while the window is visible, and on window focus if the last sync was more than 30 s ago.
 - A sync requested while another is running is queued, never dropped. This matters right after adding an account.
 - Moves Gmail hasn't confirmed yet are kept in `state.pending` and re-applied to sync results (`setList`), so a message can't flash back into the folder it just left. Read/unread changes do the same through `state.pendingRead`.

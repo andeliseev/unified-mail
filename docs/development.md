@@ -78,6 +78,7 @@ The point of the app is to stay small. Current numbers on Windows x64:
 | --- | --- |
 | `unified-mail.exe` release, before push | 3.9 MB |
 | `unified-mail.exe` release, with IMAP push | 4.2 MB |
+| `unified-mail.exe` release, with notifications and single instance (+230 KB) | 4.5 MB |
 | NSIS installer (`...-setup.exe`) | 1.5 MB |
 | MSI installer | 2.0 MB |
 
@@ -172,6 +173,9 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] First run: no Settings prompt with a built-in client; **Add Gmail account** shown
 - [ ] Sign in to two accounts; both appear, unified list sorted by date
 - [ ] Send yourself mail: it appears within a few seconds (push)
+- [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
+- [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
+- [ ] Launch the app a second time: the open window comes forward, and no second copy starts
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)
