@@ -105,13 +105,13 @@ To set the version locally instead: `node scripts/set-version.mjs 0.2.0`. It upd
 
 **Notes:**
 
-- The repo is private, so its releases are too: only people with access to the repo can download them. To share builds publicly, publish them to a public repo; tauri-action has `owner`/`repo` inputs for that.
+- The repo is public, so releases are public downloads. The README's Download section links to the latest one.
 - Builds aren't code-signed. Windows shows a SmartScreen warning. The macOS app is ad-hoc signed (`bundle.macOS.signingIdentity: "-"`) so it can run on Apple Silicon, but it isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
-- Private repos have a monthly allowance of free Actions minutes, and macOS minutes count several times more than Linux ones. The universal macOS build compiles the app twice, so it's the expensive job. `rust-cache` makes repeat builds faster.
+- Actions minutes are free for public repos. The universal macOS build compiles the app twice, so it's the slowest job; `rust-cache` makes repeat builds faster.
 
 ## Website (home page and privacy policy)
 
-Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the public repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io). This code repo stays private.
+Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io), which gets only the `site/` folder's history.
 
 | Page | URL |
 | --- | --- |
