@@ -15,6 +15,10 @@ const FRAME_CSS = `
   img { max-width: 100%; height: auto; }
   pre.plain { white-space: pre-wrap; font: inherit; margin: 0; }
   a { color: #1a5fd6; }
+  /* Some emails set overflow: hidden on html/body, which would make them unscrollable.
+     :root outranks the emails' html/body selectors, so this wins even against !important. */
+  :root { overflow: auto !important; }
+  :root > body { overflow: visible !important; }
 `;
 
 const state = {
@@ -254,7 +258,7 @@ function showBody(full) {
       e.preventDefault();
       if (!link.getAttribute('href').startsWith('#')) openExternal(link.href);
     });
-    doc.addEventListener('keydown', onKey);
+    doc.addEventListener('keydown', (e) => onKey(e, true));
   });
   $('#m-body').replaceChildren(frame);
 }
@@ -305,7 +309,14 @@ function move(delta) {
   if (nextIndex !== index) select(keyOf(list[nextIndex]));
 }
 
-function onKey(e) {
+/** Scrolls the open message by about a screen; `direction` is 1 (down) or -1 (up). */
+function scrollMessage(direction) {
+  const frame = $('#m-body iframe');
+  if (frame && frame.contentWindow) frame.contentWindow.scrollBy({ top: direction * frame.clientHeight * 0.9 });
+}
+
+/** `inMessage`: the key was pressed inside the email frame, which scrolls itself. */
+function onKey(e, inMessage = false) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (!$('#settings').hidden || !$('#waiting').hidden) {
     if (e.key === 'Escape' && state.configured && state.accounts.length) closeSettings();
@@ -313,8 +324,16 @@ function onKey(e) {
   }
   if (e.target.closest && e.target.closest('input, textarea')) return;
   switch (e.key) {
-    case 'j': case 'ArrowDown': move(1); break;
-    case 'k': case 'ArrowUp': move(-1); break;
+    case 'j': move(1); break;
+    case 'k': move(-1); break;
+    case 'ArrowDown': case 'ArrowUp':
+      if (inMessage) return;
+      move(e.key === 'ArrowDown' ? 1 : -1);
+      break;
+    case ' ': case 'PageDown': case 'PageUp':
+      if (inMessage) return;
+      scrollMessage(e.key === 'PageUp' || (e.key === ' ' && e.shiftKey) ? -1 : 1);
+      break;
     case 'e': act('archive'); break;
     case '#': case 'Delete': act('trash'); break;
     default: return;

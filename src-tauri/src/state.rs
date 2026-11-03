@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-use futures_util::{future::join_all, stream, StreamExt, TryStreamExt};
+use futures_util::{future::join_all, stream, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::gmail::{self, FullMessage, MessageSummary};
@@ -76,6 +76,15 @@ pub struct AppState {
     tokens: Mutex<HashMap<String, AccessToken>>,
     /// Current inbox of every account, keyed by `account/id`.
     cache: Mutex<HashMap<String, MessageSummary>>,
+    /// Messages whose metadata failed to load and were already reported (`account/id`).
+    /// They are retried on every sync but reported only once.
+    reported_failures: Mutex<HashSet<String>>,
+}
+
+/// One account's sync: its inbox, plus a warning if some messages couldn't be loaded.
+struct AccountSync {
+    inbox: Vec<MessageSummary>,
+    warning: Option<String>,
 }
 
 impl AppState {
@@ -92,6 +101,7 @@ impl AppState {
             accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
             cache: Mutex::new(cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect()),
+            reported_failures: Mutex::new(HashSet::new()),
             dir,
         }
     }
@@ -172,9 +182,12 @@ impl AppState {
             cache.retain(|_, m| accounts.contains(&m.account));
             for (account, result) in accounts.iter().zip(results) {
                 match result {
-                    Ok(inbox) => {
+                    Ok(AccountSync { inbox, warning }) => {
                         cache.retain(|_, m| &m.account != account);
                         cache.extend(inbox.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
+                        if let Some(message) = warning {
+                            errors.push(AccountError { account: account.clone(), message });
+                        }
                     }
                     Err(message) => errors.push(AccountError { account: account.clone(), message }),
                 }
@@ -186,7 +199,8 @@ impl AppState {
     }
 
     /// Lists the account's inbox and fetches metadata only for messages not seen before.
-    async fn sync_account(&self, account: &str) -> Result<Vec<MessageSummary>, String> {
+    /// A message that fails to load is skipped, so one odd message can't hide the whole inbox.
+    async fn sync_account(&self, account: &str) -> Result<AccountSync, String> {
         let token = self.access_token(account).await?;
         let (inbox, unread) = tokio::try_join!(
             gmail::list_ids(&self.http, &token, &["INBOX"], PAGE_SIZE),
@@ -205,21 +219,43 @@ impl AppState {
         };
         let missing: Vec<String> = inbox.iter().filter(|id| !known.contains_key(*id)).cloned().collect();
         let (http, token) = (&self.http, token.as_str());
-        let fetched: Vec<MessageSummary> = stream::iter(missing)
-            .map(|id| async move { gmail::get_summary(http, token, account, &id).await })
+        let fetched: Vec<Result<MessageSummary, (String, String)>> = stream::iter(missing)
+            .map(|id| async move { gmail::get_summary(http, token, account, &id).await.map_err(|e| (id, e)) })
             .buffer_unordered(FETCH_CONCURRENCY)
-            .try_collect()
-            .await?;
-        known.extend(fetched.into_iter().map(|m| (m.id.clone(), m)));
+            .collect()
+            .await;
 
-        Ok(inbox
+        let mut new_failures = Vec::new();
+        {
+            let mut reported = self.reported_failures.lock().unwrap();
+            for result in fetched {
+                match result {
+                    Ok(m) => {
+                        reported.remove(&cache_key(account, &m.id));
+                        known.insert(m.id.clone(), m);
+                    }
+                    Err((id, error)) => {
+                        if reported.insert(cache_key(account, &id)) {
+                            new_failures.push(error);
+                        }
+                    }
+                }
+            }
+        }
+        let warning = new_failures.first().map(|first| match new_failures.len() {
+            1 => format!("1 message couldn't be loaded: {first}"),
+            n => format!("{n} messages couldn't be loaded: {first}"),
+        });
+
+        let inbox = inbox
             .iter()
             .filter_map(|id| known.remove(id))
             .map(|mut m| {
                 m.unread = unread.contains(&m.id);
                 m
             })
-            .collect())
+            .collect();
+        Ok(AccountSync { inbox, warning })
     }
 
     /// Opening a message marks it read, as in Gmail.

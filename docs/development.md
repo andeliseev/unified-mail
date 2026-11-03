@@ -56,6 +56,8 @@ The point of the app is to stay small. Current numbers on Windows x64:
 | --- | --- |
 | `unified-mail.exe` release, before push | 3.9 MB |
 | `unified-mail.exe` release, with IMAP push | 4.2 MB |
+| NSIS installer (`...-setup.exe`) | 1.5 MB |
+| MSI installer | 2.0 MB |
 
 The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`. Before adding a crate, check what it adds with `npx tauri build --no-bundle`, and prefer what the OS already provides (see [architecture.md](architecture.md#design-decisions)).
 
@@ -92,6 +94,20 @@ The UI talks to Rust only through `window.__TAURI__.core.invoke` and `window.__T
 
 This is how reading, the sandbox, the windows-1251 decoding, archive/delete and Settings were checked during development.
 
+To test in the **real WebView2**, including the release CSP, without touching your own accounts:
+
+1. Build under a separate identity, which gets its own data folder and no accounts:
+   ```bash
+   npx tauri build --no-bundle --config '{"identifier":"io.unifiedmail.devtest"}'
+   ```
+2. Start `src-tauri/target/release/unified-mail.exe` with the environment variable `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9334`.
+3. Drive the page over the Chrome DevTools Protocol (`http://127.0.0.1:9334/json`):
+   - `Runtime.evaluate` can call `app.js` functions such as `showBody(...)`, because they're globals.
+   - `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent` send real wheel and key input without moving your mouse.
+
+   This is how the email scrolling bug was reproduced and its fix checked.
+4. Afterwards, delete `%APPDATA%\io.unifiedmail.devtest` and `%LOCALAPPDATA%\io.unifiedmail.devtest`, then rebuild normally.
+
 ## Manual test checklist
 
 - [ ] First run: no Settings prompt with a built-in client; **Add Gmail account** shown
@@ -100,5 +116,7 @@ This is how reading, the sandbox, the windows-1251 decoding, archive/delete and 
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] Links in an email open in the default browser
+- [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
+- [ ] An account with no unread mail still syncs
 - [ ] Sleep the computer for 10+ min, wake it: push reconnects (watch `[push]` logs)
 - [ ] Remove an account: its mail leaves the list; the keychain entry is gone

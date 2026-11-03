@@ -51,8 +51,9 @@ struct RawMessage {
     label_ids: Vec<String>,
     #[serde(default)]
     snippet: String,
+    /// Documented as a string of milliseconds; a plain number is accepted too.
     #[serde(default)]
-    internal_date: Option<String>,
+    internal_date: Option<Value>,
     #[serde(default)]
     payload: Option<Part>,
 }
@@ -72,9 +73,13 @@ struct Part {
     parts: Vec<Part>,
 }
 
+/// Google leaves out empty fields, e.g. `value` of an empty `Subject:` header,
+/// so nothing here is required.
 #[derive(Deserialize)]
 struct Header {
+    #[serde(default)]
     name: String,
+    #[serde(default)]
     value: String,
 }
 
@@ -111,11 +116,8 @@ pub async fn list_ids(http: &Client, token: &str, labels: &[&str], max: u32) -> 
     let mut query: Vec<(&str, String)> = labels.iter().map(|l| ("labelIds", l.to_string())).collect();
     query.push(("maxResults", max.to_string()));
     query.push(("fields", "messages/id".into()));
-    let list: List = send(http.get(format!("{API}/messages")).bearer_auth(token).query(&query))
-        .await?
-        .json()
-        .await
-        .map_err(bad_response)?;
+    let resp = send(http.get(format!("{API}/messages")).bearer_auth(token).query(&query)).await?;
+    let list: List = parse_json(resp).await?;
     Ok(list.messages.into_iter().map(|m| m.id).collect())
 }
 
@@ -134,7 +136,7 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
         from: header(&headers, "From"),
         subject: header(&headers, "Subject"),
         snippet: unescape_html(&raw.snippet),
-        date: parse_date(raw.internal_date.as_deref()),
+        date: parse_date(raw.internal_date.as_ref()),
         unread: raw.label_ids.iter().any(|l| l == "UNREAD"),
     })
 }
@@ -163,7 +165,7 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<(FullMessa
         to: header(h, "To"),
         cc: header(h, "Cc"),
         subject: header(h, "Subject"),
-        date: parse_date(raw.internal_date.as_deref()),
+        date: parse_date(raw.internal_date.as_ref()),
         html,
         text,
     };
@@ -228,11 +230,31 @@ async fn load_body(http: &Client, token: &str, message_id: &str, part: &Part) ->
 }
 
 async fn get_json<T: DeserializeOwned>(http: &Client, token: &str, url: &str) -> Result<T, String> {
-    send(http.get(url).bearer_auth(token)).await?.json().await.map_err(bad_response)
+    parse_json(send(http.get(url).bearer_auth(token)).await?).await
+}
+
+/// Parses with serde_json directly: its errors name the field and position,
+/// where reqwest's `.json()` only says "error decoding response body".
+async fn parse_json<T: DeserializeOwned>(resp: Response) -> Result<T, String> {
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Couldn't read Gmail's response: {}", describe(&e)))?;
+    decode(&body).map_err(|e| format!("Unexpected Gmail response ({} bytes): {e}", body.len()))
+}
+
+/// Gmail can answer a successful `messages.list` with an empty body where `{}` is meant
+/// (seen with `fields=messages/id` when nothing matches, e.g. no unread mail).
+fn decode<T: DeserializeOwned>(body: &[u8]) -> serde_json::Result<T> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        serde_json::from_slice(b"{}")
+    } else {
+        serde_json::from_slice(body)
+    }
 }
 
 async fn send(request: RequestBuilder) -> Result<Response, String> {
-    let resp = request.send().await.map_err(|e| format!("Network error: {e}"))?;
+    let resp = request.send().await.map_err(|e| format!("Network error: {}", describe(&e)))?;
     let status = resp.status();
     if status.is_success() {
         return Ok(resp);
@@ -245,8 +267,16 @@ async fn send(request: RequestBuilder) -> Result<Response, String> {
     Err(format!("Gmail error {}: {message}", status.as_u16()))
 }
 
-fn bad_response(e: reqwest::Error) -> String {
-    format!("Unexpected Gmail response: {e}")
+/// An error plus its causes; reqwest keeps the useful detail (timeout, TLS, ...) in the chain.
+fn describe(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(inner) = cause {
+        text.push_str(": ");
+        text.push_str(&inner.to_string());
+        cause = inner.source();
+    }
+    text
 }
 
 /// Message ids end up in URL paths, so only accept what Gmail issues (hex).
@@ -276,8 +306,12 @@ fn charset(part: &Part) -> String {
         .unwrap_or_else(|| "utf-8".into())
 }
 
-fn parse_date(internal_date: Option<&str>) -> i64 {
-    internal_date.and_then(|d| d.parse().ok()).unwrap_or(0)
+fn parse_date(internal_date: Option<&Value>) -> i64 {
+    match internal_date {
+        Some(Value::String(ms)) => ms.parse().unwrap_or(0),
+        Some(Value::Number(ms)) => ms.as_i64().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// Gmail snippets come HTML-escaped (`&#39;`, `&amp;`, ...).
@@ -370,6 +404,38 @@ mod tests {
         assert_eq!(charset(html), "windows-1251");
         assert_eq!(charset(text), "koi8-r");
         assert_eq!(charset(&Part::default()), "utf-8");
+    }
+
+    #[test]
+    fn tolerates_missing_fields() {
+        let raw: RawMessage = serde_json::from_value(json!({
+            "id": "18c2f0a9b3e4d5f6",
+            "internalDate": "1730000000000",
+            "payload": { "headers": [{ "name": "Subject" }, { "name": "From", "value": "a@b.c" }] }
+        }))
+        .unwrap();
+        let headers = raw.payload.unwrap().headers;
+        assert_eq!(header(&headers, "Subject"), "");
+        assert_eq!(header(&headers, "From"), "a@b.c");
+        assert_eq!(parse_date(raw.internal_date.as_ref()), 1_730_000_000_000);
+
+        let numeric: RawMessage = serde_json::from_value(json!({ "id": "1", "internalDate": 1730000000000_i64 })).unwrap();
+        assert_eq!(parse_date(numeric.internal_date.as_ref()), 1_730_000_000_000);
+        assert!(numeric.label_ids.is_empty() && numeric.snippet.is_empty());
+    }
+
+    #[test]
+    fn empty_body_means_nothing_matched() {
+        #[derive(Deserialize)]
+        struct List {
+            #[serde(default)]
+            messages: Vec<Value>,
+        }
+        assert!(decode::<List>(b"").unwrap().messages.is_empty());
+        assert!(decode::<List>(b" \n").unwrap().messages.is_empty());
+        assert_eq!(decode::<List>(br#"{"messages":[{"id":"a"}]}"#).unwrap().messages.len(), 1);
+        // A message still needs its id; an empty body must not pass as one.
+        assert!(decode::<RawMessage>(b"").is_err());
     }
 
     #[test]

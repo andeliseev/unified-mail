@@ -8,6 +8,10 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 | `styles.css` | Theme tokens on `:root`, a dark palette under `prefers-color-scheme: dark`, layout |
 | `app.js` | All behavior, in one file split into sections |
 
+## Layout
+
+`#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, the email iframe for the message.
+
 ## State and rendering
 
 There is one `state` object in `app.js`: accounts, messages (unified, newest first), the current filter (`null` = all inboxes), the selected/open message, the pending-removal set and sync flags.
@@ -30,6 +34,7 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 - A click handler on the frame's document cancels navigation and sends `http(s)`/`mailto` links to `open_external`, which opens them in the default browser. `<base target="_blank">` makes sure an unhandled link can't navigate the frame.
 - `srcdoc` frames inherit the page's CSP (`tauri.conf.json`): images from `https:`/`http:`/`data:` are allowed and inline styles too. Tauri is told not to add nonces to `style-src` (`dangerousDisableAssetCspModification`), because a nonce would switch off `'unsafe-inline'`.
 - The frame background is always white: emails assume white, even in dark mode.
+- Some emails set `overflow: hidden` on `html` or `body`, which would make them impossible to scroll. The frame CSS forces `:root { overflow: auto !important }` and `:root > body { overflow: visible !important }`. `:root` outranks the emails' `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
 
 ## Actions
 
@@ -41,11 +46,12 @@ Archive and delete are **optimistic**. The row disappears and the next message o
 | --- | --- |
 | `J` / `↓` | Next message |
 | `K` / `↑` | Previous message |
+| `Space` / `PageDown` | Scroll the open message down (`Shift+Space` / `PageUp`: up) |
 | `E` | Archive |
 | `#` / `Delete` | Delete (Trash) |
 | `Esc` | Close Settings |
 
-The same handler is attached inside the email iframe, so shortcuts keep working after clicking into a message.
+The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
 ## Settings and first run
 
