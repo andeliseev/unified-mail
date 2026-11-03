@@ -89,6 +89,11 @@ jobs:
           if [ "$version" != "$(node -p "require('./package.json').version")" ]; then
             node scripts/set-version.mjs "$version"
           fi
+          # CHANGELOG.md's Unreleased notes become this version's; the version commit includes it.
+          node scripts/changelog.mjs "$version" > "$RUNNER_TEMP/notes.md"
+          if ! grep -q . "$RUNNER_TEMP/notes.md"; then
+            echo "::warning::CHANGELOG.md has nothing under Unreleased, so this release has no What's new."
+          fi
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Releasing **v$version** (last release: v$last)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -112,9 +117,11 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ steps.commit.outputs.sha }}
           PLATFORMS: ${{ inputs.platforms }}
+          NOTES: ${{ runner.temp }}/notes.md
         with:
           script: |
             const { TAG: tag, SHA: sha, PLATFORMS: platforms } = process.env;
+            const notes = require('fs').readFileSync(process.env.NOTES, 'utf8').trim();
             // A draft left behind by a failed run is replaced.
             const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
             for (const old of releases.filter((r) => r.draft && r.tag_name === tag)) {
@@ -124,6 +131,7 @@ jobs:
             const windows = platforms !== 'macOS';
             const macos = platforms !== 'Windows';
             const body = [
+              ...(notes ? ['## What\'s new', notes, ''] : []),
               '## Download',
               ...(windows ? ['- **Windows:** the `.exe` installer (or the `.msi`)'] : []),
               ...(macos ? ['- **macOS** (Apple Silicon and Intel): the `.dmg`'] : []),

@@ -20,3 +20,4 @@
 - Commits are authored as `Andrei Eliseev <andeliseev@gmail.com>` (set in this repo's git config). Never add `Co-Authored-By` lines or any other Claude/AI attribution to commit messages, pull requests or release notes.
 - `README.md` stays user-facing (download, first launch, sign-in, privacy). Developer details go in `docs/`.
 - When behavior changes, update the matching file in `docs/`. Add things you notice but don't do to `docs/todo.md`.
+- Every change people using the app would notice gets a line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), written for them (what changed for them, not how), in the same commit. The Release workflow turns those lines into the release's notes. Changes only to docs, the website or the release tooling don't go there.

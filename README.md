@@ -15,7 +15,7 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 
 ## Download
 
-Get the latest version from the **[Releases page](https://github.com/andeliseev/unified-mail/releases/latest)**:
+Get the latest version from the **[Releases page](https://github.com/andeliseev/unified-mail/releases/latest)**. What changed in each version is in the [changelog](CHANGELOG.md).
 
 | System | File |
 | --- | --- |

@@ -125,12 +125,16 @@ It prints the last release and the next version. The last release is the highest
 The workflow then:
 
 1. Works out the version with [`scripts/next-version.mjs`](../scripts/next-version.mjs). It stops if that isn't newer than the last release.
-2. Sets it with [`scripts/set-version.mjs`](../scripts/set-version.mjs) in `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`, and commits "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
-3. Creates a draft release `vX.Y.Z`, replacing a draft left by a failed run.
-4. Builds the chosen platforms in parallel and uploads them to the draft: Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel).
-5. Publishes the release only if every build succeeded. Only then does the `vX.Y.Z` tag exist.
+2. Sets it with [`scripts/set-version.mjs`](../scripts/set-version.mjs) in `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`.
+3. Moves the **Unreleased** lines of [`CHANGELOG.md`](../CHANGELOG.md) under `## X.Y.Z (date)` with [`scripts/changelog.mjs`](../scripts/changelog.mjs), leaving an empty Unreleased section for the next changes. With nothing under Unreleased, the run shows a warning and the release has no "What's new".
+4. Commits all that as "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
+5. Creates a draft release `vX.Y.Z` whose text starts with **What's new** (those changelog lines), replacing a draft left by a failed run.
+6. Builds the chosen platforms in parallel and uploads them to the draft: Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel).
+7. Publishes the release only if every build succeeded. Only then does the `vX.Y.Z` tag exist.
 
-**If a run fails,** fix the cause and run it again with the same choice. The tag doesn't exist yet, so the same version comes out, and its draft is replaced. Don't set the version locally: the workflow does it, and it refuses to go below a version already in `package.json`.
+**If a run fails,** fix the cause and run it again with the same choice. The tag doesn't exist yet, so the same version comes out, and its draft is replaced. The changelog already has that version's section, so its notes are reused.
+
+**Before releasing,** check the Unreleased lines in `CHANGELOG.md`: they become the release notes as written. Don't set the version locally: the workflow does it, and it refuses to go below a version already in `package.json`.
 
 **Notes:**
 
