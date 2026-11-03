@@ -70,6 +70,7 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 - [x] Open source: MIT license, public repo, so releases are public downloads
 - [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper)
 - [ ] Auto-update (`tauri-plugin-updater`)
+- [ ] Third-party licenses: the MIT/Apache crates built into the app ask for their notices to ship with it. Generate a list (e.g. `cargo about`) and link it from Settings or include it in the installer
 - [ ] **Google verification**, so users don't see the "unverified app" warning and the user cap goes away. Steps from Google's [restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification):
   - Prove ownership of `andeliseev.github.io` in Google Search Console (a verification file in the site repo)
   - Home page and privacy policy with the Limited Use statement (done)

@@ -2,6 +2,7 @@
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+const { getVersion } = window.__TAURI__.app;
 
 const PALETTE = ['#2f6df6', '#d93025', '#188038', '#e37400', '#9334e6', '#00897b', '#c2185b', '#5f6368'];
 // Push (IMAP IDLE) triggers syncs instantly; polling is only a safety net.
@@ -172,6 +173,7 @@ async function init() {
   state.accounts = setup.accounts;
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
+  getVersion().then((version) => { $('#app-version').textContent = version; });
   setList('inbox', await invoke('cached_folder', { folder: 'inbox' }));
   render();
 

@@ -298,6 +298,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #account-list li button { padding: 3px 10px; font-size: 12.5px; }
 #account-list li button.confirm { color: var(--danger); border-color: var(--danger); }
 #account-list:empty::after { content: "No accounts yet."; color: var(--muted); }
+#about { margin-top: 24px; color: var(--muted); font-size: 12.5px; }
+#about p { margin: 4px 0; }
 
 .spinner {
   width: 28px; height: 28px;
