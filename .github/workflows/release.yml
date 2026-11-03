@@ -1,6 +1,7 @@
 # One-click release: Actions → Release → Run workflow.
 # Builds the Windows and macOS installers and publishes them as a GitHub Release.
-# Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets (see docs/development.md).
+# Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets, and the updater's
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (see docs/development.md).
 name: Release
 run-name: Release (${{ inputs.version || inputs.bump }})
 
@@ -36,9 +37,14 @@ jobs:
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
             echo "::error::Add the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets first (see docs/development.md)."
+            exit 1
+          fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Add the updater's TAURI_SIGNING_PRIVATE_KEY (and _PASSWORD) repository secrets first (see docs/development.md)."
             exit 1
           fi
 
@@ -154,9 +160,16 @@ jobs:
           # Read by src-tauri/build.rs and baked into the app.
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          # Signs the update files, which installed apps check against the public key in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
-          args: ${{ matrix.args }}
+          # tauri.release.conf.json turns on the signed update files, only here, so local builds
+          # don't need the key. The action merges both jobs' entries into one latest.json.
+          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
+          # The generic windows-x86_64 entry of latest.json is the NSIS installer, like the README's download.
+          updaterJsonPreferNsis: true
 
   # Publish only when every installer built, so a release is never half-empty.
   publish:

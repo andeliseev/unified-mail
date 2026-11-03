@@ -14,7 +14,8 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "http2", "default-tls", "macos-system-configuration"] }
+# 0.13, like tauri-plugin-updater, so the app has one copy. native-tls: the OS's TLS (SChannel / Secure Transport).
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "gzip", "http2", "native-tls", "system-proxy"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "macros"] }
 futures-util = "0.3"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
@@ -27,6 +28,8 @@ async-imap = { version = "0.10", default-features = false, features = ["runtime-
 tokio-native-tls = "0.3"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+# Default features add rustls (a second TLS stack) and zip (only for old zipped Windows updates): +1.4 MB.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy"] }
 
 # Size-focused release build: https://v2.tauri.app/concept/size/
 [profile.release]

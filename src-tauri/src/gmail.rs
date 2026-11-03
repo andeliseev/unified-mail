@@ -515,4 +515,13 @@ mod tests {
         assert!(check_id("../profile").is_err());
         assert!(check_id("").is_err());
     }
+
+    /// Talks to the real gmail.googleapis.com: run with `cargo test -- --ignored`. Gmail's own
+    /// 401 message coming back shows that TLS, HTTP and reading errors work with this reqwest.
+    #[tokio::test]
+    #[ignore]
+    async fn gmail_api_rejects_bad_token() {
+        let error = profile_email(&Client::new(), "not-a-real-token").await.err().unwrap();
+        assert!(error.starts_with("Gmail error 401"), "{error}");
+    }
 }

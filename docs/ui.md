@@ -140,4 +140,8 @@ Clicking a notification while it's on screen brings the window forward and sends
 - Without one, Settings opens on first run and can't be closed until a client is saved. Pasting the downloaded client JSON into the Client ID field fills both fields.
 - **Remove** on an account asks for a second click to confirm. The app avoids `confirm()` dialogs.
 - **Add account** shows a "finish signing in in your browser" overlay. Cancel only hides the overlay: the backend keeps waiting until its 5-minute timeout, and a sign-in that completes later is still added.
+- **Updates:** `checkForUpdate` runs 10 s after launch (after the first sync), every 6 hours (`UPDATE_CHECK_MS`), and when Settings opens if the last check is over an hour old. When a newer version exists:
+  - an **Update to X** button appears next to the version, and the sidebar's Settings button gets a dot;
+  - clicking the button shows "Updating…" and runs `install_update`; a failure shows a toast, brings the button back and checks again;
+  - check failures (offline, nothing released yet, the test app's empty endpoint list) stay quiet.
 - At the bottom (`#about`): the app's version, from Tauri's `getVersion()` (the version in `tauri.conf.json`, which the Release workflow sets), and the copyright line from `LICENSE`. Below them are links to GitHub, Releases, the website and the privacy policy, opened in the browser like the other `data-href` links.

@@ -8,8 +8,14 @@ mod state;
 
 use gmail::{FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Trashed};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
+
+/// The newer release `check_update` found, kept for `install_update`.
+#[derive(Default)]
+struct PendingUpdate(Mutex<Option<Update>>);
 
 #[tauri::command]
 fn get_setup(state: State<'_, AppState>) -> Setup {
@@ -136,6 +142,30 @@ fn notify(
     notification.show().map_err(|e| format!("Couldn't show a notification: {e}"))
 }
 
+/// Asks the release site (`plugins.updater.endpoints`) for a newer version. Returns that
+/// version, or null when this one is the newest.
+#[tauri::command]
+async fn check_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<Option<String>, String> {
+    let fail = |e: tauri_plugin_updater::Error| format!("Couldn't check for updates: {e}");
+    let update = app.updater().map_err(fail)?.check().await.map_err(fail)?;
+    let version = update.as_ref().map(|u| u.version.clone());
+    *pending.0.lock().unwrap() = update;
+    Ok(version)
+}
+
+/// Downloads the update `check_update` found, checks its signature and installs it. On Windows
+/// the app exits here and the installer starts it again; elsewhere the app restarts itself.
+#[tauri::command]
+async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
+    let update = pending.0.lock().unwrap().take();
+    let update = update.ok_or("There's no update to install. Open Settings again to check.")?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("Couldn't install the update: {e}"))?;
+    app.restart()
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -160,6 +190,8 @@ fn main() {
         // does on Windows) brings this window forward instead of starting a second copy.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(PendingUpdate::default())
         .setup(|app| {
             let state = AppState::load(app.path().app_data_dir()?);
             let accounts = state.setup().accounts;
@@ -195,6 +227,8 @@ fn main() {
             restore_message,
             set_badge,
             notify,
+            check_update,
+            install_update,
             open_external,
         ])
         .run(tauri::generate_context!())

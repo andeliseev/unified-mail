@@ -23,6 +23,7 @@ flowchart LR
   Gmail --> GAPI["gmail.googleapis.com"]
   OAuth --> GAUTH["accounts.google.com<br/>oauth2.googleapis.com"]
   Idle --> IMAP["imap.gmail.com:993"]
+  Main -- "updater plugin" --> GH["github.com<br/>releases: latest.json"]
 ```
 
 ## Rust modules
@@ -67,7 +68,17 @@ Events (Rust → UI):
 - `mail-changed`, with the account email as payload.
 - `open-message`, `{ account, id }` or null, when a notification is clicked.
 
-Plugins: `tauri-plugin-notification` (Windows toasts, macOS notifications) and `tauri-plugin-single-instance`. The second keeps one copy of the app running: launching it again just brings the window forward.
+And two for [updates](development.md#updates):
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `check_update` | | The newer version on GitHub, or null. The found update is kept in `PendingUpdate` |
+| `install_update` | | Downloads it, checks its signature against `plugins.updater.pubkey`, installs it and restarts. On Windows the app exits and the installer starts it again |
+
+Plugins:
+- `tauri-plugin-notification`: Windows toasts and macOS notifications.
+- `tauri-plugin-single-instance`: keeps one copy of the app running; launching it again just brings the window forward.
+- `tauri-plugin-updater`: used only from Rust, so it needs no capability permissions.
 
 ## Storage
 
@@ -84,7 +95,7 @@ Plugins: `tauri-plugin-notification` (Windows toasts, macOS notifications) and `
 ## Design decisions
 
 - **No frontend framework, no bundler.** `src/` is served as is (`frontendDist`). Fewer dependencies, nothing to build, tiny assets.
-- **Use what the OS already ships.** Webview instead of bundled Chromium; `native-tls` (SChannel / Secure Transport) instead of rustls; the webview's `TextDecoder` for legacy charsets instead of `encoding_rs`. All of this keeps the binary small (see [development.md](development.md)).
+- **Use what the OS already ships.** Webview instead of bundled Chromium; `native-tls` (SChannel / Secure Transport) instead of rustls, for the updater too (its default features would add rustls and zip, +1.4 MB); the webview's `TextDecoder` for legacy charsets instead of `encoding_rs`. All of this keeps the binary small (see [development.md](development.md)).
 - **Locks are never held across `.await`.** `AppState` uses `std::sync::Mutex`, locked only for quick in-memory reads and writes. Network calls happen outside the lock, and Tauri async commands must be `Send`.
 - **Access-token expiry uses `SystemTime`, not `Instant`.** On macOS `Instant` stops while the machine sleeps, which would leave expired tokens looking valid.
 - **Errors are `String`s.** Every failure ends up as a message in the UI, so a typed error enum would add code without adding value yet.

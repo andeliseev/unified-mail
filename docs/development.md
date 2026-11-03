@@ -79,6 +79,7 @@ The point of the app is to stay small. Current numbers on Windows x64:
 | `unified-mail.exe` release, before push | 3.9 MB |
 | `unified-mail.exe` release, with IMAP push | 4.2 MB |
 | `unified-mail.exe` release, with notifications and single instance (+230 KB) | 4.5 MB |
+| `unified-mail.exe` release, with the updater (+196 KB; with its default features it was +1.4 MB) | 4.7 MB |
 | NSIS installer (`...-setup.exe`) | 1.5 MB |
 | MSI installer | 2.0 MB |
 
@@ -94,8 +95,10 @@ The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`,
 | --- | --- |
 | `GOOGLE_CLIENT_ID` | `client_id` from `src-tauri/google-client.json` |
 | `GOOGLE_CLIENT_SECRET` | `client_secret` from the same file |
+| `TAURI_SIGNING_PRIVATE_KEY` | The whole content of the updater's private key file (see [Updates](#updates)) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | That key's password |
 
-`build.rs` reads them and bakes the client into the app, just as it does with the local file. The workflow refuses to run without them, so a release can never ship without a client.
+`build.rs` reads the Google ones and bakes the client into the app, just as it does with the local file. The signing key signs the update files. The workflow refuses to run without the client or the key, so a release can never ship without them.
 
 **To release:** **Actions → Release → Run workflow**, choose what to raise, and run it:
 
@@ -130,6 +133,44 @@ The workflow then:
 - The repo is public, so releases are public downloads. The README's Download section links to the latest one.
 - Builds aren't code-signed. Windows shows a SmartScreen warning. The macOS app is ad-hoc signed (`bundle.macOS.signingIdentity: "-"`) so it can run on Apple Silicon, but it isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
 - Actions minutes are free for public repos. The universal macOS build compiles the app twice, so it's the slowest job; `rust-cache` makes repeat builds faster.
+
+## Updates
+
+Installed apps update themselves with `tauri-plugin-updater`:
+
+1. The app checks `https://github.com/andeliseev/unified-mail/releases/latest/download/latest.json` (`plugins.updater.endpoints` in `tauri.conf.json`). It only resolves once a release is published, so drafts are never offered.
+2. If that version is newer, Settings shows **Update to X**.
+3. Clicking it downloads that platform's installer and checks its signature against `plugins.updater.pubkey`. Then:
+   - **Windows:** runs the installer passively (`/P /UPDATE /R`). There are no installer pages, so no "uninstall first" question, and it starts the app again when done.
+   - **macOS:** replaces the app and restarts it.
+
+The installer is picked to match the install: `windows-x86_64-nsis` or `windows-x86_64-msi`. The plain `windows-x86_64` entry is the NSIS one.
+
+**Where the files come from:** the release workflow builds with `--config src-tauri/tauri.release.conf.json`, which turns on `bundle.createUpdaterArtifacts`.
+- The installers get `.sig` files, signed with the `TAURI_SIGNING_PRIVATE_KEY` secret.
+- `tauri-action` writes `latest.json`, merging the Windows and macOS jobs' entries.
+- A local `npm run build` doesn't make update files, so it doesn't need the key.
+
+**The signing key** (one time):
+
+```bash
+npx tauri signer generate -w ~/.tauri/unified-mail.key
+```
+
+It asks for a password, then writes the private key to `~/.tauri/unified-mail.key` and the public key to `unified-mail.key.pub`.
+- Put the public key's content in `plugins.updater.pubkey`.
+- Put the private key's content and its password in the two repository secrets above.
+- **Back up the private key and password** somewhere safe, such as a password manager.
+- If the key is lost, installed apps can't accept new updates, and everyone must download a new version by hand.
+- Never commit the private key; `*.key` is git-ignored.
+
+**The test app never updates:** `tauri.dev.conf.json` sets an empty endpoint list, so `npm run dev` can't install a real release over your installed app.
+
+**To test the update flow locally**, without GitHub:
+1. Generate a throwaway key (`npx tauri signer generate --ci -p "" -w <temp>/test.key`).
+2. Serve a `latest.json` that names a higher version from a local web server.
+3. Start the test app with an extra config: `npm run dev -- --config <file>`, where the file sets `plugins.updater` to the test key's `pubkey`, `endpoints: ["http://127.0.0.1:<port>/latest.json"]` and `dangerousInsecureTransportProtocol: true`.
+4. A file with a bad signature, or one signed with another key, must be refused with an error toast.
 
 ## Website (home page and privacy policy)
 
@@ -195,6 +236,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
+- [ ] With an older release installed, publish a newer one: within a few hours (or on opening Settings) **Update to X** appears and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)

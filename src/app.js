@@ -14,6 +14,10 @@ const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
 const UNDO_MS = 8000;
 // More new messages at once than this get one summary notification instead.
 const MAX_NOTIFICATIONS = 3;
+// How often to ask GitHub for a newer release while the app runs; opening Settings asks too
+// if the last check is older than UPDATE_RECHECK_MS.
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+const UPDATE_RECHECK_MS = 60 * 60 * 1000;
 // Emails wider than the reader are scaled down to fit, but not below this; past it they scroll.
 const MIN_EMAIL_ZOOM = 0.6;
 // HTML emails bring their own margins, so the frame adds little; plain text gets more room.
@@ -134,6 +138,8 @@ const state = {
   inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages
   newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
   badge: null,           // unread count shown on the app icon
+  update: null,          // a newer version on GitHub, offered in Settings
+  updateCheckedAt: 0,
   loadingOlder: false,
   olderRetryAt: 0,       // after a failed load, don't retry before this time
   syncing: false,
@@ -193,6 +199,9 @@ async function init() {
   window.addEventListener('focus', () => {
     if (Date.now() - state.lastSync > REFRESH_ON_FOCUS_AFTER_MS) refresh();
   });
+  // Not right at launch, so the first sync goes first.
+  setTimeout(checkForUpdate, 10 * 1000);
+  setInterval(checkForUpdate, UPDATE_CHECK_MS);
 }
 
 function bindEvents() {
@@ -211,6 +220,7 @@ function bindEvents() {
     if (m) setUnread(m, !m.unread);
   });
   $('#toast-action').addEventListener('click', runUndo);
+  $('#update').addEventListener('click', installUpdate);
   $('#client-form').addEventListener('submit', saveClient);
   $('#client-id').addEventListener('paste', pasteClientJson);
 
@@ -910,6 +920,7 @@ function copyText(text) {
 // ---------- Accounts & settings ----------
 
 function openSettings() {
+  if (Date.now() - state.updateCheckedAt > UPDATE_RECHECK_MS) checkForUpdate();
   $('#settings').hidden = false;
   $('#close-settings').hidden = !state.configured;
   $('#client-secret').placeholder = state.configured ? 'Saved (enter again to change)' : 'GOCSPX-…';
@@ -998,6 +1009,46 @@ async function addAccount() {
     if (seq === state.authSeq) toast(String(e), 6000);
   } finally {
     if (seq === state.authSeq) $('#waiting').hidden = true;
+  }
+}
+
+// ---------- Updates ----------
+
+/** Asks GitHub whether a newer release exists. Failures (offline, nothing released yet) stay quiet. */
+async function checkForUpdate() {
+  state.updateCheckedAt = Date.now();
+  try {
+    state.update = await invoke('check_update');
+  } catch (e) {
+    console.warn(e);
+    return;
+  }
+  renderUpdate();
+}
+
+function renderUpdate() {
+  const button = $('#update');
+  button.hidden = !state.update;
+  if (state.update && !button.disabled) button.textContent = `Update to ${state.update}`;
+  $('#open-settings').classList.toggle('has-update', Boolean(state.update));
+  $('#open-settings').title = state.update ? `Version ${state.update} is available` : '';
+}
+
+/**
+ * Downloads and installs the update. On Windows the app closes and the installer opens it
+ * again when it's done; on macOS the app restarts itself.
+ */
+async function installUpdate() {
+  const button = $('#update');
+  button.disabled = true;
+  button.textContent = 'Updating…';
+  try {
+    await invoke('install_update');
+  } catch (e) {
+    toast(String(e), 8000);
+    button.disabled = false;
+    renderUpdate();
+    checkForUpdate();  // installing used up the update that was found; find it again
   }
 }
 

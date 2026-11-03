@@ -300,6 +300,9 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #account-list:empty::after { content: "No accounts yet."; color: var(--muted); }
 #about { margin-top: 24px; color: var(--muted); font-size: 12.5px; }
 #about p { margin: 4px 0; }
+#update { margin: 0 2px; padding: 1px 9px; border-radius: 999px; border-color: var(--accent); color: var(--accent); font-size: 12px; font-weight: 600; }
+/* A dot on the Settings button while an update is waiting there. */
+#open-settings.has-update::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--accent); }
 
 .spinner {
   width: 28px; height: 28px;

@@ -11,5 +11,10 @@
         "minHeight": 480
       }
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
   }
 }
