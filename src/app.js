@@ -638,11 +638,12 @@ function showBody(full) {
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
     `<style>${FRAME_CSS}</style></head><body>${html}</body></html>`;
-  frame.addEventListener('load', () => {
-    const doc = frame.contentDocument;
-    if (!doc) return;
-    // The frame's load waits for the email's images, so the width measured here is final.
+  // Set the email up as soon as it's parsed. Its `load` waits for every image, and one slow
+  // tracking pixel can hold that for 20+ s, leaving the email unfitted and unclickable.
+  whenParsed(frame, (doc) => {
     fitToFrame(frame);
+    // Images can widen the layout as they arrive. Their `load` events don't bubble, so capture them.
+    doc.addEventListener('load', () => scheduleFit(frame), true);
     doc.addEventListener('click', (e) => {
       const link = e.target.closest && e.target.closest('a[href]');
       if (!link) return;
@@ -653,7 +654,34 @@ function showBody(full) {
     doc.addEventListener('contextmenu', (e) => onContextMenu(e, frame));
     doc.addEventListener('mousedown', hideMenu);
   });
+  // Once everything has loaded (web fonts too), fit one last time.
+  frame.addEventListener('load', () => scheduleFit(frame));
   $('#m-body').replaceChildren(frame);
+}
+
+/**
+ * Calls `ready` with the frame's email document once it's parsed, before its images load.
+ * A new frame first holds an empty about:blank document; the email's own replaces it shortly.
+ */
+// Timers rather than requestAnimationFrame, which pauses while the window is minimized or hidden.
+function whenParsed(frame, ready) {
+  const check = () => {
+    if (!frame.isConnected) return;  // another message was opened meanwhile
+    const doc = frame.contentDocument;
+    if (doc && doc.URL === 'about:srcdoc' && doc.readyState !== 'loading') ready(doc);
+    else setTimeout(check, 10);
+  };
+  setTimeout(check, 0);
+}
+
+/** Fits once shortly, however many images arrive meanwhile. */
+function scheduleFit(frame) {
+  if (frame.fitScheduled) return;
+  frame.fitScheduled = true;
+  setTimeout(() => {
+    frame.fitScheduled = false;
+    fitToFrame(frame);
+  }, 50);
 }
 
 /**
