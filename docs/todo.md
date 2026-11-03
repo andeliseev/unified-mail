@@ -39,6 +39,22 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Reply / compose / send (Gmail API `messages.send`)
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of two lists
 
+## Yandex Mail accounts
+
+Looked into on 2026-11-03, not started. A big feature: about as much work as the Gmail support. Suggested stages: (1) Inbox, Trash, Archive, push and Undo, then (2) All Mail.
+
+- [ ] **Everything goes over IMAP** (`imap.yandex.com:993`); Yandex has no mail REST API like Gmail's. Its server advertises (pre-login `CAPABILITY`): `IDLE`, `AUTH=XOAUTH2`, `AUTH=PLAIN`, `MOVE`, `UIDPLUS`, `XLIST`, `UNSELECT`, `ENABLE`, `ID`. No `CONDSTORE`/`QRESYNC`, so syncs compare UIDs and flags.
+- [ ] **Push:** reuse `idle.rs` with Yandex's server and login. `IDLE` is supported.
+- [ ] **Sign-in**, one of:
+  - Yandex OAuth (preferred, same flow as Google): register the app once at oauth.yandex.ru with IMAP mail access, and embed its client ID like the Google one. Check whether Yandex accepts loopback redirects (`http://127.0.0.1:<port>`) and PKCE. If not, use a fixed port or its verification-code page.
+  - Or an app password the user creates in Yandex ID and pastes in (`AUTH=PLAIN`). Simpler to build, clunkier to use.
+  - Either way, each user enables IMAP once in Yandex Mail settings (Почтовые программы → IMAP, with app passwords and OAuth tokens).
+- [ ] **Folders:** Inbox → `INBOX`; Trash → the `\Trash` folder (found via `XLIST`); Archive → move to Yandex's "Archive" folder, creating it if missing, as Yandex's own Archive button does. All Mail doesn't exist on Yandex: show Inbox + Archive merged.
+- [ ] **Reading:** fetch envelopes, flags and bodies over IMAP, and decode MIME ourselves (Gmail's API does this for us): structure, charsets, RFC 2047 headers. Use a MIME crate such as `mail-parser`, checking the size impact first (estimated +0.5–1 MB). Previews (snippets) come from the start of the text body.
+- [ ] **Identity:** IMAP UIDs are per folder and change on move. Messages need a provider-specific id (folder + UIDVALIDITY + UID), with `UIDPLUS` supplying the new UID after a move for Undo. `keyOf`, the pending moves, Undo and the All Mail tags currently assume Gmail's global ids.
+- [ ] **Provider layer:** split `gmail.rs`/`state.rs` behind a common interface (list page, older page, get message, archive, trash, restore, mark read), so the UI stays the same.
+- [ ] **Privacy policy:** add Yandex (what's accessed, where it's stored).
+
 ## Distribution
 
 - [x] GitHub Actions release workflow for Windows and macOS installers (see [development.md](development.md#releases-github-actions))
