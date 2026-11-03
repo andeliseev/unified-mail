@@ -47,4 +47,14 @@ Gmail scopes are *restricted*, which has consequences:
 | In production, unverified | "Google hasn't verified this app" warning (Advanced → continue); at most 100 users; no 7-day expiry |
 | In production, verified | Needs Google's review plus a yearly third-party security assessment (paid). Only worth it for public distribution |
 
+Publishing (Testing → In production) needs these values on the **Branding** page:
+
+| Field | Value |
+| --- | --- |
+| Application home page | https://andeliseev.github.io/unified-mail/ |
+| Application privacy policy link | https://andeliseev.github.io/unified-mail/privacy.html |
+| Authorized domains | `andeliseev.github.io` |
+
+The pages are in `site/` (see [development.md](development.md#website-home-page-and-privacy-policy)).
+
 Google Workspace admins can block unverified apps or IMAP for their domain. Using a project inside the same Workspace with the **Internal** audience avoids the verification warning for that domain.

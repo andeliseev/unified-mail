@@ -59,6 +59,23 @@ The point of the app is to stay small. Current numbers on Windows x64:
 
 The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`. Before adding a crate, check what it adds with `npx tauri build --no-bundle`, and prefer what the OS already provides (see [architecture.md](architecture.md#design-decisions)).
 
+## Website (home page and privacy policy)
+
+Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the public repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io). This code repo stays private.
+
+| Page | URL |
+| --- | --- |
+| Home | https://andeliseev.github.io/unified-mail/ |
+| Privacy policy | https://andeliseev.github.io/unified-mail/privacy.html |
+
+After changing `site/`, commit the change on its own (its message becomes public) and publish:
+
+```bash
+git subtree push --prefix=site https://github.com/andeliseev/andeliseev.github.io.git main
+```
+
+If what the app accesses or stores changes, update `site/unified-mail/privacy.html` and its effective date.
+
 ## Debugging
 
 - In `npm run dev` the Rust side's stderr goes to the terminal, including `[push] ...` lines from IMAP watchers. Release builds on Windows have no console (`windows_subsystem = "windows"`).
