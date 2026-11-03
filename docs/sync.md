@@ -43,7 +43,7 @@ A single message that fails to load is skipped; the rest of the account still sy
 
 **Cost:** a sync with no new mail is two small requests per account. Gmail's quota is 250 units/s per user; a list call costs 5 units, metadata 5.
 
-Opening a message also marks it read: `get_message` starts a background `UNREAD` removal and updates every folder's cache. Once Gmail confirms an action, the message is dropped from the caches of the folders it left; the folders it joined pick it up at their next sync.
+Read state changes through `set_unread`, which removes or adds the `UNREAD` label: when a message is opened, and for Mark as read / Mark as unread. Once Gmail confirms, every folder's cache gets the new state. Once Gmail confirms a move, the message is dropped from the caches of the folders it left; the folders it joined pick it up at their next sync.
 
 ## Actions and Undo on Gmail
 
@@ -74,14 +74,14 @@ When a connection fails, the watcher logs `[push] <account>: <reason>` to stderr
 
 Watchers live in `idle::Watchers` (`account → JoinHandle`). They start for every saved account at launch and after `add_account` (which replaces any running watcher), and stop on `remove_account`.
 
-The app's own actions (archive, delete, mark read) also produce IDLE lines, which trigger one extra sync. That's harmless, and it confirms the change.
+The app's own actions (archive, delete, mark read or unread) also produce IDLE lines, which trigger one extra sync. That's harmless, and it confirms the change.
 
 ## UI side
 
 - `mail-changed` → sync after `PUSH_DEBOUNCE_MS` (300 ms). Gmail often sends several lines for one change, and this collapses them into one sync.
 - Safety net: sync every `AUTO_REFRESH_MS` (5 min) while the window is visible, and on window focus if the last sync was more than 30 s ago.
 - A sync requested while another is running is queued, never dropped. This matters right after adding an account.
-- Moves Gmail hasn't confirmed yet are kept in `state.pending` and re-applied to sync results (`setList`), so a message can't flash back into the folder it just left.
+- Moves Gmail hasn't confirmed yet are kept in `state.pending` and re-applied to sync results (`setList`), so a message can't flash back into the folder it just left. Read/unread changes do the same through `state.pendingRead`.
 - Push only watches the Inbox. All Mail and Trash also update on every push (the folder on screen syncs with the Inbox), on the 5-minute timer, and when you open them.
 
 ## Tunables

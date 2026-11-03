@@ -66,6 +66,12 @@ async fn get_message(state: State<'_, AppState>, account: String, id: String) ->
     state.get_message(&account, &id).await
 }
 
+/// Opening a message marks it read; "Mark as unread" and "Mark as read" set it either way.
+#[tauri::command]
+async fn set_unread(state: State<'_, AppState>, account: String, id: String, unread: bool) -> Result<(), String> {
+    state.set_unread(&account, &id, unread).await
+}
+
 #[tauri::command]
 async fn archive_message(state: State<'_, AppState>, account: String, id: String) -> Result<(), String> {
     state.archive(&account, &id).await
@@ -119,6 +125,7 @@ fn main() {
             refresh_folder,
             load_older,
             get_message,
+            set_unread,
             archive_message,
             trash_message,
             restore_message,

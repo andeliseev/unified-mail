@@ -175,11 +175,9 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
     })
 }
 
-/// Fetches a full message. Also returns whether it is currently unread.
-pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<(FullMessage, bool), String> {
+pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessage, String> {
     check_id(id)?;
     let raw: RawMessage = get_json(http, token, &format!("{API}/messages/{id}?format=full")).await?;
-    let unread = raw.label_ids.iter().any(|l| l == "UNREAD");
     let payload = raw.payload.unwrap_or_default();
 
     let (mut html_part, mut text_part) = (None, None);
@@ -203,7 +201,7 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<(FullMessa
         html,
         text,
     };
-    Ok((message, unread))
+    Ok(message)
 }
 
 /// Labels currently on a message.
@@ -229,8 +227,13 @@ pub async fn move_to_inbox(http: &Client, token: &str, id: &str) -> Result<(), S
     modify(http, token, id, &["INBOX"], &[]).await
 }
 
-pub async fn mark_read(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    modify(http, token, id, &[], &["UNREAD"]).await
+/// Adds or removes the UNREAD label.
+pub async fn set_unread(http: &Client, token: &str, id: &str, unread: bool) -> Result<(), String> {
+    if unread {
+        modify(http, token, id, &["UNREAD"], &[]).await
+    } else {
+        modify(http, token, id, &[], &["UNREAD"]).await
+    }
 }
 
 /// Moves to Trash, like Gmail's Delete button. Gmail purges Trash after 30 days.

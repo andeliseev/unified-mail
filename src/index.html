@@ -59,6 +59,10 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6zM12 3v7M9 7l3 3 3-3"/></svg>
               Move to Inbox
             </button>
+            <button id="toggle-read" class="tool" title="Mark as unread (Shift+U)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4zM4 7l8 6 8-6"/></svg>
+              <span class="label">Mark as unread</span>
+            </button>
           </div>
           <h1 id="m-subject"></h1>
           <div class="meta">
@@ -117,6 +121,8 @@
       <button id="cancel-wait">Cancel</button>
     </div>
   </div>
+
+  <div id="menu" role="menu" hidden></div>
 
   <div id="toast" role="status" hidden>
     <span id="toast-text"></span>

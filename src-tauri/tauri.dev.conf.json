@@ -1,0 +1,15 @@
+{
+  "identifier": "io.unifiedmail.devtest",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Unified Mail (test)",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 760,
+        "minHeight": 480
+      }
+    ]
+  }
+}

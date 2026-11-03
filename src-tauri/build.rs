@@ -19,7 +19,7 @@ fn embed_google_client() {
         (Ok(id), Ok(secret)) => (id, secret),
         _ => {
             let Ok(text) = fs::read_to_string(FILE) else {
-                println!("cargo:warning=No Google OAuth client embedded; see README. The app will ask for one in Settings.");
+                println!("cargo:warning=No Google OAuth client embedded; see docs/development.md. The app will ask for one in Settings.");
                 return;
             };
             let json: serde_json::Value = serde_json::from_str(&text).expect("google-client.json is not valid JSON");

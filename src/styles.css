@@ -170,6 +170,7 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 }
 .msg:hover { background: var(--hover); }
 .msg.selected { background: var(--selected); }
+.msg.menu-target { box-shadow: inset 0 0 0 2px var(--accent); }
 .msg .row1 { display: flex; gap: 8px; align-items: baseline; }
 .msg .from { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg time { font-size: 12px; color: var(--muted); flex: none; }
@@ -306,6 +307,22 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
+
+#menu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+}
+#menu button { border: 0; border-radius: 6px; padding: 6px 10px; text-align: left; }
+#menu button.danger:hover { color: var(--danger); }
+#menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }
 
 #toast {
   position: fixed;

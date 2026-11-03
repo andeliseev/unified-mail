@@ -48,11 +48,12 @@ function actionsFor(m) {
 }
 
 /**
- * For each action: the folder lists the message leaves and joins (applied right away,
- * before Gmail answers), the Gmail call, and how to undo it given that call's result.
+ * For each action: its button label, the folder lists the message leaves and joins (applied
+ * right away, before Gmail answers), the Gmail call, and how to undo it given that call's result.
  */
 const ACTIONS = {
   archive: {
+    label: 'Archive',
     done: 'Archived',
     verb: 'archive',
     leave: ['inbox'],
@@ -65,6 +66,7 @@ const ACTIONS = {
     }),
   },
   trash: {
+    label: 'Delete',
     done: 'Moved to Trash',
     verb: 'delete',
     leave: ['inbox', 'all'],
@@ -78,6 +80,7 @@ const ACTIONS = {
   },
   // "Move to Inbox" on an archived message in All Mail.
   unarchive: {
+    label: 'Move to Inbox',
     done: 'Moved to Inbox',
     verb: 'move',
     leave: [],
@@ -91,6 +94,7 @@ const ACTIONS = {
   },
   // "Move to Inbox" in Trash.
   restore: {
+    label: 'Move to Inbox',
     done: 'Moved to Inbox',
     verb: 'move',
     leave: ['trash'],
@@ -116,6 +120,7 @@ const state = {
   selected: null,        // key of the highlighted row
   current: null,         // message shown in the reader
   pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
+  pendingRead: new Map(), // key → read/unread change Gmail hasn't confirmed yet; same idea
   undo: null,            // what the toast's Undo button does, while it shows
   // Per folder and account: `frontier`, the oldest date loaded so far without gaps, and
   // `more`, whether older mail exists. Scrolling pushes the frontier back.
@@ -150,6 +155,8 @@ const visible = () => {
   return state.lists[folder].filter((m) => (!state.filter || m.account === state.filter) && m.date >= cutoff);
 };
 const byKey = (key) => state.lists[state.folder].find((m) => keyOf(m) === key);
+/** The open message as the folder list has it now; syncs replace the list's objects. */
+const openMessage = () => state.current && (byKey(keyOf(state.current)) || state.current);
 
 // ---------- Startup ----------
 
@@ -189,6 +196,10 @@ function bindEvents() {
   $('#archive').addEventListener('click', () => act('archive'));
   $('#trash').addEventListener('click', () => act('trash'));
   $('#restore').addEventListener('click', () => act(state.folder === 'trash' ? 'restore' : 'unarchive'));
+  $('#toggle-read').addEventListener('click', () => {
+    const m = openMessage();
+    if (m) setUnread(m, !m.unread);
+  });
   $('#toast-action').addEventListener('click', runUndo);
   $('#client-form').addEventListener('submit', saveClient);
   $('#client-id').addEventListener('paste', pasteClientJson);
@@ -197,10 +208,15 @@ function bindEvents() {
     const row = e.target.closest('li.msg');
     if (row) select(row.dataset.key);
   });
-  $('#messages').addEventListener('scroll', maybeLoadOlder, { passive: true });
+  $('#messages').addEventListener('scroll', () => { hideMenu(); maybeLoadOlder(); }, { passive: true });
   document.querySelectorAll('a[data-href]').forEach((a) =>
     a.addEventListener('click', (e) => { e.preventDefault(); openExternal(a.dataset.href); }));
   document.addEventListener('keydown', onKey);
+  document.addEventListener('contextmenu', (e) => onContextMenu(e));
+  document.addEventListener('mousedown', (e) => { if (!e.target.closest('#menu')) hideMenu(); });
+  // Also fires when a click moves focus into the email frame.
+  window.addEventListener('blur', hideMenu);
+  window.addEventListener('resize', hideMenu);
 }
 
 // ---------- Sync ----------
@@ -235,12 +251,16 @@ async function refresh() {
   }
 }
 
-/** Stores a folder's messages, re-applying moves Gmail hasn't confirmed yet. */
+/** Stores a folder's messages, re-applying changes Gmail hasn't confirmed yet. */
 function setList(folder, messages) {
   let list = messages;
   for (const [key, move] of state.pending) {
     if (move.leave.includes(folder)) list = list.filter((m) => keyOf(m) !== key);
     if (move.join.includes(folder) && !list.some((m) => keyOf(m) === key)) list = withMessage(list, move.message);
+  }
+  for (const m of list) {
+    const change = state.pendingRead.get(keyOf(m));
+    if (change) m.unread = change.unread;
   }
   state.lists[folder] = list;
   state.loaded[folder] = true;
@@ -452,10 +472,14 @@ function markRow(key) {
 }
 
 function renderActions() {
-  const allowed = state.current ? actionsFor(state.current) : [];
+  const m = openMessage();
+  const allowed = m ? actionsFor(m) : [];
   $('#archive').hidden = !allowed.includes('archive');
   $('#trash').hidden = !allowed.includes('trash');
   $('#restore').hidden = !allowed.includes('restore') && !allowed.includes('unarchive');
+  const unread = Boolean(m && m.unread);
+  $('#toggle-read .label').textContent = unread ? 'Mark as read' : 'Mark as unread';
+  $('#toggle-read').title = unread ? 'Mark as read (Shift+I)' : 'Mark as unread (Shift+U)';
 }
 
 // ---------- Reading ----------
@@ -484,15 +508,8 @@ async function select(key) {
     if (seq !== state.openSeq) return;
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
     showBody(full);
-    if (m.unread) {
-      // The same message can be in several folder lists (Inbox and All Mail).
-      for (const list of Object.values(state.lists)) {
-        for (const x of list) if (keyOf(x) === key) x.unread = false;
-      }
-      const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
-      if (row) row.classList.remove('unread');
-      renderSidebar();
-    }
+    // Opening marks it read, as in Gmail.
+    if ((byKey(key) || m).unread) setUnread(m, false);
   } catch (e) {
     if (seq === state.openSeq) showBodyMessage(`Couldn't load this message: ${e}`);
   }
@@ -537,6 +554,8 @@ function showBody(full) {
       if (!link.getAttribute('href').startsWith('#')) openExternal(link.href);
     });
     doc.addEventListener('keydown', (e) => onKey(e, true));
+    doc.addEventListener('contextmenu', (e) => onContextMenu(e, frame));
+    doc.addEventListener('mousedown', hideMenu);
   });
   $('#m-body').replaceChildren(frame);
 }
@@ -561,19 +580,20 @@ function decodeBody(body) {
 // ---------- Actions ----------
 
 /**
- * Runs an action on the open message and offers Undo. If the message left the folder on
- * screen, the next one opens; otherwise (e.g. Archive in All Mail) it stays open.
+ * Runs an action on a message (the open one, or a row's from the right-click menu) and
+ * offers Undo. If the open message left the folder on screen, the next one opens;
+ * otherwise (e.g. Archive in All Mail) it stays open.
  */
-function act(kind) {
-  const m = state.current;
+function act(kind, m = openMessage()) {
   if (!m || !actionsFor(m).includes(kind)) return;
   const action = ACTIONS[kind];
+  const wasOpen = Boolean(state.current) && keyOf(state.current) === keyOf(m);
   const list = visible();
   const index = list.findIndex((x) => keyOf(x) === keyOf(m));
   const next = index >= 0 ? list[index + 1] || list[index - 1] : null;
 
   const done = perform(m, action, () => action.run(m));
-  if (!byKey(keyOf(m))) {
+  if (wasOpen && !byKey(keyOf(m))) {
     if (next) select(keyOf(next)); else clearReader();
   }
   done.catch((e) => toast(`Couldn't ${action.verb} the message: ${e}`, 6000));
@@ -586,8 +606,8 @@ function act(kind) {
       const undo = action.undo(m, result);
       try {
         await perform(m, undo, undo.run);
-        // Reopen the message if it's back in the folder on screen.
-        if (byKey(keyOf(m))) select(keyOf(m));
+        // Reopen the message if it was open and is back in the folder on screen.
+        if (wasOpen && byKey(keyOf(m))) select(keyOf(m));
       } catch (e) {
         toast(`Couldn't undo: ${e}`, 6000);
       }
@@ -629,6 +649,39 @@ function shift(m, leave, join) {
   }
 }
 
+/**
+ * Marks a message read or unread: here at once, then at Gmail. Until Gmail answers, syncs
+ * keep the new state; if it fails, the old one comes back. Changes to one message reach
+ * Gmail in order, so opening it and then marking it unread can't end up read.
+ */
+function setUnread(m, unread) {
+  const key = keyOf(m);
+  const before = state.pendingRead.get(key);
+  const change = { unread };
+  change.done = (before ? before.done.catch(() => {}) : Promise.resolve())
+    .then(() => invoke('set_unread', { ...ids(m), unread }));
+  state.pendingRead.set(key, change);
+  showUnread(key, unread);
+  change.done
+    .catch((e) => {
+      if (state.pendingRead.get(key) === change) showUnread(key, !unread);
+      if (!state.undo) toast(`Couldn't mark the message as ${unread ? 'unread' : 'read'}: ${e}`, 6000);
+    })
+    .finally(() => { if (state.pendingRead.get(key) === change) state.pendingRead.delete(key); });
+}
+
+/** Shows a message as read or unread in every list it's in (Inbox and All Mail, say). */
+function showUnread(key, unread) {
+  for (const list of Object.values(state.lists)) {
+    for (const x of list) if (keyOf(x) === key) x.unread = unread;
+  }
+  if (state.current && keyOf(state.current) === key) state.current.unread = unread;
+  const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
+  if (row) row.classList.toggle('unread', unread);
+  renderSidebar();
+  renderActions();
+}
+
 function runUndo() {
   const undo = state.undo;
   if (!undo) return;
@@ -652,6 +705,10 @@ function scrollMessage(direction) {
 
 /** `inMessage`: the key was pressed inside the email frame, which scrolls itself. */
 function onKey(e, inMessage = false) {
+  if (!$('#menu').hidden) {
+    hideMenu();
+    if (e.key === 'Escape') { e.preventDefault(); return; }
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (!$('#settings').hidden || !$('#waiting').hidden) {
     if (e.key === 'Escape' && state.configured && state.accounts.length) closeSettings();
@@ -671,10 +728,85 @@ function onKey(e, inMessage = false) {
       break;
     case 'e': act('archive'); break;
     case '#': case 'Delete': act('trash'); break;
+    case 'u': case 'U': case 'i': case 'I': {  // Shift+U / Shift+I, as in Gmail
+      if (!e.shiftKey) return;
+      const m = openMessage();
+      if (m) setUnread(m, e.key.toLowerCase() === 'u');
+      break;
+    }
     case 'z': runUndo(); break;
     default: return;
   }
   e.preventDefault();
+}
+
+// ---------- Right-click menu ----------
+
+/**
+ * Right-click shows the app's own menu. The webview's menu (Back, Reload, Share, Print…)
+ * does nothing useful here and comes in the system's language. Text fields keep it, as
+ * their Cut/Copy/Paste menu does in every app. `frame`: the click was in the email.
+ */
+function onContextMenu(e, frame = null) {
+  if (e.target.closest && e.target.closest('input, textarea')) return;
+  e.preventDefault();
+  const groups = [];
+  const row = !frame && e.target.closest && e.target.closest('li.msg');
+  const m = row && byKey(row.dataset.key);
+  if (m) {
+    groups.push(
+      [{ label: m.unread ? 'Mark as read' : 'Mark as unread', run: () => setUnread(m, !m.unread) }],
+      actionsFor(m).map((kind) => ({ label: ACTIONS[kind].label, danger: kind === 'trash', run: () => act(kind, m) })),
+    );
+  }
+  const link = frame && e.target.closest && e.target.closest('a[href]');
+  if (link && /^(https?|mailto):/i.test(link.href)) {
+    groups.push([
+      { label: 'Open link', run: () => openExternal(link.href) },
+      { label: 'Copy link', run: () => copyText(link.href.replace(/^mailto:/i, '')) },
+    ]);
+  }
+  const selection = (frame ? frame.contentWindow : window).getSelection();
+  const text = selection.toString();
+  if (text.trim() && selection.containsNode(e.target, true)) groups.push([{ label: 'Copy', run: () => copyText(text) }]);
+
+  // Clicks in the email frame are relative to the frame.
+  const offset = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
+  showMenu(groups, e.clientX + offset.left, e.clientY + offset.top, row);
+}
+
+/** `groups`: lists of `{ label, run, danger }`, shown with lines between them. */
+function showMenu(groups, x, y, row = null) {
+  hideMenu();
+  const menu = $('#menu');
+  menu.replaceChildren();
+  for (const group of groups) {
+    if (menu.children.length) menu.append(document.createElement('hr'));
+    for (const item of group) {
+      const button = document.createElement('button');
+      button.setAttribute('role', 'menuitem');
+      if (item.danger) button.className = 'danger';
+      button.textContent = item.label;
+      button.addEventListener('click', () => { hideMenu(); item.run(); });
+      menu.append(button);
+    }
+  }
+  if (!menu.children.length) return;
+  if (row) row.classList.add('menu-target');
+  menu.hidden = false;
+  // Open where clicked, but keep it inside the window.
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, innerHeight - height - 4))}px`;
+}
+
+function hideMenu() {
+  $('#menu').hidden = true;
+  for (const row of $('#messages').querySelectorAll('.menu-target')) row.classList.remove('menu-target');
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).catch((e) => toast(`Couldn't copy: ${e}`));
 }
 
 // ---------- Accounts & settings ----------

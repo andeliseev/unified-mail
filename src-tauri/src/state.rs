@@ -359,21 +359,24 @@ impl AppState {
         Ok(AccountSync { messages, warning, more: page.more })
     }
 
-    /// Opening a message marks it read, as in Gmail.
+    /// Fetches a message to show. The UI marks it read separately (`set_unread`).
     pub async fn get_message(&self, account: &str, id: &str) -> Result<FullMessage, String> {
         let token = self.access_token(account).await?;
-        let (message, unread) = gmail::get_full(&self.http, &token, id).await?;
-        if unread {
-            let (http, message_id) = (self.http.clone(), id.to_string());
-            tauri::async_runtime::spawn(async move { gmail::mark_read(&http, &token, &message_id).await });
-            let key = cache_key(account, id);
-            for cache in self.cache.lock().unwrap().values_mut() {
-                if let Some(m) = cache.get_mut(&key) {
-                    m.unread = false;
-                }
+        gmail::get_full(&self.http, &token, id).await
+    }
+
+    /// Marks a message read (opening it, "Mark as read") or unread ("Mark as unread").
+    pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
+        let token = self.access_token(account).await?;
+        gmail::set_unread(&self.http, &token, id, unread).await?;
+        // The same message can be in several folders (Inbox and All Mail).
+        let key = cache_key(account, id);
+        for cache in self.cache.lock().unwrap().values_mut() {
+            if let Some(m) = cache.get_mut(&key) {
+                m.unread = unread;
             }
         }
-        Ok(message)
+        Ok(())
     }
 
     pub async fn archive(&self, account: &str, id: &str) -> Result<(), String> {

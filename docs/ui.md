@@ -14,7 +14,7 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 ## State and rendering
 
-There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`), the current Undo, and sync flags.
+There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.
 
 The sidebar lists the folders, then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail.
 
@@ -22,7 +22,7 @@ Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their
 
 ## Reading a message
 
-`select(key)` shows the headers right away from the summary, then calls `get_message`. A sequence counter (`openSeq`) discards answers that arrive after the user has already moved to another message.
+`select(key)` shows the headers right away from the summary, then calls `get_message`. A sequence counter (`openSeq`) discards answers that arrive after the user has already moved to another message. Once the body is shown, an unread message is marked read (see [Read and unread](#read-and-unread)).
 
 ### Bodies and charsets
 
@@ -66,7 +66,29 @@ All actions are **optimistic** (`perform`):
 
 A message only joins lists that are already loaded; other lists pick it up at their next sync.
 
-**Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way and reopens the message if it's back in the folder on screen. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
+**Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way. If the message was open and is back in the folder on screen, it opens again. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
+
+Actions from the [right-click menu](#right-click-menu) work on that row's message (`act(kind, m)`), even if another message is open. The open message stays open, and Undo doesn't open the row's message.
+
+## Read and unread
+
+Opening a message marks it read, as in Gmail. **Mark as unread** (button in the reader, `Shift+U`, right-click menu) marks it unread again. It stays open, and stays unread until it's opened again. The button switches to **Mark as read** (`Shift+I`).
+
+`setUnread` works like the actions: the new state shows at once, `set_unread` runs, and until Gmail answers the change sits in `state.pendingRead` and is re-applied to every sync result. If Gmail fails, the old state comes back with an error toast. Changes to one message are chained, so they reach Gmail in order. Without that, opening a message and quickly marking it unread could end up read.
+
+## Right-click menu
+
+Right-click shows the app's own menu (`onContextMenu`, `#menu`). The webview's menu (Back, Reload, Save as, Print, Share, Inspect) means nothing in this app, and it comes in the system's language. Its Share, for example, would share the app's internal page.
+
+| Where | Items |
+| --- | --- |
+| Message row | Mark as read / unread, then the folder's actions (as in [Actions](#actions)). The row is outlined while the menu is open |
+| Link in an email | Open link (`open_external`), Copy link |
+| Selected text (email or app) | Copy |
+| Text fields | The system's own Cut/Copy/Paste menu, as in every app |
+| Anywhere else | Nothing |
+
+Right-clicks in the email arrive at the frame's document; the frame's position is added to place the menu. The menu closes on any click, key, scroll, resize, or focus moving into the email. Copy uses `navigator.clipboard.writeText`, which needs the real click.
 
 ## Older mail
 
@@ -89,10 +111,11 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 | `Space` / `PageDown` | Scroll the open message down (`Shift+Space` / `PageUp`: up) |
 | `E` | Archive (Inbox only) |
 | `#` / `Delete` | Delete, i.e. move to Trash (Inbox and All Mail) |
+| `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo the last action, while its toast shows |
-| `Esc` | Close Settings |
+| `Esc` | Close Settings or the right-click menu |
 
-The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
+The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
 ## Settings and first run
 

@@ -5,7 +5,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 ## Not verified yet
 
 - [ ] End-to-end with a real Google account: sign-in, sync, push, archive, trash
-- [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception was only checked in Chromium/WebView2)
+- [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception and the right-click menu, including Copy, were only checked in Chromium/WebView2)
+- [ ] Mark as unread and the right-click menu in the real app with a test Gmail account (checked with a fake backend only so far)
 - [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
 - [ ] macOS `.dmg` from the Release workflow: first run on a real Mac (ad-hoc signing, Gatekeeper prompt)
 - [x] First run of the Release workflow on GitHub (v0.1.0)
@@ -24,7 +25,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Rendering re-creates every row; with many thousands of loaded rows, switch to a virtualized list
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
-- [ ] Marking read runs in the background; a sync within ~200 ms of opening can briefly show it unread again
+- [x] Marking read ran in the background, so a sync right after opening could briefly show it unread again. Now it's tracked like moves (`pendingRead`)
+- [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
 - [ ] Inline `cid:` images and attachments aren't shown
 - [ ] Optional blocking of remote images (tracking pixels), with a "Load images" button
 - [ ] Remember window size and position
@@ -34,7 +36,9 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Desktop **notifications** for new mail (`tauri-plugin-notification`), now that push exists
 - [ ] Unread **badge** on the taskbar / Dock icon
 - [ ] **Tray icon**: keep running in the background when the window is closed
-- [ ] Mark unread, star, move to label
+- [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)
+- [ ] Star, move to label
+- [ ] **App language** setting (e.g. Russian). The UI is English only. Dates and times already follow the system's regional format (`Intl` with the default locale), and text fields keep the system's own right-click menu, so on a Russian system those show in Russian
 - [ ] Search (Gmail `q=` query)
 - [ ] Reply / compose / send (Gmail API `messages.send`)
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of two lists
@@ -52,7 +56,7 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 - [ ] **Folders:** Inbox → `INBOX`; Trash → the `\Trash` folder (found via `XLIST`); Archive → move to Yandex's "Archive" folder, creating it if missing, as Yandex's own Archive button does. All Mail doesn't exist on Yandex: show Inbox + Archive merged.
 - [ ] **Reading:** fetch envelopes, flags and bodies over IMAP, and decode MIME ourselves (Gmail's API does this for us): structure, charsets, RFC 2047 headers. Use a MIME crate such as `mail-parser`, checking the size impact first (estimated +0.5–1 MB). Previews (snippets) come from the start of the text body.
 - [ ] **Identity:** IMAP UIDs are per folder and change on move. Messages need a provider-specific id (folder + UIDVALIDITY + UID), with `UIDPLUS` supplying the new UID after a move for Undo. `keyOf`, the pending moves, Undo and the All Mail tags currently assume Gmail's global ids.
-- [ ] **Provider layer:** split `gmail.rs`/`state.rs` behind a common interface (list page, older page, get message, archive, trash, restore, mark read), so the UI stays the same.
+- [ ] **Provider layer:** split `gmail.rs`/`state.rs` behind a common interface (list page, older page, get message, archive, trash, restore, mark read/unread), so the UI stays the same.
 - [ ] **Privacy policy:** add Yandex (what's accessed, where it's stored).
 
 ## Distribution
@@ -74,4 +78,4 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 - [ ] Frontend tests: the fake `window.__TAURI__` approach from [development.md](development.md) could become a real test harness
 - [ ] Integration tests for `gmail.rs` against a mock HTTP server
 - [ ] Typed errors in Rust if the UI ever needs to react to specific errors (e.g. show Reconnect only for expired sign-ins)
-- [ ] Accessibility: list keyboard focus, ARIA roles for the message list and dialogs
+- [ ] Accessibility: list keyboard focus, ARIA roles for the message list and dialogs, arrow keys in the right-click menu

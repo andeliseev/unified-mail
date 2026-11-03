@@ -42,6 +42,8 @@ Run with hot reload (edits to `src/` reload the page; Rust changes rebuild the a
 npm run dev
 ```
 
+This runs as a separate test app, **Unified Mail (test)**, with its own data folder, so it never opens the accounts of an installed Unified Mail. See [Testing without your own mail](#testing-without-your-own-mail).
+
 Release build with installers in `src-tauri/target/release/bundle/`:
 
 ```bash
@@ -129,8 +131,17 @@ If what the app accesses or stores changes, update `site/unified-mail/privacy.ht
 ## Debugging
 
 - In `npm run dev` the Rust side's stderr goes to the terminal, including `[push] ...` lines from IMAP watchers. Release builds on Windows have no console (`windows_subsystem = "windows"`).
-- Right-click → Inspect opens devtools in dev builds.
+- `Ctrl+Shift+I` (`Cmd+Option+I` on macOS) opens devtools in dev builds. Right-click shows the app's own menu, not the webview's, so it has no Inspect.
 - Clear the app's state by deleting the app data folder (see [architecture.md](architecture.md#storage)). Saved sign-ins are separate: they stay in the OS keychain under service `unified-mail`.
+
+## Testing without your own mail
+
+Never run a development build on your real Gmail accounts: a bug could archive, delete or mark real mail.
+
+- `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `io.unifiedmail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)".
+- Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
+- Release builds (`npm run build`, `npx tauri build`) use the real identity, `io.unifiedmail.desktop`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
+- For the UI alone, use a fake backend, as described next.
 
 ## Testing the UI without Google
 
@@ -144,9 +155,9 @@ This is how reading, the sandbox, the windows-1251 decoding, archive/delete and 
 
 To test in the **real WebView2**, including the release CSP, without touching your own accounts:
 
-1. Build under a separate identity, which gets its own data folder and no accounts:
+1. Build as the test app, which gets its own data folder and no accounts:
    ```bash
-   npx tauri build --no-bundle --config '{"identifier":"io.unifiedmail.devtest"}'
+   npx tauri build --no-bundle --config src-tauri/tauri.dev.conf.json
    ```
 2. Start `src-tauri/target/release/unified-mail.exe` with the environment variable `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9334`.
 3. Drive the page over the Chrome DevTools Protocol (`http://127.0.0.1:9334/json`):
@@ -167,6 +178,9 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] Trash → Move to Inbox, then Undo: it goes back to Trash
 - [ ] All Mail: delete an archived message, Undo: it returns to All Mail, not the Inbox
 - [ ] All Mail: Inbox messages carry an **Inbox** tag; Move to Inbox on an archived one adds the tag, Undo removes it
+- [ ] Open an unread message, click **Mark as unread** (or `Shift+U`), open another one: the first stays unread, in Gmail web too
+- [ ] Right-click a row: Mark as read/unread and the folder's actions, in English; Archive from there leaves the open message open
+- [ ] Right-click a link in an email: Open link, Copy link; select text and right-click: Copy
 - [ ] Links in an email open in the default browser
 - [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
 - [ ] An account with no unread mail still syncs

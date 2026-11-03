@@ -31,7 +31,7 @@ flowchart LR
 | --- | --- |
 | `main.rs` | Tauri setup, command handlers, starting push watchers at launch |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
-| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read) and MIME body selection |
+| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
@@ -49,7 +49,8 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
 | `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account; `more[account]` says whether older mail exists |
 | `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
-| `get_message` | `account, id` | Headers plus HTML/text body; marks the message read |
+| `get_message` | `account, id` | Headers plus HTML/text body. It doesn't change the message; the UI then calls `set_unread` |
+| `set_unread` | `account, id, unread` | Marks the message read (on opening, Mark as read) or unread (Mark as unread) |
 | `archive_message` | `account, id` | Removes the `INBOX` label |
 | `trash_message` | `account, id` | Moves the message to Trash; returns `{ wasInInbox }` for Undo |
 | `restore_message` | `account, id, fromTrash, toInbox` | Takes it out of Trash and/or adds `INBOX`: Undo, and "Move to Inbox" |
@@ -67,7 +68,7 @@ Event (Rust → UI): `mail-changed`, with the account email as payload.
 | Account list | `<app data>/accounts.json` | JSON array of emails |
 | Folder snapshots | `<app data>/inbox-cache.json`, `all-cache.json`, `trash-cache.json` | JSON array of `MessageSummary` |
 
-`<app data>` is `%APPDATA%\io.unifiedmail.desktop` on Windows and `~/Library/Application Support/io.unifiedmail.desktop` on macOS. Files are written to a `.tmp` file and then renamed, so a crash can't leave a half-written file.
+`<app data>` is `%APPDATA%\io.unifiedmail.desktop` on Windows and `~/Library/Application Support/io.unifiedmail.desktop` on macOS. The test app (`npm run dev`) uses `io.unifiedmail.devtest` instead (see [development.md](development.md#testing-without-your-own-mail)). Files are written to a `.tmp` file and then renamed, so a crash can't leave a half-written file.
 
 ## Design decisions
 

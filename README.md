@@ -5,6 +5,8 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - **Inbox, All Mail and Trash** for all your accounts together, or for one account at a time
 - **New mail appears within seconds**, with no need to refresh
 - **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
+- **Mark as unread** to come back to a message later
+- Right-click a message for its actions
 - Older mail loads as you scroll
 - The installer is about 1.5 MB, and the app starts instantly
 
@@ -30,7 +32,7 @@ Click **Add account**, choose your Google account in the browser window that ope
 
 - Google may warn that **"Google hasn't verified this app"**, because the app hasn't finished Google's review yet. Click **Advanced → Go to Unified Mail** to continue.
 - **Work accounts (Google Workspace):** your administrator may block apps that Google hasn't verified. If sign-in is refused, ask them to allow Unified Mail.
-- Google's permission screen asks for full Gmail access. Gmail requires that for instant new-mail notifications. The app only reads your mail, archives it, and moves it to or from Trash. It never permanently deletes anything.
+- Google's permission screen asks for full Gmail access. Gmail requires that for instant new-mail notifications. The app only reads your mail, marks it read or unread, archives it, and moves it to or from Trash. It never permanently deletes anything.
 
 ## Keyboard shortcuts
 
@@ -40,6 +42,7 @@ Click **Add account**, choose your Google account in the browser window that ope
 | `Space` / `PageDown`, `PageUp` | Scroll the open message |
 | `E` | Archive |
 | `#` or `Delete` | Delete (move to Trash) |
+| `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo |
 
 ## Privacy
