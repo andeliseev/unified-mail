@@ -6,7 +6,9 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 - [ ] End-to-end with a real Google account: sign-in, sync, push, archive, trash
 - [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception was only checked in Chromium/WebView2)
-- [ ] Installers (`npm run build`): NSIS/MSI on Windows, DMG on macOS
+- [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
+- [ ] macOS `.dmg` from the Release workflow: first run on a real Mac (ad-hoc signing, Gatekeeper prompt)
+- [ ] First run of the Release workflow on GitHub
 
 ## Gaps in current features
 
@@ -33,7 +35,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 ## Distribution
 
-- [ ] GitHub Actions to build Windows and macOS installers ([tauri-action](https://github.com/tauri-apps/tauri-action)), with `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` as repo secrets
+- [x] GitHub Actions release workflow for Windows and macOS installers (see [development.md](development.md#releases-github-actions))
+- [ ] Publish releases to a public repo, so people without access to the code can download them
 - [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper)
 - [ ] Auto-update (`tauri-plugin-updater`)
 - [ ] Google verification, only if the app goes public beyond 100 users (restricted scope, yearly security assessment)

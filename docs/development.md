@@ -61,6 +61,34 @@ The point of the app is to stay small. Current numbers on Windows x64:
 
 The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`. Before adding a crate, check what it adds with `npx tauri build --no-bundle`, and prefer what the OS already provides (see [architecture.md](architecture.md#design-decisions)).
 
+## Releases (GitHub Actions)
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and publishes a release in one click.
+
+**One-time setup:** in the GitHub repo, open **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+| Secret | Value |
+| --- | --- |
+| `GOOGLE_CLIENT_ID` | `client_id` from `src-tauri/google-client.json` |
+| `GOOGLE_CLIENT_SECRET` | `client_secret` from the same file |
+
+`build.rs` reads them and bakes the client into the app, just as it does with the local file. The workflow refuses to run without them, so a release can never ship without a client.
+
+**To release:** **Actions → Release → Run workflow**. Enter a new version (e.g. `0.2.0`), or leave it empty to release the version currently in `package.json`. The workflow then:
+
+1. Sets the version with [`scripts/set-version.mjs`](../scripts/set-version.mjs) and commits "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
+2. Creates a draft release `vX.Y.Z`. It stops if that version is already released, and replaces a draft left by a failed run.
+3. Builds Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel) in parallel, and uploads them to the draft.
+4. Publishes the release only if both builds succeeded.
+
+To set the version locally instead: `node scripts/set-version.mjs 0.2.0`. It updates `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`. Versions must be plain `X.Y.Z`, because MSI installers reject suffixes like `-beta`.
+
+**Notes:**
+
+- The repo is private, so its releases are too: only people with access to the repo can download them. To share builds publicly, publish them to a public repo; tauri-action has `owner`/`repo` inputs for that.
+- Builds aren't code-signed. Windows shows a SmartScreen warning. The macOS app is ad-hoc signed (`bundle.macOS.signingIdentity: "-"`) so it can run on Apple Silicon, but it isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
+- Private repos have a monthly allowance of free Actions minutes, and macOS minutes count several times more than Linux ones. The universal macOS build compiles the app twice, so it's the expensive job. `rust-cache` makes repeat builds faster.
+
 ## Website (home page and privacy policy)
 
 Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the public repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io). This code repo stays private.

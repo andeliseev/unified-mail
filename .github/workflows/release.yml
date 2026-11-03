@@ -1,0 +1,175 @@
+# One-click release: Actions → Release → Run workflow.
+# Builds the Windows and macOS installers and publishes them as a GitHub Release.
+# Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets (see docs/development.md).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New version, e.g. 0.2.0. Leave empty to release the current version.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - name: Check secrets
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
+            echo "::error::Add the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets first (see docs/development.md)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Set version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            node scripts/set-version.mjs "$INPUT_VERSION"
+          fi
+          echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check this version isn't released yet
+        uses: actions/github-script@v9
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
+            if (releases.some((r) => r.tag_name === process.env.TAG && !r.draft)) {
+              core.setFailed(`${process.env.TAG} is already released. Run again and enter a new version.`);
+            }
+
+      - name: Commit version change
+        id: commit
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Release $TAG"
+            git push
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: release
+        uses: actions/github-script@v9
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        with:
+          script: |
+            const { TAG: tag, SHA: sha } = process.env;
+            // A draft left behind by a failed run is replaced.
+            const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
+            for (const old of releases.filter((r) => r.draft && r.tag_name === tag)) {
+              await github.rest.repos.deleteRelease({ ...context.repo, release_id: old.id });
+            }
+            const body = [
+              '## Download',
+              '- **Windows:** the `.exe` installer (or the `.msi`)',
+              '- **macOS** (Apple Silicon and Intel): the `.dmg`',
+              '',
+              'The app isn\'t code-signed yet, so the first launch shows a warning:',
+              '- **Windows:** "Windows protected your PC" → **More info** → **Run anyway**',
+              '- **macOS:** open the app once, then **System Settings → Privacy & Security → Open Anyway**',
+            ].join('\n');
+            const { data } = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: tag,
+              target_commitish: sha,
+              name: `Unified Mail ${tag}`,
+              body,
+              draft: true,
+            });
+            core.setOutput('id', data.id);
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: ''
+            rust-targets: ''
+          # One universal .dmg for Apple Silicon and Intel Macs.
+          - name: macOS
+            os: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Read by src-tauri/build.rs and baked into the app.
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  # Publish only when every installer built, so a release is never half-empty.
+  publish:
+    name: Publish
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+              make_latest: 'true',
+            });
