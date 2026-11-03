@@ -13,6 +13,8 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" fill="#2f6df6"/><path d="M6 8.5l6 4.5 6-4.5" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Unified Mail
       </div>
+      <nav id="folders"></nav>
+      <div class="side-title">Accounts</div>
       <nav id="accounts"></nav>
       <button id="add-account" class="side-btn">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -52,6 +54,10 @@
             <button id="trash" class="tool danger" title="Delete (#)">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></svg>
               Delete
+            </button>
+            <button id="restore" class="tool" title="Move to Inbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6zM12 3v7M9 7l3 3 3-3"/></svg>
+              Move to Inbox
             </button>
           </div>
           <h1 id="m-subject"></h1>
@@ -112,7 +118,10 @@
     </div>
   </div>
 
-  <div id="toast" role="status" hidden></div>
+  <div id="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <button id="toast-action" hidden></button>
+  </div>
 
   <script src="app.js"></script>
 </body>

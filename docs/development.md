@@ -143,6 +143,10 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] Send yourself mail: it appears within a few seconds (push)
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
+- [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)
+- [ ] Trash → Move to Inbox, then Undo: it goes back to Trash
+- [ ] All Mail: delete an archived message, Undo: it returns to All Mail, not the Inbox
+- [ ] All Mail: Inbox messages carry an **Inbox** tag; Move to Inbox on an archived one adds the tag, Undo removes it
 - [ ] Links in an email open in the default browser
 - [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
 - [ ] An account with no unread mail still syncs

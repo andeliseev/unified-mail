@@ -1,7 +1,7 @@
-//! Accounts, tokens and the inbox cache.
+//! Accounts, tokens and the per-folder message caches.
 //!
 //! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (emails),
-//! `inbox-cache.json` (last inbox snapshot). Refresh tokens live in the OS keychain.
+//! `<folder>-cache.json` (last snapshot of each folder). Refresh tokens live in the OS keychain.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,8 +18,7 @@ use crate::oauth;
 const KEYRING_SERVICE: &str = "unified-mail";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
-const CACHE_FILE: &str = "inbox-cache.json";
-/// Newest inbox messages shown per account.
+/// Newest messages shown per account in each folder.
 const PAGE_SIZE: u32 = 50;
 /// Parallel metadata requests per account (Gmail allows ~50/s per user).
 const FETCH_CONCURRENCY: usize = 8;
@@ -50,10 +49,60 @@ pub struct Setup {
     pub accounts: Vec<String>,
 }
 
+/// A mail list the app shows, unified across accounts.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Folder {
+    Inbox,
+    /// Gmail's All Mail: everything outside Spam and Trash, which is what an unfiltered list returns.
+    All,
+    Trash,
+}
+
+impl Folder {
+    const EVERY: [Folder; 3] = [Folder::Inbox, Folder::All, Folder::Trash];
+
+    /// Labels a message must carry to be in this folder.
+    fn labels(self) -> &'static [&'static str] {
+        match self {
+            Folder::Inbox => &["INBOX"],
+            Folder::All => &[],
+            Folder::Trash => &["TRASH"],
+        }
+    }
+
+    /// Labels of this folder's unread messages.
+    fn unread_labels(self) -> &'static [&'static str] {
+        match self {
+            Folder::Inbox => &["INBOX", "UNREAD"],
+            Folder::All => &["UNREAD"],
+            Folder::Trash => &["TRASH", "UNREAD"],
+        }
+    }
+
+    fn cache_file(self) -> &'static str {
+        match self {
+            Folder::Inbox => "inbox-cache.json",
+            Folder::All => "all-cache.json",
+            Folder::Trash => "trash-cache.json",
+        }
+    }
+}
+
+/// One folder's messages, keyed by `account/id`.
+type FolderCache = HashMap<String, MessageSummary>;
+
 #[derive(Serialize)]
-pub struct InboxResult {
+pub struct FolderResult {
     pub messages: Vec<MessageSummary>,
     pub errors: Vec<AccountError>,
+}
+
+/// What Undo needs to know about a message moved to Trash.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trashed {
+    pub was_in_inbox: bool,
 }
 
 #[derive(Serialize)]
@@ -74,23 +123,29 @@ pub struct AppState {
     creds: Mutex<Option<ClientCreds>>,
     accounts: Mutex<Vec<String>>,
     tokens: Mutex<HashMap<String, AccessToken>>,
-    /// Current inbox of every account, keyed by `account/id`.
-    cache: Mutex<HashMap<String, MessageSummary>>,
+    /// Current contents of each folder, for every account.
+    cache: Mutex<HashMap<Folder, FolderCache>>,
     /// Messages whose metadata failed to load and were already reported (`account/id`).
     /// They are retried on every sync but reported only once.
     reported_failures: Mutex<HashSet<String>>,
 }
 
-/// One account's sync: its inbox, plus a warning if some messages couldn't be loaded.
+/// One account's sync of a folder: its messages, plus a warning if some couldn't be loaded.
 struct AccountSync {
-    inbox: Vec<MessageSummary>,
+    messages: Vec<MessageSummary>,
     warning: Option<String>,
 }
 
 impl AppState {
     pub fn load(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
-        let cached: Vec<MessageSummary> = read_json(&dir.join(CACHE_FILE)).unwrap_or_default();
+        let cache = Folder::EVERY
+            .into_iter()
+            .map(|folder| {
+                let cached: Vec<MessageSummary> = read_json(&dir.join(folder.cache_file())).unwrap_or_default();
+                (folder, cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect())
+            })
+            .collect();
         Self {
             http: reqwest::Client::builder()
                 .user_agent("UnifiedMail/0.1")
@@ -100,7 +155,7 @@ impl AppState {
             creds: Mutex::new(read_json(&dir.join(CLIENT_FILE))),
             accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
-            cache: Mutex::new(cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect()),
+            cache: Mutex::new(cache),
             reported_failures: Mutex::new(HashSet::new()),
             dir,
         }
@@ -162,29 +217,32 @@ impl AppState {
             accounts.clone()
         };
         write_json(&self.dir.join(ACCOUNTS_FILE), &accounts)?;
-        self.edit_cache(|cache| cache.retain(|_, m| m.account != email));
+        for folder in Folder::EVERY {
+            self.edit_cache(folder, |cache| cache.retain(|_, m| m.account != email));
+        }
         Ok(())
     }
 
-    pub fn cached_inbox(&self) -> Vec<MessageSummary> {
-        sorted(&self.cache.lock().unwrap())
+    pub fn cached(&self, folder: Folder) -> Vec<MessageSummary> {
+        sorted(&self.cache.lock().unwrap()[&folder])
     }
 
-    /// Syncs every account in parallel. An account that fails keeps its cached
-    /// messages and is reported in `errors`.
-    pub async fn refresh_inbox(&self) -> InboxResult {
+    /// Syncs one folder of every account in parallel. An account that fails keeps its
+    /// cached messages and is reported in `errors`.
+    pub async fn refresh(&self, folder: Folder) -> FolderResult {
         let accounts = self.accounts.lock().unwrap().clone();
-        let results = join_all(accounts.iter().map(|a| self.sync_account(a))).await;
+        let results = join_all(accounts.iter().map(|a| self.sync_account(a, folder))).await;
 
         let mut errors = Vec::new();
         let messages = {
-            let mut cache = self.cache.lock().unwrap();
+            let mut caches = self.cache.lock().unwrap();
+            let cache = caches.get_mut(&folder).expect("every folder has a cache");
             cache.retain(|_, m| accounts.contains(&m.account));
             for (account, result) in accounts.iter().zip(results) {
                 match result {
-                    Ok(AccountSync { inbox, warning }) => {
+                    Ok(AccountSync { messages, warning }) => {
                         cache.retain(|_, m| &m.account != account);
-                        cache.extend(inbox.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
+                        cache.extend(messages.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
                         if let Some(message) = warning {
                             errors.push(AccountError { account: account.clone(), message });
                         }
@@ -192,32 +250,39 @@ impl AppState {
                     Err(message) => errors.push(AccountError { account: account.clone(), message }),
                 }
             }
-            sorted(&cache)
+            sorted(cache)
         };
-        let _ = write_json(&self.dir.join(CACHE_FILE), &messages);
-        InboxResult { messages, errors }
+        let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
+        FolderResult { messages, errors }
     }
 
-    /// Lists the account's inbox and fetches metadata only for messages not seen before.
-    /// A message that fails to load is skipped, so one odd message can't hide the whole inbox.
-    async fn sync_account(&self, account: &str) -> Result<AccountSync, String> {
+    /// Lists one folder of the account and fetches metadata only for messages not seen before.
+    /// A message that fails to load is skipped, so one odd message can't hide the whole folder.
+    async fn sync_account(&self, account: &str, folder: Folder) -> Result<AccountSync, String> {
         let token = self.access_token(account).await?;
-        let (inbox, unread) = tokio::try_join!(
-            gmail::list_ids(&self.http, &token, &["INBOX"], PAGE_SIZE),
+        let trash = folder == Folder::Trash;
+        let (ids, unread) = tokio::try_join!(
+            gmail::list_ids(&self.http, &token, folder.labels(), trash, PAGE_SIZE),
             // Any unread message among the newest PAGE_SIZE is also among the newest
             // PAGE_SIZE unread ones, so this one call keeps read state current.
-            gmail::list_ids(&self.http, &token, &["INBOX", "UNREAD"], PAGE_SIZE),
+            gmail::list_ids(&self.http, &token, folder.unread_labels(), trash, PAGE_SIZE),
         )?;
         let unread: HashSet<String> = unread.into_iter().collect();
 
         let mut known: HashMap<String, MessageSummary> = {
-            let cache = self.cache.lock().unwrap();
-            inbox
-                .iter()
-                .filter_map(|id| cache.get(&cache_key(account, id)).map(|m| (id.clone(), m.clone())))
+            let caches = self.cache.lock().unwrap();
+            ids.iter()
+                .filter_map(|id| {
+                    let key = cache_key(account, id);
+                    // Summaries don't depend on the folder, so another folder's copy will do.
+                    caches[&folder]
+                        .get(&key)
+                        .or_else(|| caches.values().find_map(|cache| cache.get(&key)))
+                        .map(|m| (id.clone(), m.clone()))
+                })
                 .collect()
         };
-        let missing: Vec<String> = inbox.iter().filter(|id| !known.contains_key(*id)).cloned().collect();
+        let missing: Vec<String> = ids.iter().filter(|id| !known.contains_key(*id)).cloned().collect();
         let (http, token) = (&self.http, token.as_str());
         let fetched: Vec<Result<MessageSummary, (String, String)>> = stream::iter(missing)
             .map(|id| async move { gmail::get_summary(http, token, account, &id).await.map_err(|e| (id, e)) })
@@ -247,7 +312,7 @@ impl AppState {
             n => format!("{n} messages couldn't be loaded: {first}"),
         });
 
-        let inbox = inbox
+        let messages = ids
             .iter()
             .filter_map(|id| known.remove(id))
             .map(|mut m| {
@@ -255,7 +320,7 @@ impl AppState {
                 m
             })
             .collect();
-        Ok(AccountSync { inbox, warning })
+        Ok(AccountSync { messages, warning })
     }
 
     /// Opening a message marks it read, as in Gmail.
@@ -265,8 +330,11 @@ impl AppState {
         if unread {
             let (http, message_id) = (self.http.clone(), id.to_string());
             tauri::async_runtime::spawn(async move { gmail::mark_read(&http, &token, &message_id).await });
-            if let Some(m) = self.cache.lock().unwrap().get_mut(&cache_key(account, id)) {
-                m.unread = false;
+            let key = cache_key(account, id);
+            for cache in self.cache.lock().unwrap().values_mut() {
+                if let Some(m) = cache.get_mut(&key) {
+                    m.unread = false;
+                }
             }
         }
         Ok(message)
@@ -275,30 +343,51 @@ impl AppState {
     pub async fn archive(&self, account: &str, id: &str) -> Result<(), String> {
         let token = self.access_token(account).await?;
         gmail::archive(&self.http, &token, id).await?;
-        self.forget(account, id);
+        self.forget(account, id, &[Folder::Inbox]);
         Ok(())
     }
 
-    pub async fn trash(&self, account: &str, id: &str) -> Result<(), String> {
+    /// Moves to Trash and reports whether the message was in the Inbox, so Undo can put it back there.
+    pub async fn trash(&self, account: &str, id: &str) -> Result<Trashed, String> {
         let token = self.access_token(account).await?;
+        let was_in_inbox = gmail::labels(&self.http, &token, id).await?.iter().any(|l| l == "INBOX");
         gmail::trash(&self.http, &token, id).await?;
-        self.forget(account, id);
+        self.forget(account, id, &[Folder::Inbox, Folder::All]);
+        Ok(Trashed { was_in_inbox })
+    }
+
+    /// Undoes Archive or Delete, or restores from Trash: optionally takes the message out of
+    /// Trash, then optionally puts it back in the Inbox.
+    pub async fn restore(&self, account: &str, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
+        let token = self.access_token(account).await?;
+        if from_trash {
+            gmail::untrash(&self.http, &token, id).await?;
+            self.forget(account, id, &[Folder::Trash]);
+        }
+        if to_inbox {
+            gmail::move_to_inbox(&self.http, &token, id).await?;
+        }
         Ok(())
     }
 
-    fn forget(&self, account: &str, id: &str) {
-        self.edit_cache(|cache| {
-            cache.remove(&cache_key(account, id));
-        });
+    /// Drops a message from folders it just left. Folders it joined pick it up on their next sync.
+    fn forget(&self, account: &str, id: &str, folders: &[Folder]) {
+        let key = cache_key(account, id);
+        for &folder in folders {
+            self.edit_cache(folder, |cache| {
+                cache.remove(&key);
+            });
+        }
     }
 
-    fn edit_cache(&self, edit: impl FnOnce(&mut HashMap<String, MessageSummary>)) {
+    fn edit_cache(&self, folder: Folder, edit: impl FnOnce(&mut FolderCache)) {
         let messages = {
-            let mut cache = self.cache.lock().unwrap();
-            edit(&mut cache);
-            sorted(&cache)
+            let mut caches = self.cache.lock().unwrap();
+            let cache = caches.get_mut(&folder).expect("every folder has a cache");
+            edit(cache);
+            sorted(cache)
         };
-        let _ = write_json(&self.dir.join(CACHE_FILE), &messages);
+        let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
     }
 
     fn creds(&self) -> Result<ClientCreds, String> {
@@ -351,7 +440,7 @@ fn cache_key(account: &str, id: &str) -> String {
     format!("{account}/{id}")
 }
 
-fn sorted(cache: &HashMap<String, MessageSummary>) -> Vec<MessageSummary> {
+fn sorted(cache: &FolderCache) -> Vec<MessageSummary> {
     let mut messages: Vec<MessageSummary> = cache.values().cloned().collect();
     messages.sort_by(|a, b| b.date.cmp(&a.date));
     messages
@@ -372,4 +461,29 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     fs::write(&tmp, bytes)
         .and_then(|_| fs::rename(&tmp, path))
         .map_err(|e| format!("Could not save {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_names_match_the_ui() {
+        let names: Vec<String> = Folder::EVERY.iter().map(|f| serde_json::to_string(f).unwrap()).collect();
+        assert_eq!(names, [r#""inbox""#, r#""all""#, r#""trash""#]);
+        assert_eq!(serde_json::from_str::<Folder>(r#""trash""#).unwrap(), Folder::Trash);
+    }
+
+    #[test]
+    fn unread_lists_narrow_the_folder() {
+        for folder in Folder::EVERY {
+            let unread = folder.unread_labels();
+            assert!(folder.labels().iter().all(|l| unread.contains(l)), "{folder:?}");
+            assert!(unread.contains(&"UNREAD"), "{folder:?}");
+        }
+        let files: HashSet<_> = Folder::EVERY.iter().map(|f| f.cache_file()).collect();
+        assert_eq!(files.len(), 3);
+        // The Inbox keeps its old file name, so existing caches still load.
+        assert_eq!(Folder::Inbox.cache_file(), "inbox-cache.json");
+    }
 }

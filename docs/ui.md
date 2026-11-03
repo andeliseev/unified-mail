@@ -14,7 +14,9 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 ## State and rendering
 
-There is one `state` object in `app.js`: accounts, messages (unified, newest first), the current filter (`null` = all inboxes), the selected/open message, the pending-removal set and sync flags.
+There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`), the current Undo, and sync flags.
+
+The sidebar lists the folders, then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail.
 
 Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their parts from `state`, using a `DocumentFragment` for the list. That's fast at this size (a few hundred rows). Untrusted text (sender, subject, snippet) is always set with `textContent`, never `innerHTML`. Each account gets a color from `PALETTE` by its position in the account list; the color is used for the row stripe, sidebar dot and chip.
 
@@ -38,7 +40,29 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 
 ## Actions
 
-Archive and delete are **optimistic**. The row disappears and the next message opens immediately, then the command runs. On failure the message goes back into the list with an error toast. While a request is in flight the key stays in `state.pending`, so a concurrent sync can't bring the row back.
+Which actions an open message offers depends on the folder, and in All Mail on whether the message is in the Inbox (`actionsFor`):
+
+| Folder | Actions |
+| --- | --- |
+| Inbox | Archive, Delete |
+| All Mail, message in the Inbox (shown with an **Inbox** tag) | Archive, Delete |
+| All Mail, archived message | Move to Inbox, Delete |
+| Trash | Move to Inbox |
+
+Whether an All Mail message is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox.
+
+When an action leaves the message in the folder on screen (Archive and Move to Inbox in All Mail), it stays open and only its tag and buttons change. Otherwise the next message opens. `render()` also redraws the buttons, so they stay right after Undo or a failed action.
+
+`ACTIONS` in `app.js` describes each action: the folder lists the message **leaves** and **joins**, the Gmail command, and how to **undo** it, given that command's result (Delete returns `wasInInbox`).
+
+All actions are **optimistic** (`perform`):
+1. The move is applied to the folder lists at once, the next message opens, and the command runs.
+2. Until Gmail answers, the move sits in `state.pending` and is re-applied to every sync result.
+3. On failure the move is reversed and an error toast replaces the Undo toast.
+
+A message only joins lists that are already loaded; other lists pick it up at their next sync.
+
+**Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way and reopens the message if it's back in the folder on screen. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
 
 ## Keyboard
 
@@ -47,11 +71,12 @@ Archive and delete are **optimistic**. The row disappears and the next message o
 | `J` / `↓` | Next message |
 | `K` / `↑` | Previous message |
 | `Space` / `PageDown` | Scroll the open message down (`Shift+Space` / `PageUp`: up) |
-| `E` | Archive |
-| `#` / `Delete` | Delete (Trash) |
+| `E` | Archive (Inbox only) |
+| `#` / `Delete` | Delete, i.e. move to Trash (Inbox and All Mail) |
+| `Z` | Undo the last action, while its toast shows |
 | `Esc` | Close Settings |
 
-The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
+The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
 ## Settings and first run
 

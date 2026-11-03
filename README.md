@@ -2,9 +2,10 @@
 
 A small, fast desktop mail client for Windows and macOS: one inbox for all your Gmail accounts.
 
-- Unified inbox across any number of Gmail accounts, plus a per-account view
+- **Inbox, All Mail and Trash**, each unified across any number of Gmail accounts, or filtered to one account
 - Read messages (HTML or plain text, any charset), marked read when opened
-- **Archive** (`E`) and **Delete** (`#` or `Delete`), the same as Gmail's buttons. Delete moves the message to Trash, which Gmail empties after 30 days.
+- **Archive** (`E`) and **Delete** (`#` or `Delete`), the same as Gmail's buttons. Delete moves the message to Trash, which Gmail empties after 30 days. **Move to Inbox** restores a message from Trash, or an archived one in All Mail, where Inbox messages carry an **Inbox** tag.
+- **Undo** (`Z`, or the button in the notice) for Archive, Delete and Move to Inbox
 - `J`/`K` or arrow keys move between messages
 - **Push:** new mail shows up within a second or two (IMAP IDLE). The last inbox is cached, so the app opens instantly.
 
@@ -47,7 +48,7 @@ standard approach for installed apps.
 
 ### What the app can access
 
-It requests one scope, `https://mail.google.com/` (full Gmail access). That's the only scope Gmail accepts for IMAP, which push needs, so Google's consent screen says the app could permanently delete mail. It never does: it only reads, archives and moves to Trash. Everything runs on your machine and talks directly to Google:
+It requests one scope, `https://mail.google.com/` (full Gmail access). That's the only scope Gmail accepts for IMAP, which push needs, so Google's consent screen says the app could permanently delete mail. It never does: it only reads, archives, and moves mail to and from Trash. Everything runs on your machine and talks directly to Google:
 
 | Stored | Where |
 | --- | --- |

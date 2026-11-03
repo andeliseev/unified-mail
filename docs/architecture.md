@@ -46,11 +46,12 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `save_client` | `clientId, clientSecret` | Only used when no client is built in |
 | `add_account` | | Email address; runs the browser sign-in and starts push |
 | `remove_account` | `email` | Stops push, revokes the token, deletes it from the keychain |
-| `cached_inbox` | | Last saved inbox snapshot, for instant first paint |
-| `refresh_inbox` | | `{ messages, errors }`; errors are per account |
+| `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
+| `refresh_folder` | `folder` | `{ messages, errors }`; errors are per account |
 | `get_message` | `account, id` | Headers plus HTML/text body; marks the message read |
 | `archive_message` | `account, id` | Removes the `INBOX` label |
-| `trash_message` | `account, id` | Moves the message to Trash |
+| `trash_message` | `account, id` | Moves the message to Trash; returns `{ wasInInbox }` for Undo |
+| `restore_message` | `account, id, fromTrash, toInbox` | Takes it out of Trash and/or adds `INBOX`: Undo, and "Move to Inbox" |
 | `open_external` | `url` | Opens `http(s):`/`mailto:` links in the default app |
 
 Event (Rust → UI): `mail-changed`, with the account email as payload.
@@ -63,7 +64,7 @@ Event (Rust → UI): `mail-changed`, with the account email as payload.
 | Access tokens | Memory only | Expire 60 s early; wall clock, see below |
 | OAuth client (Settings fallback) | `<app data>/client.json` | JSON |
 | Account list | `<app data>/accounts.json` | JSON array of emails |
-| Inbox snapshot | `<app data>/inbox-cache.json` | JSON array of `MessageSummary` |
+| Folder snapshots | `<app data>/inbox-cache.json`, `all-cache.json`, `trash-cache.json` | JSON array of `MessageSummary` |
 
 `<app data>` is `%APPDATA%\io.unifiedmail.desktop` on Windows and `~/Library/Application Support/io.unifiedmail.desktop` on macOS. Files are written to a `.tmp` file and then renamed, so a crash can't leave a half-written file.
 

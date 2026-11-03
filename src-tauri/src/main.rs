@@ -7,7 +7,7 @@ mod oauth;
 mod state;
 
 use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, InboxResult, Setup};
+use state::{AppState, ClientCreds, Folder, FolderResult, Setup, Trashed};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -41,13 +41,13 @@ fn remove_account(app: AppHandle, state: State<'_, AppState>, email: String) -> 
 }
 
 #[tauri::command]
-fn cached_inbox(state: State<'_, AppState>) -> Vec<MessageSummary> {
-    state.cached_inbox()
+fn cached_folder(state: State<'_, AppState>, folder: Folder) -> Vec<MessageSummary> {
+    state.cached(folder)
 }
 
 #[tauri::command]
-async fn refresh_inbox(state: State<'_, AppState>) -> Result<InboxResult, String> {
-    Ok(state.refresh_inbox().await)
+async fn refresh_folder(state: State<'_, AppState>, folder: Folder) -> Result<FolderResult, String> {
+    Ok(state.refresh(folder).await)
 }
 
 #[tauri::command]
@@ -61,8 +61,20 @@ async fn archive_message(state: State<'_, AppState>, account: String, id: String
 }
 
 #[tauri::command]
-async fn trash_message(state: State<'_, AppState>, account: String, id: String) -> Result<(), String> {
+async fn trash_message(state: State<'_, AppState>, account: String, id: String) -> Result<Trashed, String> {
     state.trash(&account, &id).await
+}
+
+/// Undo for Archive/Delete, and "Move to Inbox" in Trash.
+#[tauri::command]
+async fn restore_message(
+    state: State<'_, AppState>,
+    account: String,
+    id: String,
+    from_trash: bool,
+    to_inbox: bool,
+) -> Result<(), String> {
+    state.restore(&account, &id, from_trash, to_inbox).await
 }
 
 /// Opens links from emails and the setup screen in the default browser / mail app.
@@ -92,11 +104,12 @@ fn main() {
             save_client,
             add_account,
             remove_account,
-            cached_inbox,
-            refresh_inbox,
+            cached_folder,
+            refresh_folder,
             get_message,
             archive_message,
             trash_message,
+            restore_message,
             open_external,
         ])
         .run(tauri::generate_context!())

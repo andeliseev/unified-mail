@@ -103,7 +103,14 @@ pub async fn profile_email(http: &Client, token: &str) -> Result<String, String>
 }
 
 /// Ids of the newest messages carrying all of `labels`, newest first.
-pub async fn list_ids(http: &Client, token: &str, labels: &[&str], max: u32) -> Result<Vec<String>, String> {
+/// Spam and Trash are left out unless `include_spam_trash` (needed to list Trash).
+pub async fn list_ids(
+    http: &Client,
+    token: &str,
+    labels: &[&str],
+    include_spam_trash: bool,
+    max: u32,
+) -> Result<Vec<String>, String> {
     #[derive(Deserialize)]
     struct List {
         #[serde(default)]
@@ -116,6 +123,9 @@ pub async fn list_ids(http: &Client, token: &str, labels: &[&str], max: u32) -> 
     let mut query: Vec<(&str, String)> = labels.iter().map(|l| ("labelIds", l.to_string())).collect();
     query.push(("maxResults", max.to_string()));
     query.push(("fields", "messages/id".into()));
+    if include_spam_trash {
+        query.push(("includeSpamTrash", "true".into()));
+    }
     let resp = send(http.get(format!("{API}/messages")).bearer_auth(token).query(&query)).await?;
     let list: List = parse_json(resp).await?;
     Ok(list.messages.into_iter().map(|m| m.id).collect())
@@ -172,26 +182,54 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<(FullMessa
     Ok((message, unread))
 }
 
+/// Labels currently on a message.
+pub async fn labels(http: &Client, token: &str, id: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Labels {
+        #[serde(default)]
+        label_ids: Vec<String>,
+    }
+    check_id(id)?;
+    let url = format!("{API}/messages/{id}?format=minimal&fields=labelIds");
+    Ok(get_json::<Labels>(http, token, &url).await?.label_ids)
+}
+
 /// Removes the INBOX label, which is exactly what Gmail's Archive button does.
 pub async fn archive(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    remove_labels(http, token, id, &["INBOX"]).await
+    modify(http, token, id, &[], &["INBOX"]).await
+}
+
+/// Adds the INBOX label: undoes Archive, and puts a message restored from Trash back in the Inbox.
+pub async fn move_to_inbox(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    modify(http, token, id, &["INBOX"], &[]).await
 }
 
 pub async fn mark_read(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    remove_labels(http, token, id, &["UNREAD"]).await
+    modify(http, token, id, &[], &["UNREAD"]).await
 }
 
 /// Moves to Trash, like Gmail's Delete button. Gmail purges Trash after 30 days.
 pub async fn trash(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/messages/{id}/trash"), id).await
+}
+
+/// Takes a message out of Trash. Gmail doesn't document whether this restores the INBOX
+/// label, so callers that want the message back in the Inbox also call `move_to_inbox`.
+pub async fn untrash(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/messages/{id}/untrash"), id).await
+}
+
+async fn post_empty(http: &Client, token: &str, url: &str, id: &str) -> Result<(), String> {
     check_id(id)?;
     // Google rejects bodiless POSTs that lack a Content-Length.
-    send(http.post(format!("{API}/messages/{id}/trash")).bearer_auth(token).header(CONTENT_LENGTH, "0")).await?;
+    send(http.post(url).bearer_auth(token).header(CONTENT_LENGTH, "0")).await?;
     Ok(())
 }
 
-async fn remove_labels(http: &Client, token: &str, id: &str, labels: &[&str]) -> Result<(), String> {
+async fn modify(http: &Client, token: &str, id: &str, add: &[&str], remove: &[&str]) -> Result<(), String> {
     check_id(id)?;
-    let body = json!({ "removeLabelIds": labels });
+    let body = json!({ "addLabelIds": add, "removeLabelIds": remove });
     send(http.post(format!("{API}/messages/{id}/modify")).bearer_auth(token).json(&body)).await?;
     Ok(())
 }

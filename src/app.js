@@ -9,6 +9,8 @@ const AUTO_REFRESH_MS = 5 * 60 * 1000;
 // Gmail often sends several push lines per change; sync once for the burst.
 const PUSH_DEBOUNCE_MS = 300;
 const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
+// How long Undo stays available after an action.
+const UNDO_MS = 8000;
 const FRAME_CSS = `
   html { background: #fff; color: #202124; }
   body { margin: 0; padding: 18px 24px 28px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; word-wrap: break-word; }
@@ -21,15 +23,99 @@ const FRAME_CSS = `
   :root > body { overflow: visible !important; }
 `;
 
+// Sidebar folders; `icon` is an SVG path.
+const FOLDERS = {
+  inbox: { name: 'Inbox', empty: 'Inbox zero. Nothing here.', icon: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6z' },
+  all: { name: 'All Mail', empty: 'No mail here.', icon: 'M4 6h16v12H4zM4 7l8 6 8-6' },
+  trash: { name: 'Trash', empty: 'Trash is empty.', icon: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14' },
+};
+const ids = (m) => ({ account: m.account, id: m.id });
+
+/**
+ * Whether the message is in its Inbox. Both lists hold each account's newest messages,
+ * so a recent All Mail message that's in the Inbox is always in the Inbox list too.
+ */
+const inInbox = (m) => state.lists.inbox.some((x) => keyOf(x) === keyOf(m));
+
+/** Actions offered on an open message. */
+function actionsFor(m) {
+  switch (state.folder) {
+    case 'inbox': return ['archive', 'trash'];
+    case 'all': return inInbox(m) ? ['archive', 'trash'] : ['unarchive', 'trash'];
+    default: return ['restore'];
+  }
+}
+
+/**
+ * For each action: the folder lists the message leaves and joins (applied right away,
+ * before Gmail answers), the Gmail call, and how to undo it given that call's result.
+ */
+const ACTIONS = {
+  archive: {
+    done: 'Archived',
+    verb: 'archive',
+    leave: ['inbox'],
+    join: [],
+    run: (m) => invoke('archive_message', ids(m)),
+    undo: (m) => ({
+      leave: [],
+      join: ['inbox'],
+      run: () => invoke('restore_message', { ...ids(m), fromTrash: false, toInbox: true }),
+    }),
+  },
+  trash: {
+    done: 'Moved to Trash',
+    verb: 'delete',
+    leave: ['inbox', 'all'],
+    join: ['trash'],
+    run: (m) => invoke('trash_message', ids(m)),
+    undo: (m, { wasInInbox }) => ({
+      leave: ['trash'],
+      join: wasInInbox ? ['inbox', 'all'] : ['all'],
+      run: () => invoke('restore_message', { ...ids(m), fromTrash: true, toInbox: wasInInbox }),
+    }),
+  },
+  // "Move to Inbox" on an archived message in All Mail.
+  unarchive: {
+    done: 'Moved to Inbox',
+    verb: 'move',
+    leave: [],
+    join: ['inbox'],
+    run: (m) => invoke('restore_message', { ...ids(m), fromTrash: false, toInbox: true }),
+    undo: (m) => ({
+      leave: ['inbox'],
+      join: [],
+      run: () => invoke('archive_message', ids(m)),
+    }),
+  },
+  // "Move to Inbox" in Trash.
+  restore: {
+    done: 'Moved to Inbox',
+    verb: 'move',
+    leave: ['trash'],
+    join: ['inbox', 'all'],
+    run: (m) => invoke('restore_message', { ...ids(m), fromTrash: true, toInbox: true }),
+    undo: (m) => ({
+      leave: ['inbox', 'all'],
+      join: ['trash'],
+      run: () => invoke('trash_message', ids(m)),
+    }),
+  },
+};
+
 const state = {
   builtInClient: false,  // OAuth client compiled into the app; Settings hides that section
   configured: false,
   accounts: [],
-  messages: [],
-  filter: null,          // account email, or null for all inboxes
+  folder: 'inbox',       // folder on screen
+  lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
+  loaded: { inbox: false, all: false, trash: false },  // list filled from cache or a sync
+  synced: { inbox: false, all: false, trash: false },  // a sync finished this session
+  filter: null,          // account email, or null for all accounts
   selected: null,        // key of the highlighted row
   current: null,         // message shown in the reader
-  pending: new Set(),    // keys being archived/deleted; hidden from sync results
+  pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
+  undo: null,            // what the toast's Undo button does, while it shows
   syncing: false,
   syncQueued: false,
   lastSync: 0,
@@ -40,8 +126,11 @@ const state = {
 const $ = (sel) => document.querySelector(sel);
 const keyOf = (m) => `${m.account}/${m.id}`;
 const colorOf = (account) => PALETTE[Math.max(0, state.accounts.indexOf(account)) % PALETTE.length];
-const visible = () => (state.filter ? state.messages.filter((m) => m.account === state.filter) : state.messages);
-const byKey = (key) => state.messages.find((m) => keyOf(m) === key);
+const visible = () => {
+  const list = state.lists[state.folder];
+  return state.filter ? list.filter((m) => m.account === state.filter) : list;
+};
+const byKey = (key) => state.lists[state.folder].find((m) => keyOf(m) === key);
 
 // ---------- Startup ----------
 
@@ -53,7 +142,7 @@ async function init() {
   state.accounts = setup.accounts;
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
-  state.messages = await invoke('cached_inbox');
+  setList('inbox', await invoke('cached_folder', { folder: 'inbox' }));
   render();
 
   if (!state.configured) openSettings();
@@ -80,6 +169,8 @@ function bindEvents() {
   $('#cancel-wait').addEventListener('click', () => { state.authSeq++; $('#waiting').hidden = true; });
   $('#archive').addEventListener('click', () => act('archive'));
   $('#trash').addEventListener('click', () => act('trash'));
+  $('#restore').addEventListener('click', () => act(state.folder === 'trash' ? 'restore' : 'unarchive'));
+  $('#toast-action').addEventListener('click', runUndo);
   $('#client-form').addEventListener('submit', saveClient);
   $('#client-id').addEventListener('paste', pasteClientJson);
 
@@ -94,19 +185,26 @@ function bindEvents() {
 
 // ---------- Sync ----------
 
+/** Syncs the Inbox (it drives the unread counts) and the folder on screen. */
 async function refresh() {
   if (!state.accounts.length) return;
   if (state.syncing) { state.syncQueued = true; return; }
   state.syncing = true;
   $('#refresh').classList.add('spin');
   setStatus('Syncing…');
+  const folders = [...new Set(['inbox', state.folder])];
   try {
-    const result = await invoke('refresh_inbox');
-    state.messages = result.messages.filter((m) => !state.pending.has(keyOf(m)));
+    const results = await Promise.all(folders.map((folder) => invoke('refresh_folder', { folder })));
+    folders.forEach((folder, i) => {
+      setList(folder, results[i].messages);
+      state.synced[folder] = true;
+    });
     state.lastSync = Date.now();
     render();
     setStatus('');
-    if (result.errors.length) toast(result.errors.map((e) => `${e.account}: ${e.message}`).join('\n'), 8000);
+    // Each folder reports an account's sign-in problem; show it once, and never over Undo.
+    const errors = new Set(results.flatMap((r) => r.errors.map((e) => `${e.account}: ${e.message}`)));
+    if (errors.size && !state.undo) toast([...errors].join('\n'), 8000);
   } catch (e) {
     setStatus('');
     toast(String(e));
@@ -117,47 +215,109 @@ async function refresh() {
   }
 }
 
+/** Stores a folder's messages, re-applying moves Gmail hasn't confirmed yet. */
+function setList(folder, messages) {
+  let list = messages;
+  for (const [key, move] of state.pending) {
+    if (move.leave.includes(folder)) list = list.filter((m) => keyOf(m) !== key);
+    if (move.join.includes(folder) && !list.some((m) => keyOf(m) === key)) list = withMessage(list, move.message);
+  }
+  state.lists[folder] = list;
+  state.loaded[folder] = true;
+}
+
+function withMessage(list, m) {
+  return [...list, m].sort((a, b) => b.date - a.date);
+}
+
+async function openFolder(folder) {
+  if (folder !== state.folder) {
+    state.folder = folder;
+    clearReader();
+    if (!state.loaded[folder]) setList(folder, await invoke('cached_folder', { folder }));
+    render();
+  }
+  refresh();
+}
+
 // ---------- Rendering ----------
 
 function render() {
   renderSidebar();
   renderList();
+  // An open message's buttons depend on the lists (e.g. Archive vs Move to Inbox in All Mail).
+  renderActions();
 }
 
 function renderSidebar() {
   const unread = new Map();
-  for (const m of state.messages) if (m.unread) unread.set(m.account, (unread.get(m.account) || 0) + 1);
-  const total = [...unread.values()].reduce((a, b) => a + b, 0);
-  const items = [{ account: null, label: 'All inboxes', count: total }].concat(
-    state.accounts.map((a) => ({ account: a, label: a, count: unread.get(a) || 0 })));
+  for (const m of state.lists.inbox) if (m.unread) unread.set(m.account, (unread.get(m.account) || 0) + 1);
+  const inboxUnread = state.filter
+    ? unread.get(state.filter) || 0
+    : [...unread.values()].reduce((a, b) => a + b, 0);
 
-  $('#accounts').replaceChildren(...items.map((item) => {
-    const button = document.createElement('button');
-    button.className = 'nav-item' + (item.account ? '' : ' all') + (state.filter === item.account ? ' active' : '');
-    button.innerHTML = '<span class="dot"></span><span class="label"></span><span class="count"></span>';
-    if (item.account) button.style.setProperty('--acc', colorOf(item.account));
-    button.querySelector('.label').textContent = item.label;
-    button.querySelector('.count').textContent = item.count || '';
-    button.title = item.label;
-    button.addEventListener('click', () => { state.filter = item.account; render(); });
-    return button;
-  }));
-  $('#list-title').textContent = state.filter || 'All inboxes';
+  $('#folders').replaceChildren(...Object.entries(FOLDERS).map(([folder, f]) => navItem({
+    label: f.name,
+    icon: f.icon,
+    count: folder === 'inbox' ? inboxUnread : 0,
+    active: state.folder === folder,
+    onClick: () => openFolder(folder),
+  })));
+  $('#accounts').replaceChildren(
+    navItem({ label: 'All accounts', active: state.filter === null, onClick: () => setFilter(null) }),
+    ...state.accounts.map((account) => navItem({
+      label: account,
+      color: colorOf(account),
+      count: unread.get(account) || 0,
+      active: state.filter === account,
+      onClick: () => setFilter(account),
+    })),
+  );
+  const title = FOLDERS[state.folder].name + (state.filter ? ` · ${state.filter}` : '');
+  $('#list-title').textContent = title;
+  $('#list-title').title = title;
   renderSettingsAccounts();
+}
+
+/** A sidebar entry: a folder (`icon`), an account (`color`), or "All accounts" (neither). */
+function navItem({ label, icon, color, count = 0, active, onClick }) {
+  const button = document.createElement('button');
+  button.className = 'nav-item' + (active ? ' active' : '') + (icon || color ? '' : ' all');
+  button.innerHTML = (icon ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icon}"/></svg>` : '<span class="dot"></span>') +
+    '<span class="label"></span><span class="count"></span>';
+  if (color) button.style.setProperty('--acc', color);
+  button.querySelector('.label').textContent = label;
+  button.querySelector('.count').textContent = count || '';
+  button.title = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function setFilter(account) {
+  state.filter = account;
+  render();
 }
 
 function renderList() {
   const messages = visible();
+  // In All Mail, tag what's still in the Inbox (everything else there is archived or sent).
+  const inboxKeys = state.folder === 'all' ? new Set(state.lists.inbox.map(keyOf)) : null;
   const fragment = document.createDocumentFragment();
   for (const m of messages) {
     const li = document.createElement('li');
     li.className = 'msg' + (m.unread ? ' unread' : '') + (keyOf(m) === state.selected ? ' selected' : '');
     li.dataset.key = keyOf(m);
     li.style.setProperty('--acc', colorOf(m.account));
-    li.innerHTML = '<div class="row1"><span class="from"></span><time></time></div><div class="subject"></div><div class="snippet"></div>';
+    li.innerHTML = '<div class="row1"><span class="from"></span><time></time></div><div class="subject"><span class="text"></span></div><div class="snippet"></div>';
     li.querySelector('.from').textContent = senderName(m.from);
     li.querySelector('time').textContent = shortDate(m.date);
-    li.querySelector('.subject').textContent = m.subject || '(no subject)';
+    li.querySelector('.subject .text').textContent = m.subject || '(no subject)';
+    if (inboxKeys && inboxKeys.has(keyOf(m))) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'Inbox';
+      li.querySelector('.subject').prepend(tag);
+    }
     li.querySelector('.snippet').textContent = m.snippet;
     li.title = m.account;
     fragment.append(li);
@@ -171,7 +331,7 @@ function renderList() {
     const noAccounts = state.accounts.length === 0;
     $('#list-empty-text').textContent = noAccounts
       ? 'Add your Gmail account to get started.'
-      : state.syncing && state.lastSync === 0 ? 'Loading…' : 'Inbox zero. Nothing here.';
+      : state.syncing && !state.synced[state.folder] ? 'Loading…' : FOLDERS[state.folder].empty;
     $('#empty-add').hidden = !noAccounts;
   }
 }
@@ -184,6 +344,13 @@ function markRow(key) {
   if (row) row.scrollIntoView({ block: 'nearest' });
 }
 
+function renderActions() {
+  const allowed = state.current ? actionsFor(state.current) : [];
+  $('#archive').hidden = !allowed.includes('archive');
+  $('#trash').hidden = !allowed.includes('trash');
+  $('#restore').hidden = !allowed.includes('restore') && !allowed.includes('unarchive');
+}
+
 // ---------- Reading ----------
 
 async function select(key) {
@@ -192,6 +359,7 @@ async function select(key) {
   state.selected = key;
   state.current = m;
   markRow(key);
+  renderActions();
 
   $('#reader-empty').hidden = true;
   $('#message').hidden = false;
@@ -210,7 +378,10 @@ async function select(key) {
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
     showBody(full);
     if (m.unread) {
-      m.unread = false;
+      // The same message can be in several folder lists (Inbox and All Mail).
+      for (const list of Object.values(state.lists)) {
+        for (const x of list) if (keyOf(x) === key) x.unread = false;
+      }
       const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
       if (row) row.classList.remove('unread');
       renderSidebar();
@@ -274,31 +445,78 @@ function decodeBody(body) {
 
 // ---------- Actions ----------
 
-/** Archive or trash the open message. Optimistic: the row disappears right away. */
-async function act(kind) {
+/**
+ * Runs an action on the open message and offers Undo. If the message left the folder on
+ * screen, the next one opens; otherwise (e.g. Archive in All Mail) it stays open.
+ */
+function act(kind) {
   const m = state.current;
-  if (!m) return;
-  const key = keyOf(m);
+  if (!m || !actionsFor(m).includes(kind)) return;
+  const action = ACTIONS[kind];
   const list = visible();
-  const index = list.findIndex((x) => keyOf(x) === key);
+  const index = list.findIndex((x) => keyOf(x) === keyOf(m));
   const next = index >= 0 ? list[index + 1] || list[index - 1] : null;
 
-  state.pending.add(key);
-  state.messages = state.messages.filter((x) => keyOf(x) !== key);
-  render();
-  if (next) select(keyOf(next)); else clearReader();
-
-  try {
-    await invoke(kind === 'archive' ? 'archive_message' : 'trash_message', { account: m.account, id: m.id });
-    toast(kind === 'archive' ? 'Archived' : 'Moved to Trash', 1800);
-  } catch (e) {
-    state.messages.push(m);
-    state.messages.sort((a, b) => b.date - a.date);
-    render();
-    toast(`Couldn't ${kind === 'archive' ? 'archive' : 'delete'} the message: ${e}`, 6000);
-  } finally {
-    state.pending.delete(key);
+  const done = perform(m, action, () => action.run(m));
+  if (!byKey(keyOf(m))) {
+    if (next) select(keyOf(next)); else clearReader();
   }
+  done.catch((e) => toast(`Couldn't ${action.verb} the message: ${e}`, 6000));
+
+  toast(action.done, UNDO_MS, {
+    label: 'Undo',
+    run: async () => {
+      let result;
+      try { result = await done; } catch { return; }  // it failed and was already put back
+      const undo = action.undo(m, result);
+      try {
+        await perform(m, undo, undo.run);
+        // Reopen the message if it's back in the folder on screen.
+        if (byKey(keyOf(m))) select(keyOf(m));
+      } catch (e) {
+        toast(`Couldn't undo: ${e}`, 6000);
+      }
+    },
+  });
+}
+
+/**
+ * Moves the message between folder lists right away, then runs `run` on Gmail.
+ * Until Gmail answers, syncs keep the move applied; if Gmail fails, the move is reverted.
+ */
+async function perform(m, move, run) {
+  const key = keyOf(m);
+  const entry = { message: m, leave: move.leave, join: move.join };
+  state.pending.set(key, entry);
+  shift(m, move.leave, move.join);
+  render();
+  try {
+    return await run();
+  } catch (e) {
+    shift(m, move.join, move.leave);
+    render();
+    throw e;
+  } finally {
+    if (state.pending.get(key) === entry) state.pending.delete(key);
+  }
+}
+
+/** Takes the message out of the `leave` lists and adds it to the `join` lists that are loaded. */
+function shift(m, leave, join) {
+  const key = keyOf(m);
+  for (const folder of leave) state.lists[folder] = state.lists[folder].filter((x) => keyOf(x) !== key);
+  for (const folder of join) {
+    if (state.loaded[folder] && !state.lists[folder].some((x) => keyOf(x) === key)) {
+      state.lists[folder] = withMessage(state.lists[folder], m);
+    }
+  }
+}
+
+function runUndo() {
+  const undo = state.undo;
+  if (!undo) return;
+  hideToast();
+  undo();
 }
 
 function move(delta) {
@@ -336,6 +554,7 @@ function onKey(e, inMessage = false) {
       break;
     case 'e': act('archive'); break;
     case '#': case 'Delete': act('trash'); break;
+    case 'z': runUndo(); break;
     default: return;
   }
   e.preventDefault();
@@ -373,7 +592,9 @@ function renderSettingsAccounts() {
       try {
         await invoke('remove_account', { email: account });
         state.accounts = state.accounts.filter((a) => a !== account);
-        state.messages = state.messages.filter((m) => m.account !== account);
+        for (const folder of Object.keys(state.lists)) {
+          state.lists[folder] = state.lists[folder].filter((m) => m.account !== account);
+        }
         if (state.filter === account) state.filter = null;
         if (state.current && state.current.account === account) clearReader();
         render();
@@ -444,13 +665,20 @@ function setStatus(text) {
 }
 
 let toastTimer;
-function toast(text, ms = 4000) {
-  const el = $('#toast');
-  el.textContent = text;
-  el.style.whiteSpace = 'pre-line';
-  el.hidden = false;
+/** Shows a message at the bottom. With `action` it gets a button (Undo), which `Z` also presses. */
+function toast(text, ms = 4000, action = null) {
+  $('#toast-text').textContent = text;
+  $('#toast-action').hidden = !action;
+  $('#toast-action').textContent = action ? action.label : '';
+  state.undo = action ? action.run : null;
+  $('#toast').hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+  toastTimer = setTimeout(hideToast, ms);
+}
+
+function hideToast() {
+  $('#toast').hidden = true;
+  state.undo = null;
 }
 
 function senderName(from) {

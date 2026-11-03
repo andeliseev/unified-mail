@@ -8,11 +8,14 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception was only checked in Chromium/WebView2)
 - [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
 - [ ] macOS `.dmg` from the Release workflow: first run on a real Mac (ad-hoc signing, Gatekeeper prompt)
-- [ ] First run of the Release workflow on GitHub
+- [x] First run of the Release workflow on GitHub (v0.1.0)
 
 ## Gaps in current features
 
-- [ ] **Undo** for archive and delete (a toast with an Undo button that adds `INBOX` back or calls `untrash`)
+- [x] **Undo** for Archive, Delete and Move to Inbox; **All Mail** and **Trash** folders
+- [ ] Undo, Trash and All Mail against real Gmail accounts (tested with a mock backend only so far)
+- [ ] Push only watches the Inbox; All Mail and Trash refresh with it, on focus and every 5 min
+- [ ] More folders: Sent, Starred, Spam, user labels
 - [ ] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
 - [ ] Only 50 newest messages per account: add **Load more** (`pageToken`)
