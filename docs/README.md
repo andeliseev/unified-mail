@@ -1,6 +1,6 @@
 # Docs
 
-Implementation notes for Unified Mail. For what the app does and how to set up Google sign-in, see the [project README](../README.md).
+Implementation notes for Unified Mail. For what the app does, see the [project README](../README.md). To build it, including the Google OAuth client setup, start with [development.md](development.md).
 
 | File | What's in it |
 | --- | --- |

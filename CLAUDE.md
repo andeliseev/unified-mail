@@ -1,6 +1,6 @@
 # Unified Mail
 
-Read [README.md](README.md) first: it covers what the app is and how Google sign-in is set up. Implementation notes are in [docs/](docs/README.md): architecture, auth, sync/push, UI, development, and [todo.md](docs/todo.md) for known gaps and ideas.
+[README.md](README.md) is for people using the app. Building, including the Google OAuth client setup, is in [docs/development.md](docs/development.md). Implementation notes are in [docs/](docs/README.md): architecture, auth, sync/push, UI, development, and [todo.md](docs/todo.md) for known gaps and ideas.
 
 ## Commands
 
@@ -16,4 +16,6 @@ Read [README.md](README.md) first: it covers what the app is and how Google sign
 - Set untrusted email text with `textContent`. Email HTML only goes into the sandboxed iframe (see [docs/ui.md](docs/ui.md#sandbox)).
 - Command errors are user-facing `String`s; write them for people.
 - Never commit `src-tauri/google-client.json` (the OAuth client, git-ignored).
+- Commits are authored as `Andrei Eliseev <andeliseev@gmail.com>` (set in this repo's git config). Never add `Co-Authored-By` lines or any other Claude/AI attribution to commit messages, pull requests or release notes.
+- `README.md` stays user-facing (download, first launch, sign-in, privacy). Developer details go in `docs/`.
 - When behavior changes, update the matching file in `docs/`. Add things you notice but don't do to `docs/todo.md`.

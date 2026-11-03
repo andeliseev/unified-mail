@@ -58,10 +58,15 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 ## Distribution
 
 - [x] GitHub Actions release workflow for Windows and macOS installers (see [development.md](development.md#releases-github-actions))
-- [ ] Publish releases to a public repo, so people without access to the code can download them
+- [x] Open source: MIT license, public repo, so releases are public downloads
 - [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper)
 - [ ] Auto-update (`tauri-plugin-updater`)
-- [ ] Google verification, only if the app goes public beyond 100 users (restricted scope, yearly security assessment)
+- [ ] **Google verification**, so users don't see the "unverified app" warning and the user cap goes away. Steps from Google's [restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification):
+  - Prove ownership of `andeliseev.github.io` in Google Search Console (a verification file in the site repo)
+  - Home page and privacy policy with the Limited Use statement (done)
+  - Justify the `https://mail.google.com/` scope: IMAP is needed for push. Google asks for the narrowest scope, so expect questions
+  - Record an unlisted YouTube demo of the sign-in and of every feature that uses the scope
+  - Security assessment (CASA): Google requires it for apps that access mail "from or through a third-party server". Unified Mail has no server, but whether that exempts it is decided in review. If required: an approved lab, paid, renewed yearly
 - [ ] Linux: enable the `keyring` Secret Service feature, test on WebKitGTK
 
 ## Code quality

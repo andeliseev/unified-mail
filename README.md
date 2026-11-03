@@ -1,103 +1,70 @@
 # Unified Mail
 
-A small, fast desktop mail client for Windows and macOS: one inbox for all your Gmail accounts.
+A small, fast desktop email app for Gmail on Windows and macOS: one inbox for all your Gmail accounts.
 
-- **Inbox, All Mail and Trash**, each unified across any number of Gmail accounts, or filtered to one account
-- Read messages (HTML or plain text, any charset), marked read when opened
-- **Archive** (`E`) and **Delete** (`#` or `Delete`), the same as Gmail's buttons. Delete moves the message to Trash, which Gmail empties after 30 days. **Move to Inbox** restores a message from Trash, or an archived one in All Mail, where Inbox messages carry an **Inbox** tag.
-- **Undo** (`Z`, or the button in the notice) for Archive, Delete and Move to Inbox
-- Older mail loads as you scroll, 50 messages per account at a time, in date order across accounts
-- `J`/`K` or arrow keys move between messages
-- **Push:** new mail shows up within a second or two (IMAP IDLE). The last inbox is cached, so the app opens instantly.
+- **Inbox, All Mail and Trash** for all your accounts together, or for one account at a time
+- **New mail appears within seconds**, with no need to refresh
+- **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
+- Older mail loads as you scroll
+- The installer is about 1.5 MB, and the app starts instantly
 
-Built with [Tauri 2](https://v2.tauri.app/): a Rust backend plus the operating system's own webview (WebView2 on Windows, WKWebView on macOS). It ships no bundled browser, so the app is a few MB and uses little memory. The UI is plain HTML/CSS/JS with no framework and no build step.
+## Download
 
-## Signing in
+Get the latest version from the **[Releases page](https://github.com/andeliseev/unified-mail/releases/latest)**:
 
-For people using the app, adding an account is just **Add account** → choose a Google account → **Allow**.
-Repeat for each account.
-
-That works because the app's Google OAuth client is built into the binary. Google requires every app
-that reads Gmail to have one; it identifies the app, not the user. Whoever builds the app sets it up once:
-
-## One-time Google setup for the builder (about 5 minutes)
-
-1. Open <https://console.cloud.google.com/> and create a project (any name).
-2. Enable the Gmail API: <https://console.cloud.google.com/apis/library/gmail.googleapis.com> → **Enable**.
-3. Open **Google Auth Platform** (<https://console.cloud.google.com/auth/overview>) → **Get started**:
-   - App name: `Unified Mail`, support email: yours
-   - Audience: **External** (or **Internal** if every account is in the same Google Workspace as the project)
-4. **Audience** page: add each Gmail address you want to use under **Test users**.
-5. **Clients** → **Create client** → Application type **Desktop app** → Create → **Download JSON**.
-6. Save that file as `src-tauri/google-client.json`. It's git-ignored. Then build or run the app (see [Development](#development)).
-   As an alternative, set the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables when building.
-
-The build bakes the client into the executable, and Settings no longer mentions it. A build with no
-client (you'll see a cargo warning) falls back to asking for a Client ID and secret in Settings.
-
-Google treats a desktop app's client secret as non-confidential. Shipping it inside the app is the
-standard approach for installed apps.
-
-> **7-day sign-in limit.** While the Google project's publishing status is *Testing*, Google expires
-> sign-ins after 7 days, and you'd have to re-add the account. To avoid that, click **Publish app** on
-> the Audience page. Google will then show an "app isn't verified" warning when you sign in. That's
-> expected for a personal app: click **Advanced → Go to Unified Mail**.
-
-> **Work / Workspace accounts.** Your admin may block unverified apps from Gmail data. If sign-in is
-> refused, ask them to allow the OAuth client ID, or put the Cloud project in the Workspace and use
-> the **Internal** audience.
-
-### What the app can access
-
-It requests one scope, `https://mail.google.com/` (full Gmail access). That's the only scope Gmail accepts for IMAP, which push needs, so Google's consent screen says the app could permanently delete mail. It never does: it only reads, archives, and moves mail to and from Trash. Everything runs on your machine and talks directly to Google:
-
-| Stored | Where |
+| System | File |
 | --- | --- |
-| Refresh tokens | OS keychain (Windows Credential Manager / macOS Keychain), service `unified-mail` |
-| OAuth client, account list, inbox cache | App data dir: `%APPDATA%\io.unifiedmail.desktop` or `~/Library/Application Support/io.unifiedmail.desktop` |
+| Windows 10 / 11 | `Unified.Mail_<version>_x64-setup.exe` (or the `.msi`) |
+| macOS (Apple Silicon and Intel) | `Unified.Mail_<version>_universal.dmg` |
 
-Removing an account in Settings revokes its token at Google and deletes it from the keychain.
+### First launch
 
-Email HTML is rendered in a sandboxed frame with scripts, forms and popups disabled. Links open in your default browser. Remote images load, as in most mail clients.
+The app isn't code-signed yet, so your system asks once before opening it:
 
-## Development
+- **Windows:** "Windows protected your PC" → **More info** → **Run anyway**.
+- **macOS:** open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Allow keychain access when asked; that's where the app keeps your sign-ins.
 
-Requirements: [Rust](https://rustup.rs) (stable) and Node.js 18+.
-On Windows you also need the MSVC Build Tools; on macOS, the Xcode Command Line Tools.
+## Adding your Gmail accounts
 
-```bash
-npm install
-```
+Click **Add account**, choose your Google account in the browser window that opens, and click **Allow**. Repeat for each account.
 
-```bash
-npm run dev
-```
+- Google may warn that **"Google hasn't verified this app"**, because the app hasn't finished Google's review yet. Click **Advanced → Go to Unified Mail** to continue.
+- **Work accounts (Google Workspace):** your administrator may block apps that Google hasn't verified. If sign-in is refused, ask them to allow Unified Mail.
+- Google's permission screen asks for full Gmail access. Gmail requires that for instant new-mail notifications. The app only reads your mail, archives it, and moves it to or from Trash. It never permanently deletes anything.
 
-Builds a release executable plus installers (`.msi`/`.exe` on Windows, `.dmg`/`.app` on macOS):
+## Keyboard shortcuts
 
-```bash
-npm run build
-```
-
-Output lands in `src-tauri/target/release/bundle/`. Build each platform on that platform: Windows installers on Windows, macOS ones on a Mac.
-
-Run the backend unit tests:
-
-```bash
-cd src-tauri && cargo test
-```
-
-More commands, the size budget and debugging tips are in [docs/development.md](docs/development.md).
-
-## Docs
-
-| | |
+| Key | Action |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Components, Rust modules, commands, storage |
-| [Authentication](docs/auth.md) | Sign-in flow, built-in client, scope, tokens |
-| [Sync and push](docs/sync.md) | How the inbox stays current, IMAP IDLE |
-| [UI](docs/ui.md) | Frontend, email sandboxing, shortcuts |
-| [Development](docs/development.md) | Setup, tests, builds, debugging |
-| [To do](docs/todo.md) | Known limitations and ideas for later |
+| `J` / `K` or `↓` / `↑` | Next / previous message |
+| `Space` / `PageDown`, `PageUp` | Scroll the open message |
+| `E` | Archive |
+| `#` or `Delete` | Delete (move to Trash) |
+| `Z` | Undo |
 
-If a Google Workspace admin has turned IMAP off, push can't connect. The app then falls back to syncing every 5 minutes and whenever its window regains focus.
+## Privacy
+
+Unified Mail runs entirely on your computer and talks only to Google. There are no servers of ours, no analytics and no tracking.
+
+- **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain.
+- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved.
+- **Removing an account** in Settings revokes the app's access at Google and deletes its data from your computer.
+- **Email content** is shown with scripts and forms blocked, and links open in your browser.
+
+Read the full [privacy policy](https://andeliseev.github.io/unified-mail/privacy.html).
+
+## Current limits
+
+- Gmail only for now. Other providers, such as Yandex Mail, are planned.
+- No compose, reply or search yet.
+- Older messages you've scrolled to aren't refreshed in the background. Reopen the folder to update them.
+
+## Building from source and contributing
+
+The app is built with [Tauri 2](https://v2.tauri.app/): a Rust backend plus your system's own web view, with no bundled browser. To build it yourself, including the one-time Google Cloud setup, see [docs/development.md](docs/development.md). How it works inside is in [docs/](docs/README.md).
+
+Bug reports and pull requests are welcome. To report a security problem, see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)

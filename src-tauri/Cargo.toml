@@ -2,6 +2,8 @@
 name = "unified-mail"
 version = "0.1.0"
 description = "Unified inbox for Gmail accounts"
+license = "MIT"
+repository = "https://github.com/andeliseev/unified-mail"
 edition = "2021"
 
 [build-dependencies]

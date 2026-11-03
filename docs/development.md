@@ -6,7 +6,27 @@
 - Node.js 18+, needed only for the Tauri CLI (`@tauri-apps/cli`).
 - Windows: MSVC Build Tools and WebView2 (preinstalled on Windows 10/11).
 - macOS: Xcode Command Line Tools.
-- A Google OAuth client in `src-tauri/google-client.json` (see the [README](../README.md)). Without it the app still runs and asks for a client in Settings.
+- A Google OAuth client in `src-tauri/google-client.json` (see [below](#google-oauth-client-one-time-about-5-minutes)). Without it the app still runs and asks for a client in Settings.
+
+## Google OAuth client (one time, about 5 minutes)
+
+Google requires every app that reads Gmail to have its own OAuth client. It identifies the app, not the user. The build bakes it into the executable, so people using the app only ever see Google's sign-in.
+
+1. Open <https://console.cloud.google.com/> and create a project (any name).
+2. Enable the Gmail API: <https://console.cloud.google.com/apis/library/gmail.googleapis.com> → **Enable**.
+3. Open **Google Auth Platform** (<https://console.cloud.google.com/auth/overview>) → **Get started**:
+   - App name: `Unified Mail`, support email: yours
+   - Audience: **External** (or **Internal** if every account is in the same Google Workspace as the project)
+4. **Audience** page: add each Gmail address you want to use under **Test users**.
+5. **Clients** → **Create client** → Application type **Desktop app** → Create → **Download JSON**.
+6. Save that file as `src-tauri/google-client.json`. It's git-ignored; never commit it. As an alternative, set the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables when building.
+
+A build with no client (you'll see a cargo warning) falls back to asking for a Client ID and secret in Settings. Google treats a desktop app's client secret as non-confidential, so shipping it inside the app is the standard approach for installed apps. If you fork the project and ship your own builds, use your own client, not the official one.
+
+> **7-day sign-in limit.** While the Google project's publishing status is *Testing*, Google expires
+> sign-ins after 7 days. To avoid that, click **Publish app** on the Audience page. Until Google verifies
+> the app, users see an "app isn't verified" warning at sign-in (Advanced → Go to Unified Mail), and the
+> number of users is capped. See [auth.md](auth.md#google-project-limits).
 
 ## Commands
 
