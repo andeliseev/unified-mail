@@ -1,0 +1,19 @@
+# Unified Mail
+
+Read [README.md](README.md) first: it covers what the app is and how Google sign-in is set up. Implementation notes are in [docs/](docs/README.md): architecture, auth, sync/push, UI, development, and [todo.md](docs/todo.md) for known gaps and ideas.
+
+## Commands
+
+- `npm run dev`: run the app with hot reload
+- `cd src-tauri && cargo test`: unit tests (`-- --include-ignored` adds a live imap.gmail.com check)
+- `npx tauri build --no-bundle`: release exe only, for size checks
+
+## Working rules
+
+- **Small binary is a core goal.** Check the size impact of any new crate with `npx tauri build --no-bundle` and record notable changes in [docs/development.md](docs/development.md#size-budget). Prefer what the OS already ships (webview, native-tls, `TextDecoder`) over bundled code.
+- `src/` is plain HTML/CSS/JS served as is. Don't add a framework or build step.
+- Never hold a `std::sync::Mutex` guard across `.await` (Tauri async commands must be `Send`).
+- Set untrusted email text with `textContent`. Email HTML only goes into the sandboxed iframe (see [docs/ui.md](docs/ui.md#sandbox)).
+- Command errors are user-facing `String`s; write them for people.
+- Never commit `src-tauri/google-client.json` (the OAuth client, git-ignored).
+- When behavior changes, update the matching file in `docs/`. Add things you notice but don't do to `docs/todo.md`.
