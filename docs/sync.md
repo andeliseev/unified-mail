@@ -28,6 +28,17 @@ All accounts sync one folder in parallel (`join_all`). For each account:
 
 When an account fails (network, expired sign-in), its cached messages stay and the failure comes back in `errors`, so one bad account never empties the unified view.
 
+Each list call also asks for `nextPageToken`, only to learn whether older mail exists. That comes back per account as `more`.
+
+## Older pages (`AppState::older`)
+
+Scrolling asks for one account's next page with `load_older(folder, account, before)`. That's the same two list calls with the Gmail search `q=before:<seconds>`:
+- `before` is the oldest date already loaded, rounded **up** to a whole second, because search works in seconds. Messages from that same second come back again and the UI drops the duplicates.
+- The unread trick holds for any such query: an unread message in this page is among the newest 50 unread messages before the same date.
+- In All Mail a third call lists the newest 50 **Inbox** messages before that date. By the same argument it says exactly which of the page's messages are in the Inbox.
+
+Older pages don't go into the caches. The caches stay one newest page per folder, so they don't grow, and the next launch starts from the newest page again. How the UI merges pages across accounts is in [ui.md](ui.md#older-mail).
+
 A single message that fails to load is skipped; the rest of the account still syncs. The failure is reported once ("N messages couldn't be loaded: ...") and remembered in `reported_failures`, so it doesn't pop up again on every push. The message is retried on each sync and appears once it loads. Responses are parsed with `serde_json` directly, so errors name the field and position (e.g. ``missing field `x` at line 1 column 300``), and network errors include their cause chain. Response types require only fields Google always sends (`id`), because Google omits empty values, such as the `value` of an empty header. An entirely empty response body is read as `{}`: Gmail returned one for `messages.list` with `fields=messages/id`, most likely when nothing matched (e.g. no unread mail). That used to fail the whole account. After every sync the folder's snapshot is written to its cache file. The next launch paints the Inbox from it immediately (`cached_folder`) and then syncs.
 
 **Cost:** a sync with no new mail is two small requests per account. Gmail's quota is 250 units/s per user; a list call costs 5 units, metadata 5.

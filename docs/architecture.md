@@ -47,7 +47,8 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `add_account` | | Email address; runs the browser sign-in and starts push |
 | `remove_account` | `email` | Stops push, revokes the token, deletes it from the keychain |
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
-| `refresh_folder` | `folder` | `{ messages, errors }`; errors are per account |
+| `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account; `more[account]` says whether older mail exists |
+| `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
 | `get_message` | `account, id` | Headers plus HTML/text body; marks the message read |
 | `archive_message` | `account, id` | Removes the `INBOX` label |
 | `trash_message` | `account, id` | Moves the message to Trash; returns `{ wasInInbox }` for Undo |

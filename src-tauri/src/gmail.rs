@@ -102,19 +102,30 @@ pub async fn profile_email(http: &Client, token: &str) -> Result<String, String>
     Ok(profile.email_address)
 }
 
-/// Ids of the newest messages carrying all of `labels`, newest first.
+/// One page of a message list, newest first.
+pub struct Page {
+    pub ids: Vec<String>,
+    /// More messages exist beyond this page.
+    pub more: bool,
+}
+
+/// The newest messages carrying all of `labels` (and matching the Gmail search `q`, if any).
 /// Spam and Trash are left out unless `include_spam_trash` (needed to list Trash).
 pub async fn list_ids(
     http: &Client,
     token: &str,
     labels: &[&str],
     include_spam_trash: bool,
+    q: Option<&str>,
     max: u32,
-) -> Result<Vec<String>, String> {
+) -> Result<Page, String> {
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct List {
         #[serde(default)]
         messages: Vec<Id>,
+        #[serde(default)]
+        next_page_token: Option<String>,
     }
     #[derive(Deserialize)]
     struct Id {
@@ -122,13 +133,25 @@ pub async fn list_ids(
     }
     let mut query: Vec<(&str, String)> = labels.iter().map(|l| ("labelIds", l.to_string())).collect();
     query.push(("maxResults", max.to_string()));
-    query.push(("fields", "messages/id".into()));
+    query.push(("fields", "messages/id,nextPageToken".into()));
     if include_spam_trash {
         query.push(("includeSpamTrash", "true".into()));
     }
+    if let Some(q) = q {
+        query.push(("q", q.to_string()));
+    }
     let resp = send(http.get(format!("{API}/messages")).bearer_auth(token).query(&query)).await?;
     let list: List = parse_json(resp).await?;
-    Ok(list.messages.into_iter().map(|m| m.id).collect())
+    Ok(Page {
+        ids: list.messages.into_iter().map(|m| m.id).collect(),
+        more: list.next_page_token.is_some(),
+    })
+}
+
+/// Gmail search for messages older than `before_ms`. Search works in whole seconds, so this
+/// rounds up and also matches messages from the same second; callers drop the duplicates.
+pub fn before_query(before_ms: i64) -> String {
+    format!("before:{}", before_ms.div_euclid(1000) + 1)
 }
 
 pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) -> Result<MessageSummary, String> {
@@ -474,6 +497,12 @@ mod tests {
         assert_eq!(decode::<List>(br#"{"messages":[{"id":"a"}]}"#).unwrap().messages.len(), 1);
         // A message still needs its id; an empty body must not pass as one.
         assert!(decode::<RawMessage>(b"").is_err());
+    }
+
+    #[test]
+    fn before_query_includes_the_same_second() {
+        assert_eq!(before_query(1_730_000_000_000), "before:1730000001");
+        assert_eq!(before_query(1_730_000_000_999), "before:1730000001");
     }
 
     #[test]

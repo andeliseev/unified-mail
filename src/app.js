@@ -34,8 +34,9 @@ const ids = (m) => ({ account: m.account, id: m.id });
 /**
  * Whether the message is in its Inbox. Both lists hold each account's newest messages,
  * so a recent All Mail message that's in the Inbox is always in the Inbox list too.
+ * Older All Mail pages report their Inbox messages separately (`inboxExtra`).
  */
-const inInbox = (m) => state.lists.inbox.some((x) => keyOf(x) === keyOf(m));
+const inInbox = (m) => state.inboxExtra.has(keyOf(m)) || state.lists.inbox.some((x) => keyOf(x) === keyOf(m));
 
 /** Actions offered on an open message. */
 function actionsFor(m) {
@@ -116,6 +117,12 @@ const state = {
   current: null,         // message shown in the reader
   pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
   undo: null,            // what the toast's Undo button does, while it shows
+  // Per folder and account: `frontier`, the oldest date loaded so far without gaps, and
+  // `more`, whether older mail exists. Scrolling pushes the frontier back.
+  paging: { inbox: {}, all: {}, trash: {} },
+  inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages
+  loadingOlder: false,
+  olderRetryAt: 0,       // after a failed load, don't retry before this time
   syncing: false,
   syncQueued: false,
   lastSync: 0,
@@ -126,9 +133,21 @@ const state = {
 const $ = (sel) => document.querySelector(sel);
 const keyOf = (m) => `${m.account}/${m.id}`;
 const colorOf = (account) => PALETTE[Math.max(0, state.accounts.indexOf(account)) % PALETTE.length];
+const byDate = (a, b) => b.date - a.date;
+
+/** Accounts on screen that have older mail than what's loaded in `folder`. */
+const accountsWithMore = (folder) =>
+  (state.filter ? [state.filter] : state.accounts).filter((a) => state.paging[folder][a]?.more);
+
+/**
+ * The folder's messages on screen. The list stops at the newest frontier among accounts
+ * with more mail to load: below it that account's messages are missing, so the merged
+ * list would have gaps. Scrolling loads that account next, and the cut-off moves down.
+ */
 const visible = () => {
-  const list = state.lists[state.folder];
-  return state.filter ? list.filter((m) => m.account === state.filter) : list;
+  const folder = state.folder;
+  const cutoff = Math.max(-Infinity, ...accountsWithMore(folder).map((a) => state.paging[folder][a].frontier));
+  return state.lists[folder].filter((m) => (!state.filter || m.account === state.filter) && m.date >= cutoff);
 };
 const byKey = (key) => state.lists[state.folder].find((m) => keyOf(m) === key);
 
@@ -178,6 +197,7 @@ function bindEvents() {
     const row = e.target.closest('li.msg');
     if (row) select(row.dataset.key);
   });
+  $('#messages').addEventListener('scroll', maybeLoadOlder, { passive: true });
   document.querySelectorAll('a[data-href]').forEach((a) =>
     a.addEventListener('click', (e) => { e.preventDefault(); openExternal(a.dataset.href); }));
   document.addEventListener('keydown', onKey);
@@ -196,7 +216,7 @@ async function refresh() {
   try {
     const results = await Promise.all(folders.map((folder) => invoke('refresh_folder', { folder })));
     folders.forEach((folder, i) => {
-      setList(folder, results[i].messages);
+      applySync(folder, results[i]);
       state.synced[folder] = true;
     });
     state.lastSync = Date.now();
@@ -227,7 +247,84 @@ function setList(folder, messages) {
 }
 
 function withMessage(list, m) {
-  return [...list, m].sort((a, b) => b.date - a.date);
+  return [...list, m].sort(byDate);
+}
+
+/** Stores a sync of each account's newest page, keeping older mail that scrolling loaded. */
+function applySync(folder, result) {
+  const paging = state.paging[folder];
+  let list = result.messages;
+  for (const account of state.accounts) {
+    const page = result.messages.filter((m) => m.account === account);
+    const pageOldest = Math.min(...page.map((m) => m.date));  // Infinity if empty
+    // An account whose sync failed got its cached page back; it keeps its paging.
+    const synced = Boolean(result.more) && account in result.more;
+    const more = synced ? result.more[account] : Boolean(paging[account]?.more);
+    if (more && paging[account] && paging[account].frontier < pageOldest) {
+      // Mail below this page was loaded earlier; keep it, and the deeper frontier.
+      list = list.concat(state.lists[folder].filter((m) => m.account === account && m.date < pageOldest));
+    } else {
+      paging[account] = { frontier: pageOldest, more };
+    }
+    if (folder === 'inbox' && synced) forgetLeftInbox(account, page, pageOldest, more);
+  }
+  setList(folder, list.sort(byDate));
+}
+
+/** Drops `inboxExtra` entries that an Inbox sync shows aren't in the Inbox any more. */
+function forgetLeftInbox(account, page, pageOldest, more) {
+  const inPage = new Set(page.map(keyOf));
+  for (const [key, date] of state.inboxExtra) {
+    // The page covers everything down to its oldest message, or all of the Inbox if no more.
+    if (key.startsWith(account + '/') && (date >= pageOldest || !more) && !inPage.has(key)) {
+      state.inboxExtra.delete(key);
+    }
+  }
+}
+
+/** Loads the next older page for the account(s) holding the list back, while near the bottom. */
+async function loadOlder() {
+  const folder = state.folder;
+  const accounts = accountsWithMore(folder);
+  if (!accounts.length) return;
+  const frontier = Math.max(...accounts.map((a) => state.paging[folder][a].frontier));
+  const targets = accounts.filter((a) => state.paging[folder][a].frontier === frontier);
+  state.loadingOlder = true;
+  try {
+    const pages = await Promise.all(targets.map((account) =>
+      invoke('load_older', { folder, account, before: frontier })));
+    targets.forEach((account, i) => mergeOlder(folder, account, pages[i]));
+    const warnings = pages.map((p) => p.warning).filter(Boolean);
+    if (warnings.length && !state.undo) toast(warnings.join('\n'), 8000);
+  } catch (e) {
+    state.olderRetryAt = Date.now() + 15000;
+    if (!state.undo) toast(`Couldn't load older messages: ${e}`, 6000);
+  } finally {
+    state.loadingOlder = false;
+    render();  // keeps loading while the list is still scrolled to the bottom
+  }
+}
+
+function mergeOlder(folder, account, page) {
+  const paging = state.paging[folder][account];
+  const known = new Set(state.lists[folder].map(keyOf));
+  const fresh = page.messages.filter((m) => !known.has(keyOf(m)) && !state.pending.get(keyOf(m))?.leave.includes(folder));
+  const oldest = Math.min(paging.frontier, ...page.messages.map((m) => m.date));
+  // Stop if Gmail returned nothing older, so a quirk can't make this loop forever.
+  state.paging[folder][account] = { frontier: oldest, more: page.more && oldest < paging.frontier };
+  if (folder === 'all') {
+    const inInboxIds = new Set(page.inbox);
+    for (const m of page.messages) if (inInboxIds.has(m.id)) state.inboxExtra.set(keyOf(m), m.date);
+  }
+  state.lists[folder] = state.lists[folder].concat(fresh).sort(byDate);
+}
+
+/** Starts loading older mail when the list is scrolled (or short enough) to its end. */
+function maybeLoadOlder() {
+  const list = $('#messages');
+  if (state.loadingOlder || list.hidden || Date.now() < state.olderRetryAt) return;
+  if (list.scrollTop + list.clientHeight < list.scrollHeight - 400) return;
+  if (accountsWithMore(state.folder).length) loadOlder();
 }
 
 async function openFolder(folder) {
@@ -247,6 +344,8 @@ function render() {
   renderList();
   // An open message's buttons depend on the lists (e.g. Archive vs Move to Inbox in All Mail).
   renderActions();
+  // A short list (or one already scrolled to the end) loads older mail right away.
+  maybeLoadOlder();
 }
 
 function renderSidebar() {
@@ -301,7 +400,9 @@ function setFilter(account) {
 function renderList() {
   const messages = visible();
   // In All Mail, tag what's still in the Inbox (everything else there is archived or sent).
-  const inboxKeys = state.folder === 'all' ? new Set(state.lists.inbox.map(keyOf)) : null;
+  const inboxKeys = state.folder === 'all'
+    ? new Set([...state.lists.inbox.map(keyOf), ...state.inboxExtra.keys()])
+    : null;
   const fragment = document.createDocumentFragment();
   for (const m of messages) {
     const li = document.createElement('li');
@@ -321,6 +422,12 @@ function renderList() {
     li.querySelector('.snippet').textContent = m.snippet;
     li.title = m.account;
     fragment.append(li);
+  }
+  if (messages.length && accountsWithMore(state.folder).length) {
+    const more = document.createElement('li');
+    more.className = 'more';
+    more.textContent = 'Loading older messages…';
+    fragment.append(more);
   }
   $('#messages').replaceChildren(fragment);
 
@@ -504,6 +611,8 @@ async function perform(m, move, run) {
 /** Takes the message out of the `leave` lists and adds it to the `join` lists that are loaded. */
 function shift(m, leave, join) {
   const key = keyOf(m);
+  if (leave.includes('inbox')) state.inboxExtra.delete(key);
+  if (join.includes('inbox')) state.inboxExtra.set(key, m.date);
   for (const folder of leave) state.lists[folder] = state.lists[folder].filter((x) => keyOf(x) !== key);
   for (const folder of join) {
     if (state.loaded[folder] && !state.lists[folder].some((x) => keyOf(x) === key)) {

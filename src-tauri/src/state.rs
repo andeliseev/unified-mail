@@ -96,6 +96,20 @@ type FolderCache = HashMap<String, MessageSummary>;
 pub struct FolderResult {
     pub messages: Vec<MessageSummary>,
     pub errors: Vec<AccountError>,
+    /// For each account that synced: whether it has older messages than its newest page.
+    pub more: HashMap<String, bool>,
+}
+
+/// One account's messages older than a date, loaded while scrolling.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OlderPage {
+    pub messages: Vec<MessageSummary>,
+    /// Even older messages exist.
+    pub more: bool,
+    /// All Mail only: ids of these messages that are in the Inbox.
+    pub inbox: Vec<String>,
+    pub warning: Option<String>,
 }
 
 /// What Undo needs to know about a message moved to Trash.
@@ -130,10 +144,11 @@ pub struct AppState {
     reported_failures: Mutex<HashSet<String>>,
 }
 
-/// One account's sync of a folder: its messages, plus a warning if some couldn't be loaded.
+/// One page of an account's folder: its messages, plus a warning if some couldn't be loaded.
 struct AccountSync {
     messages: Vec<MessageSummary>,
     warning: Option<String>,
+    more: bool,
 }
 
 impl AppState {
@@ -231,19 +246,21 @@ impl AppState {
     /// cached messages and is reported in `errors`.
     pub async fn refresh(&self, folder: Folder) -> FolderResult {
         let accounts = self.accounts.lock().unwrap().clone();
-        let results = join_all(accounts.iter().map(|a| self.sync_account(a, folder))).await;
+        let results = join_all(accounts.iter().map(|a| self.sync_account(a, folder, None))).await;
 
         let mut errors = Vec::new();
+        let mut more = HashMap::new();
         let messages = {
             let mut caches = self.cache.lock().unwrap();
             let cache = caches.get_mut(&folder).expect("every folder has a cache");
             cache.retain(|_, m| accounts.contains(&m.account));
             for (account, result) in accounts.iter().zip(results) {
                 match result {
-                    Ok(AccountSync { messages, warning }) => {
+                    Ok(page) => {
+                        more.insert(account.clone(), page.more);
                         cache.retain(|_, m| &m.account != account);
-                        cache.extend(messages.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
-                        if let Some(message) = warning {
+                        cache.extend(page.messages.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
+                        if let Some(message) = page.warning {
                             errors.push(AccountError { account: account.clone(), message });
                         }
                     }
@@ -253,21 +270,40 @@ impl AppState {
             sorted(cache)
         };
         let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
-        FolderResult { messages, errors }
+        FolderResult { messages, errors, more }
     }
 
-    /// Lists one folder of the account and fetches metadata only for messages not seen before.
-    /// A message that fails to load is skipped, so one odd message can't hide the whole folder.
-    async fn sync_account(&self, account: &str, folder: Folder) -> Result<AccountSync, String> {
+    /// The account's next page of messages older than `before` (ms), for scrolling.
+    /// Older pages aren't cached; the caches hold only each folder's newest page.
+    pub async fn older(&self, folder: Folder, account: &str, before: i64) -> Result<OlderPage, String> {
+        let q = gmail::before_query(before);
+        let inbox_ids = async {
+            if folder != Folder::All {
+                return Ok(Vec::new());
+            }
+            let token = self.access_token(account).await?;
+            // As with unread: any Inbox message in this page is among the newest PAGE_SIZE
+            // Inbox messages before the same date.
+            Ok(gmail::list_ids(&self.http, &token, &["INBOX"], false, Some(&q), PAGE_SIZE).await?.ids)
+        };
+        let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(&q)), inbox_ids)?;
+        Ok(OlderPage { messages: page.messages, more: page.more, inbox, warning: page.warning })
+    }
+
+    /// Lists one page of the account's folder (the newest, or those matching `q`) and fetches
+    /// metadata only for messages not seen before. A message that fails to load is skipped,
+    /// so one odd message can't hide the whole folder.
+    async fn sync_account(&self, account: &str, folder: Folder, q: Option<&str>) -> Result<AccountSync, String> {
         let token = self.access_token(account).await?;
         let trash = folder == Folder::Trash;
-        let (ids, unread) = tokio::try_join!(
-            gmail::list_ids(&self.http, &token, folder.labels(), trash, PAGE_SIZE),
-            // Any unread message among the newest PAGE_SIZE is also among the newest
-            // PAGE_SIZE unread ones, so this one call keeps read state current.
-            gmail::list_ids(&self.http, &token, folder.unread_labels(), trash, PAGE_SIZE),
+        let (page, unread) = tokio::try_join!(
+            gmail::list_ids(&self.http, &token, folder.labels(), trash, q, PAGE_SIZE),
+            // Any unread message in this page is also among the PAGE_SIZE newest unread
+            // ones of the same query, so this one call keeps read state current.
+            gmail::list_ids(&self.http, &token, folder.unread_labels(), trash, q, PAGE_SIZE),
         )?;
-        let unread: HashSet<String> = unread.into_iter().collect();
+        let unread: HashSet<String> = unread.ids.into_iter().collect();
+        let ids = page.ids;
 
         let mut known: HashMap<String, MessageSummary> = {
             let caches = self.cache.lock().unwrap();
@@ -320,7 +356,7 @@ impl AppState {
                 m
             })
             .collect();
-        Ok(AccountSync { messages, warning })
+        Ok(AccountSync { messages, warning, more: page.more })
     }
 
     /// Opening a message marks it read, as in Gmail.

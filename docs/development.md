@@ -150,5 +150,6 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] Links in an email open in the default browser
 - [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
 - [ ] An account with no unread mail still syncs
+- [ ] Scroll to the bottom of each folder: older mail keeps loading, dates stay in order across accounts, "Loading older messages…" disappears at the very end
 - [ ] Sleep the computer for 10+ min, wake it: push reconnects (watch `[push]` logs)
 - [ ] Remove an account: its mail leaves the list; the keychain entry is gone

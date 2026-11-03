@@ -6,6 +6,7 @@ A small, fast desktop mail client for Windows and macOS: one inbox for all your 
 - Read messages (HTML or plain text, any charset), marked read when opened
 - **Archive** (`E`) and **Delete** (`#` or `Delete`), the same as Gmail's buttons. Delete moves the message to Trash, which Gmail empties after 30 days. **Move to Inbox** restores a message from Trash, or an archived one in All Mail, where Inbox messages carry an **Inbox** tag.
 - **Undo** (`Z`, or the button in the notice) for Archive, Delete and Move to Inbox
+- Older mail loads as you scroll, 50 messages per account at a time, in date order across accounts
 - `J`/`K` or arrow keys move between messages
 - **Push:** new mail shows up within a second or two (IMAP IDLE). The last inbox is cached, so the app opens instantly.
 

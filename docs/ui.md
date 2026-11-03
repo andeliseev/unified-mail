@@ -49,7 +49,7 @@ Which actions an open message offers depends on the folder, and in All Mail on w
 | All Mail, archived message | Move to Inbox, Delete |
 | Trash | Move to Inbox |
 
-Whether an All Mail message is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox.
+Whether an All Mail message is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox. Older All Mail pages loaded by scrolling report their Inbox messages themselves (`inboxExtra`, see [Older mail](#older-mail)).
 
 When an action leaves the message in the folder on screen (Archive and Move to Inbox in All Mail), it stays open and only its tag and buttons change. Otherwise the next message opens. `render()` also redraws the buttons, so they stay right after Undo or a failed action.
 
@@ -63,6 +63,18 @@ All actions are **optimistic** (`perform`):
 A message only joins lists that are already loaded; other lists pick it up at their next sync.
 
 **Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way and reopens the message if it's back in the folder on screen. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
+
+## Older mail
+
+Each folder starts with every account's newest 50 messages. Older ones load as you scroll.
+
+- `state.paging[folder][account]` holds two things for each account:
+  - `frontier`: the oldest date loaded with no gaps above it.
+  - `more`: whether older mail exists.
+- **The list stops at the cut-off** (`visible()`), the *newest* frontier among accounts with more to load. Below it, that account's messages aren't loaded yet. Showing other accounts' older mail there would make it look like the busy account had none. Messages below the cut-off stay in the list, hidden until it moves down.
+- **Loading** (`maybeLoadOlder` → `loadOlder`): when the list is within 400 px of its end, including right after a render of a short list, the account(s) at the cut-off get their next page (`load_older` with `before` = frontier). The frontier then moves back, and loading repeats while the list is still at its end. A failed load waits 15 s before retrying, and a page that brings nothing older stops that account, so a Gmail quirk can't cause a loop.
+- **Syncs** (`applySync`) refresh only each account's newest page. Messages below it that scrolling loaded are kept, with the deeper frontier, as long as Gmail still reports more mail.
+- **Inbox tags on older All Mail pages:** `load_older` also returns which messages are in the Inbox, using the same "newest 50 before the same date" argument as for unread. Those go into `state.inboxExtra`. Actions update it, and Inbox syncs drop entries they show have left the Inbox.
 
 ## Keyboard
 

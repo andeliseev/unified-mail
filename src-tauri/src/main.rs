@@ -7,7 +7,7 @@ mod oauth;
 mod state;
 
 use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, Folder, FolderResult, Setup, Trashed};
+use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Trashed};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -48,6 +48,17 @@ fn cached_folder(state: State<'_, AppState>, folder: Folder) -> Vec<MessageSumma
 #[tauri::command]
 async fn refresh_folder(state: State<'_, AppState>, folder: Folder) -> Result<FolderResult, String> {
     Ok(state.refresh(folder).await)
+}
+
+/// The account's messages older than `before` (ms since epoch), as the list scrolls down.
+#[tauri::command]
+async fn load_older(
+    state: State<'_, AppState>,
+    folder: Folder,
+    account: String,
+    before: i64,
+) -> Result<OlderPage, String> {
+    state.older(folder, &account, before).await
 }
 
 #[tauri::command]
@@ -106,6 +117,7 @@ fn main() {
             remove_account,
             cached_folder,
             refresh_folder,
+            load_older,
             get_message,
             archive_message,
             trash_message,

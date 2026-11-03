@@ -18,7 +18,10 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] More folders: Sent, Starred, Spam, user labels
 - [ ] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
-- [ ] Only 50 newest messages per account: add **Load more** (`pageToken`)
+- [x] Older mail loads while scrolling (pages of 50 per account, merged in date order)
+- [ ] Older pages aren't re-synced: something archived elsewhere stays visible there until the folder is reopened or the app restarts
+- [ ] Search across all mail (Gmail `q=`), for finding old messages without scrolling
+- [ ] Rendering re-creates every row; with many thousands of loaded rows, switch to a virtualized list
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
 - [ ] Marking read runs in the background; a sync within ~200 ms of opening can briefly show it unread again
