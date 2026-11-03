@@ -110,6 +110,10 @@ The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`,
 
 Or type an exact version (e.g. `0.2.0`) in the second box; it wins over the choice. Versions must be plain `X.Y.Z`, because MSI installers reject suffixes like `-beta`.
 
+The third box picks the installers: **Windows and macOS** (default), **Windows** or **macOS**. A one-platform release is faster (the universal macOS build is the slow one), but:
+- Users of the other platform aren't offered that update: the release's `latest.json` only has entries for what was built. They get the next release that includes their platform.
+- The README's Download link points to the latest release, so until then it has no installer for the other platform. Older releases still do.
+
 To see what a run would release, from the repo root:
 
 ```bash
@@ -123,8 +127,8 @@ The workflow then:
 1. Works out the version with [`scripts/next-version.mjs`](../scripts/next-version.mjs). It stops if that isn't newer than the last release.
 2. Sets it with [`scripts/set-version.mjs`](../scripts/set-version.mjs) in `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`, and commits "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
 3. Creates a draft release `vX.Y.Z`, replacing a draft left by a failed run.
-4. Builds Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel) in parallel, and uploads them to the draft.
-5. Publishes the release only if both builds succeeded. Only then does the `vX.Y.Z` tag exist.
+4. Builds the chosen platforms in parallel and uploads them to the draft: Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel).
+5. Publishes the release only if every build succeeded. Only then does the `vX.Y.Z` tag exist.
 
 **If a run fails,** fix the cause and run it again with the same choice. The tag doesn't exist yet, so the same version comes out, and its draft is replaced. Don't set the version locally: the workflow does it, and it refuses to go below a version already in `package.json`.
 
@@ -147,7 +151,7 @@ Installed apps update themselves with `tauri-plugin-updater`:
 The installer is picked to match the install: `windows-x86_64-nsis` or `windows-x86_64-msi`. The plain `windows-x86_64` entry is the NSIS one.
 
 **Where the files come from:** the release workflow builds with `--config src-tauri/tauri.release.conf.json`, which turns on `bundle.createUpdaterArtifacts`.
-- The installers get `.sig` files, signed with the `TAURI_SIGNING_PRIVATE_KEY` secret.
+- The installers are signed with the `TAURI_SIGNING_PRIVATE_KEY` secret. The signatures go into `latest.json`; the separate `.sig` files aren't uploaded (`uploadUpdaterSignatures: false`).
 - `tauri-action` writes `latest.json`, merging the Windows and macOS jobs' entries.
 - A local `npm run build` doesn't make update files, so it doesn't need the key.
 

@@ -1,9 +1,9 @@
 # One-click release: Actions → Release → Run workflow.
-# Builds the Windows and macOS installers and publishes them as a GitHub Release.
+# Builds the Windows and/or macOS installers and publishes them as a GitHub Release.
 # Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets, and the updater's
 # TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (see docs/development.md).
 name: Release
-run-name: Release (${{ inputs.version || inputs.bump }})
+run-name: Release (${{ inputs.version || inputs.bump }}, ${{ inputs.platforms }})
 
 on:
   workflow_dispatch:
@@ -17,6 +17,11 @@ on:
         description: Or enter an exact version instead, e.g. 0.2.0. Leave empty to use the choice above.
         required: false
         type: string
+      platforms:
+        description: "Installers to build. Users of a platform left out don't get this update until a release includes it."
+        type: choice
+        options: [Windows and macOS, Windows, macOS]
+        default: Windows and macOS
 
 permissions:
   contents: write
@@ -32,6 +37,7 @@ jobs:
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
       release_id: ${{ steps.release.outputs.id }}
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
       - name: Check secrets
         env:
@@ -47,6 +53,21 @@ jobs:
             echo "::error::Add the updater's TAURI_SIGNING_PRIVATE_KEY (and _PASSWORD) repository secrets first (see docs/development.md)."
             exit 1
           fi
+
+      - name: Choose platforms
+        id: platforms
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          windows='{"name": "Windows", "os": "windows-latest", "args": "", "rust-targets": ""}'
+          # One universal .dmg for Apple Silicon and Intel Macs.
+          macos='{"name": "macOS", "os": "macos-latest", "args": "--target universal-apple-darwin", "rust-targets": "aarch64-apple-darwin,x86_64-apple-darwin"}'
+          case "$PLATFORMS" in
+            Windows) matrix="[$windows]" ;;
+            macOS) matrix="[$macos]" ;;
+            *) matrix="[$windows, $macos]" ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v7
 
@@ -90,22 +111,26 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ steps.commit.outputs.sha }}
+          PLATFORMS: ${{ inputs.platforms }}
         with:
           script: |
-            const { TAG: tag, SHA: sha } = process.env;
+            const { TAG: tag, SHA: sha, PLATFORMS: platforms } = process.env;
             // A draft left behind by a failed run is replaced.
             const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
             for (const old of releases.filter((r) => r.draft && r.tag_name === tag)) {
               await github.rest.repos.deleteRelease({ ...context.repo, release_id: old.id });
             }
+            // Only mention the platforms this release has installers for.
+            const windows = platforms !== 'macOS';
+            const macos = platforms !== 'Windows';
             const body = [
               '## Download',
-              '- **Windows:** the `.exe` installer (or the `.msi`)',
-              '- **macOS** (Apple Silicon and Intel): the `.dmg`',
+              ...(windows ? ['- **Windows:** the `.exe` installer (or the `.msi`)'] : []),
+              ...(macos ? ['- **macOS** (Apple Silicon and Intel): the `.dmg`'] : []),
               '',
               'The app isn\'t code-signed yet, so the first launch shows a warning:',
-              '- **Windows:** "Windows protected your PC" → **More info** → **Run anyway**',
-              '- **macOS:** open the app once, then **System Settings → Privacy & Security → Open Anyway**',
+              ...(windows ? ['- **Windows:** "Windows protected your PC" → **More info** → **Run anyway**'] : []),
+              ...(macos ? ['- **macOS:** open the app once, then **System Settings → Privacy & Security → Open Anyway**'] : []),
             ].join('\n');
             const { data } = await github.rest.repos.createRelease({
               ...context.repo,
@@ -123,16 +148,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            args: ''
-            rust-targets: ''
-          # One universal .dmg for Apple Silicon and Intel Macs.
-          - name: macOS
-            os: macos-latest
-            args: --target universal-apple-darwin
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+        # The platforms chosen in the Prepare job.
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -170,6 +187,9 @@ jobs:
           args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
           # The generic windows-x86_64 entry of latest.json is the NSIS installer, like the README's download.
           updaterJsonPreferNsis: true
+          # The signatures are copied into latest.json, which is all the updater reads, so the
+          # separate .sig files would only clutter the downloads.
+          uploadUpdaterSignatures: false
 
   # Publish only when every installer built, so a release is never half-empty.
   publish:
