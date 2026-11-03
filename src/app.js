@@ -14,11 +14,14 @@ const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
 const UNDO_MS = 8000;
 // More new messages at once than this get one summary notification instead.
 const MAX_NOTIFICATIONS = 3;
+// Emails wider than the reader are scaled down to fit, but not below this; past it they scroll.
+const MIN_EMAIL_ZOOM = 0.6;
+// HTML emails bring their own margins, so the frame adds little; plain text gets more room.
 const FRAME_CSS = `
   html { background: #fff; color: #202124; }
-  body { margin: 0; padding: 18px 24px 28px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; word-wrap: break-word; }
+  body { margin: 0; padding: 10px 8px 16px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; word-wrap: break-word; }
   img { max-width: 100%; height: auto; }
-  pre.plain { white-space: pre-wrap; font: inherit; margin: 0; }
+  pre.plain { white-space: pre-wrap; font: inherit; margin: 0; padding: 8px 16px 12px; }
   a { color: #1a5fd6; }
   /* Some emails set overflow: hidden on html/body, which would make them unscrollable.
      :root outranks the emails' html/body selectors, so this wins even against !important. */
@@ -224,6 +227,11 @@ function bindEvents() {
   // Also fires when a click moves focus into the email frame.
   window.addEventListener('blur', hideMenu);
   window.addEventListener('resize', hideMenu);
+  // A wider or narrower reader (resizing the window) changes how much an email must shrink.
+  new ResizeObserver(() => {
+    const frame = $('#m-body iframe');
+    if (frame) fitToFrame(frame);
+  }).observe($('#m-body'));
 }
 
 // ---------- Sync ----------
@@ -620,6 +628,8 @@ function showBody(full) {
   frame.addEventListener('load', () => {
     const doc = frame.contentDocument;
     if (!doc) return;
+    // The frame's load waits for the email's images, so the width measured here is final.
+    fitToFrame(frame);
     doc.addEventListener('click', (e) => {
       const link = e.target.closest && e.target.closest('a[href]');
       if (!link) return;
@@ -631,6 +641,21 @@ function showBody(full) {
     doc.addEventListener('mousedown', hideMenu);
   });
   $('#m-body').replaceChildren(frame);
+}
+
+/**
+ * Newsletters and receipts are often laid out at a fixed 600-700 px, wider than the reader.
+ * Instead of cutting them off with a sideways scroll bar, scale the email down to fit, as
+ * Apple Mail and Outlook do. CSS `zoom` changes the layout size, so the scroll bar goes away.
+ */
+function fitToFrame(frame) {
+  const doc = frame.contentDocument;
+  if (!doc || !doc.body) return;
+  doc.body.style.zoom = '';
+  const wide = doc.documentElement.scrollWidth;
+  const room = doc.documentElement.clientWidth;
+  // One pixel to spare, so rounding can't leave a scroll bar behind.
+  if (wide > room) doc.body.style.zoom = String(Math.max(MIN_EMAIL_ZOOM, (room - 1) / wide));
 }
 
 /**

@@ -204,6 +204,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] Open an unread message, click **Mark as unread** (or `Shift+U`), open another one: the first stays unread, in Gmail web too
 - [ ] Right-click a row: Mark as read/unread and the folder's actions, in English; Archive from there leaves the open message open
 - [ ] Right-click a link in an email: Open link, Copy link; select text and right-click: Copy
+- [ ] A wide newsletter or receipt (Steam, a shop) fits the reader with no sideways scroll bar, and refits when the window is resized
 - [ ] Links in an email open in the default browser
 - [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
 - [ ] An account with no unread mail still syncs

@@ -41,6 +41,8 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 - `srcdoc` frames inherit the page's CSP (`tauri.conf.json`): images from `https:`/`http:`/`data:` are allowed and inline styles too. Tauri is told not to add nonces to `style-src` (`dangerousDisableAssetCspModification`), because a nonce would switch off `'unsafe-inline'`.
 - The frame background is always white: emails assume white, even in dark mode.
 - Some emails set `overflow: hidden` on `html` or `body`, which would make them impossible to scroll. The frame CSS forces `:root { overflow: auto !important }` and `:root > body { overflow: visible !important }`. `:root` outranks the emails' `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
+- **Wide emails are scaled to fit.** Newsletters and receipts are often laid out at a fixed 600–700 px, wider than the reader at the default window size (about 610 px). Instead of cutting them off with a sideways scroll bar, `fitToFrame` measures the email once the frame has loaded (which waits for its images) and sets CSS `zoom` on its `<body>` to fit, as Apple Mail and Outlook do. It never goes below `MIN_EMAIL_ZOOM` (0.6), so text stays readable; anything wider than that scrolls. A `ResizeObserver` on `#m-body` refits when the window is resized. `zoom` changes the layout size, unlike `transform`, so the scroll bar really goes away, and clicks, link targets and the right-click menu's position stay correct.
+- HTML emails bring their own margins, so the frame adds only 8 px at the sides. Plain text gets 24 px, through `pre.plain`'s padding.
 
 ## Actions
 
