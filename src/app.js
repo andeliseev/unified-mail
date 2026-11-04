@@ -1277,10 +1277,14 @@ function senderName(from) {
   return (from || '').trim() || '(unknown sender)';
 }
 
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' });
-const yearFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'short' });
-const longFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+// Dates are in the app's language, English ("Nov 4"), not the system's, which would mix
+// languages. The clock still follows the system: 15:31 or 3:31 PM.
+const hourCycle = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hourCycle;
+const timeFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hourCycle });
+const dayFormat = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' });
+// Month names rather than 11/4/24, which reads differently in different countries.
+const yearFormat = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+const longFormat = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', hourCycle });
 
 function shortDate(ms) {
   const date = new Date(ms);

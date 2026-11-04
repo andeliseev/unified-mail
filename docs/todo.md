@@ -45,7 +45,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] **Tray icon**: keep running in the background when the window is closed
 - [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)
 - [ ] Star, move to label
-- [ ] **App language** setting (e.g. Russian). The UI is English only. Dates and times already follow the system's regional format (`Intl` with the default locale), and text fields keep the system's own right-click menu, so on a Russian system those show in Russian
+- [ ] **App language** setting (e.g. Russian). The UI is English only. Dates are English too ("Nov 4"), with the system's clock style (24-hour or AM/PM); with a language setting they'd follow the chosen language. Text fields keep the system's own right-click menu, so on a Russian system that shows in Russian
 - [ ] Search (Gmail `q=` query)
 - [ ] Reply / compose / send (Gmail API `messages.send`)
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of two lists

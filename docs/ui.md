@@ -20,6 +20,8 @@ The sidebar lists the folders, then the accounts. The two combine: "Trash · wor
 
 Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their parts from `state`, using a `DocumentFragment` for the list. That's fast at this size (a few hundred rows). Untrusted text (sender, subject, snippet) is always set with `textContent`, never `innerHTML`. Each account gets a color from `PALETTE` by its position in the account list; the color is used for the row stripe, sidebar dot and chip.
 
+Dates are formatted in English (`en-US`), like the rest of the UI. The system's locale would mix in its language ("4 нояб."). The clock follows the system's hour cycle, 24-hour or AM/PM. The list shows a time for today, "Nov 4" for this year and "Nov 4, 2024" for older mail; the reader shows "Nov 4, 2026, 15:31".
+
 ## Reading a message
 
 `select(key)` shows the headers right away from the summary, then calls `get_message`. A sequence counter (`openSeq`) discards answers that arrive after the user has already moved to another message. Once the body is shown, an unread message is marked read (see [Read and unread](#read-and-unread)).
