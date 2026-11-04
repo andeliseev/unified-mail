@@ -30,6 +30,12 @@ const FRAME_CSS = `
   :root { overflow: auto !important; }
   :root > body { overflow: visible !important; }
 `;
+// Added in dark mode: the defaults behind an email that doesn't set its own colors. The
+// background is the color darkenEmail turns white into, so darkened white areas blend in.
+const FRAME_DARK_CSS = `
+  html { background: #1f1f1f; color: #e3e3e3; }
+  a { color: #8ab4f8; }
+`;
 
 // Sidebar folders; `icon` is an SVG path.
 const FOLDERS = {
@@ -120,6 +126,8 @@ const state = {
   builtInClient: false,  // OAuth client compiled into the app; Settings hides that section
   configured: false,
   theme: 'system',       // Settings → Appearance: system, light or dark
+  full: null,            // the open message's body, to show it again with other colors
+  originalColors: false, // dark mode: show the open email in its original light colors
   accounts: [],
   folder: 'inbox',       // folder on screen
   lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
@@ -218,6 +226,16 @@ function bindEvents() {
   $('#toggle-read').addEventListener('click', () => {
     const m = openMessage();
     if (m) setUnread(m, !m.unread);
+  });
+  $('#colors').addEventListener('click', () => {
+    state.originalColors = !state.originalColors;
+    renderActions();
+    if (state.full) showBody(state.full);
+  });
+  // Appearance (or the system) switched between light and dark: redraw the open email.
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    renderActions();
+    if (state.full) showBody(state.full);
   });
   $('#toast-action').addEventListener('click', runUndo);
   $('#update').addEventListener('click', installUpdate);
@@ -574,6 +592,12 @@ function renderActions() {
   const unread = Boolean(m && m.unread);
   $('#toggle-read .label').textContent = unread ? 'Mark as read' : 'Mark as unread';
   $('#toggle-read').title = unread ? 'Mark as read (Shift+I)' : 'Mark as unread (Shift+U)';
+  const original = state.originalColors;
+  $('#colors').hidden = !m || !appIsDark();
+  $('#colors .sun').style.display = original ? 'none' : '';
+  $('#colors .moon').style.display = original ? '' : 'none';
+  $('#colors .label').textContent = original ? 'Dark' : 'Original';
+  $('#colors').title = original ? 'Show this email in dark colors' : "Show this email's original colors";
 }
 
 // ---------- Reading ----------
@@ -583,6 +607,8 @@ async function select(key) {
   if (!m) return;
   state.selected = key;
   state.current = m;
+  state.full = null;
+  state.originalColors = false;  // each email starts dark in dark mode
   markRow(key);
   renderActions();
 
@@ -612,6 +638,7 @@ async function select(key) {
 function clearReader() {
   state.selected = null;
   state.current = null;
+  state.full = null;
   state.openSeq++;
   $('#message').hidden = true;
   $('#reader-empty').hidden = false;
@@ -632,15 +659,24 @@ function showBody(full) {
   else if (full.text) html = `<pre class="plain">${linkify(escapeHtml(decodeBody(full.text)))}</pre>`;
   else html = '<p style="color:#888">(This message has no text.)</p>';
 
+  state.full = full;  // to show it again with other colors (Original / Dark, a theme change)
+  const dark = appIsDark() && !state.originalColors;
   const frame = document.createElement('iframe');
   // allow-same-origin (without allow-scripts) only lets this page attach the link handler.
   frame.setAttribute('sandbox', 'allow-same-origin');
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
-    `<style>${FRAME_CSS}</style></head><body>${html}</body></html>`;
+    `<style>${FRAME_CSS}${dark ? FRAME_DARK_CSS : ''}</style></head><body>${html}</body></html>`;
+  // In dark mode the email stays hidden until its colors are set, so it doesn't flash white.
+  if (appIsDark()) {
+    frame.style.visibility = 'hidden';
+    setTimeout(() => { frame.style.visibility = ''; }, 3000);  // in case setting up never happens
+  }
   // Set the email up as soon as it's parsed. Its `load` waits for every image, and one slow
   // tracking pixel can hold that for 20+ s, leaving the email unfitted and unclickable.
   whenParsed(frame, (doc) => {
+    if (appIsDark()) setEmailColors(doc, dark);
+    frame.style.visibility = '';
     fitToFrame(frame);
     // Images can widen the layout as they arrive. Their `load` events don't bubble, so capture them.
     doc.addEventListener('load', () => scheduleFit(frame), true);
@@ -683,6 +719,111 @@ function scheduleFit(frame) {
     fitToFrame(frame);
   }, 50);
 }
+
+// ---------- Email colors in dark mode ----------
+
+const appIsDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+
+/**
+ * Colors for an email while the app is dark. Emails with their own dark styles keep them;
+ * others are darkened. `dark` false ("Original") shows the email's light design instead.
+ * The frame always reports the app's dark preference, so that means turning the email's
+ * dark rules off.
+ */
+function setEmailColors(doc, dark) {
+  const ownDark = adjustColorSchemeRules(doc, dark);
+  if (dark && !ownDark) darkenEmail(doc);
+}
+
+/**
+ * Finds the email's own dark-mode rules (`prefers-color-scheme` in its CSS and in
+ * `<picture><source media>`) and reports whether it has any. With `keepDark` false they are
+ * rewritten to never match, and its light-only rules to always match. Only the CSS changes.
+ */
+function adjustColorSchemeRules(doc, keepDark) {
+  let found = false;
+  const adjust = (media) => {
+    if (/prefers-color-scheme\s*:\s*dark/i.test(media)) found = true;
+    if (keepDark || !/prefers-color-scheme/i.test(media)) return media;
+    return media.replace(/prefers-color-scheme\s*:\s*dark/gi, 'max-width: 0px')
+      .replace(/prefers-color-scheme\s*:\s*light/gi, 'min-width: 0px');
+  };
+  const walk = (rules) => {
+    for (const rule of rules) {
+      if (rule.media) rule.media.mediaText = adjust(rule.media.mediaText);
+      if (rule.cssRules) walk(rule.cssRules);
+    }
+  };
+  for (const sheet of doc.styleSheets) {
+    try { walk(sheet.cssRules); } catch { /* a stylesheet from another site can't be read */ }
+  }
+  for (const source of doc.querySelectorAll('source[media]')) {
+    source.media = adjust(source.media);
+  }
+  return found;
+}
+
+/**
+ * Recolors an email made for white: light backgrounds and borders turn dark and dark text
+ * turns light, keeping their hues. Saturated mid tones (buttons, banners) and images stay
+ * as they are. Inline !important styles win over the email's own CSS.
+ */
+function darkenEmail(doc) {
+  const view = doc.defaultView;
+  for (const el of [doc.documentElement, doc.body, ...doc.body.querySelectorAll('*')]) {
+    const style = view.getComputedStyle(el);
+    const background = darkerColor(style.backgroundColor);
+    if (background) el.style.setProperty('background-color', background, 'important');
+    const text = lighterColor(style.color);
+    if (text) el.style.setProperty('color', text, 'important');
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      if (style.getPropertyValue(`border-${side}-style`) === 'none') continue;
+      const border = darkerColor(style.getPropertyValue(`border-${side}-color`));
+      if (border) el.style.setProperty(`border-${side}-color`, border, 'important');
+    }
+  }
+}
+
+// Whether a color counts as light or dark goes by its perceived brightness (luminance), not
+// HSL lightness: saturated blues like #1a73e8 have 50% lightness but read as dark and strong.
+
+/** A light color (background, border) made dark, or null if it isn't light. */
+function darkerColor(css) {
+  const c = toHsl(css);
+  if (!c || c.a === 0 || c.luminance < 0.4) return null;
+  // White becomes 12% lightness, like the frame's dark background; pale tints get muted.
+  return hsla(c.h, c.s * 0.6, 0.12 + (1 - c.l) * 0.5, c.a);
+}
+
+/** A dark text color made light, or null if it's light already (white text on a button). */
+function lighterColor(css) {
+  const c = toHsl(css);
+  if (!c || c.a === 0 || c.luminance >= 0.3) return null;
+  return hsla(c.h, c.s, Math.max(0.92 - c.l * 0.7, 0.6), c.a);
+}
+
+/**
+ * Parses a computed `rgb()`/`rgba()` color into hue (degrees), saturation, lightness, alpha
+ * and relative luminance (0 black to 1 white).
+ */
+function toHsl(css) {
+  const m = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(css || '');
+  if (!m) return null;
+  const [r, g, b] = [m[1], m[2], m[3]].map((v) => v / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h *= 60;
+  }
+  const linear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  return { h, s, l, a: m[4] === undefined ? 1 : Number(m[4]), luminance };
+}
+
+const hsla = (h, s, l, a) => `hsla(${h.toFixed(1)}, ${(s * 100).toFixed(1)}%, ${(l * 100).toFixed(1)}%, ${a})`;
 
 /**
  * Newsletters and receipts are often laid out at a fixed 600-700 px, wider than the reader.

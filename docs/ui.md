@@ -40,7 +40,7 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 - The frame's handlers (clicks, keys, right-click) and the first fit are set up as soon as the email is parsed (`whenParsed`, which polls until the frame's document is the email's `about:srcdoc` one). They don't wait for the frame's `load`, which waits for every image: one slow tracking pixel held it for 20+ s, leaving the email unfitted and its links dead until then. Timers rather than `requestAnimationFrame`, which pauses while the window is minimized.
 - A click handler on the frame's document cancels navigation and sends `http(s)`/`mailto` links to `open_external`, which opens them in the default browser. `<base target="_blank">` makes sure an unhandled link can't navigate the frame.
 - `srcdoc` frames inherit the page's CSP (`tauri.conf.json`): images from `https:`/`http:`/`data:` are allowed and inline styles too. Tauri is told not to add nonces to `style-src` (`dangerousDisableAssetCspModification`), because a nonce would switch off `'unsafe-inline'`.
-- The frame background is always white: emails assume white, even in dark mode.
+- In light mode the frame is white, as emails expect. In dark mode see [Dark mode for emails](#dark-mode-for-emails).
 - Some emails set `overflow: hidden` on `html` or `body`, which would make them impossible to scroll. The frame CSS forces `:root { overflow: auto !important }` and `:root > body { overflow: visible !important }`. `:root` outranks the emails' `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
 - **Wide emails are scaled to fit.** Newsletters and receipts are often laid out at a fixed 600–700 px, wider than the reader at the default window size (about 610 px). Instead of cutting them off with a sideways scroll bar, `fitToFrame` measures the email and sets CSS `zoom` on its `<body>` to fit, as Apple Mail and Outlook do. It never goes below `MIN_EMAIL_ZOOM` (0.6), so text stays readable; anything wider than that scrolls. It runs:
   - once the email is parsed;
@@ -48,6 +48,23 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
   - once more on the frame's `load`;
   - when the window is resized (a `ResizeObserver` on `#m-body`). `zoom` changes the layout size, unlike `transform`, so the scroll bar really goes away, and clicks, link targets and the right-click menu's position stay correct.
 - HTML emails bring their own margins, so the frame adds only 8 px at the sides. Plain text gets 24 px, through `pre.plain`'s padding.
+
+### Dark mode for emails
+
+While the app is dark (`appIsDark()`), emails are shown dark too (`setEmailColors`, run when the email is parsed). The frame stays hidden until its colors are set, so it doesn't flash white:
+
+1. **The email's own dark styles win.** `adjustColorSchemeRules` looks for `prefers-color-scheme: dark` in its CSS and in `<picture><source media>`. If it has any, they apply as written: the frame reports the app's dark preference. The frame adds only dark defaults (`FRAME_DARK_CSS`) behind it.
+2. **Otherwise the email is darkened** (`darkenEmail`). For each element:
+   - light backgrounds and borders turn dark, keeping their hue (white becomes `#1f1f1f`, the frame's dark background);
+   - dark text turns light;
+   - saturated mid tones (buttons, banners) and images stay as they are.
+   
+   "Light" and "dark" go by luminance, not HSL lightness, so a strong blue like `#1a73e8` counts as a color to keep. New values are set inline with `!important`, which beats the email's CSS.
+3. **Original / Dark** (`#colors`, shown only in dark mode) redraws the email in its original light colors and back (`state.originalColors`, reset for each message). The frame can't be told to prefer light, since its `prefers-color-scheme` follows the app whatever its `color-scheme` says. So Original rewrites the email's own rules instead: `prefers-color-scheme: dark` becomes `max-width: 0px` (never) and `light` becomes `min-width: 0px` (always). Only the email's CSS changes, never its text.
+
+A theme change (Appearance, or the system with System) redraws the open email.
+
+Known weak spot: a dark logo on a transparent background (a black wordmark PNG) stays dark on the darkened background. Original is the way out.
 
 ## Actions
 

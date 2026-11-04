@@ -29,6 +29,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [x] Marking read ran in the background, so a sync right after opening could briefly show it unread again. Now it's tracked like moves (`pendingRead`)
 - [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
 - [ ] Inline `cid:` images and attachments aren't shown
+- [ ] Dark mode for emails: dark logos on transparent backgrounds stay hard to see; maybe a light backing behind small transparent images. Original could also be remembered per sender instead of per opened message
+- [ ] Dark mode for emails on macOS (WKWebView) is untested: rewriting the email's media rules and the frame following the app's dark preference
 - [ ] Optional blocking of remote images (tracking pixels), with a "Load images" button
 - [ ] Remember window size and position
 

@@ -228,6 +228,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .msg-head { padding: 12px 24px 14px; border-bottom: 1px solid var(--border); user-select: text; }
 .msg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .tool { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* Original / Dark sits apart from the actions on the message. */
+#colors { margin-left: auto; }
 .tool.danger:hover { color: var(--danger); border-color: var(--danger); }
 #m-subject { font-size: 19px; margin: 0 0 10px; line-height: 1.3; overflow-wrap: anywhere; }
 .meta { display: flex; flex-direction: column; gap: 3px; }

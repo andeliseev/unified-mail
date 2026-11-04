@@ -6,7 +6,7 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - **New mail appears within seconds**, with no need to refresh, and a **notification** tells you about it when the app is in the background
 - The **unread count** shows on the app's taskbar / Dock icon
 - **Updates itself:** when a new version is out, Settings shows an **Update** button, and one click installs it
-- Light or dark look, or follow the system (Settings → Appearance)
+- Light or dark look, or follow the system (Settings → Appearance). In dark mode emails are dark too, with one click back to their original colors
 - **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
 - **Mark as unread** to come back to a message later
 - Right-click a message for its actions
