@@ -1,4 +1,4 @@
-# Unified Mail
+# <img src="app-icon.svg" width="36" height="36" align="top" alt=""> Unified Mail
 
 A small, fast desktop email app for Gmail on Windows and macOS: one inbox for all your Gmail accounts.
 
@@ -12,6 +12,11 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - Right-click a message for its actions
 - Older mail loads as you scroll
 - The installer is about 1.5 MB, and the app starts instantly
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/screenshot-dark.png">
+  <img src="docs/images/screenshot-light.png" alt="Unified Mail with two accounts in one inbox and a message open">
+</picture>
 
 ## Download
 
