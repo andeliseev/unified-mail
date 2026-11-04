@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.1.9 (2026-11-04)
+
 - In dark mode, emails are dark too, instead of a bright white block. Emails with their own dark design use it; others are darkened, keeping images and colored buttons. **Original** next to Archive / Delete shows an email in its original light colors.
 
 ## 0.1.8 (2026-11-04)
