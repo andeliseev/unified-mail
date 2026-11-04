@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.1.11 (2026-11-04)
+
 - Keyboard shortcuts (J, K, E, #, Z, Shift+U, Shift+I) work with any keyboard layout, such as Russian, without switching to English first.
 - The Delete button's tooltip names the Delete key instead of #. Both still delete.
 - A new app icon: a white envelope on the blue tile. The website uses it too.
