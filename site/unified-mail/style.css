@@ -34,7 +34,7 @@ main {
 h1 { font-size: 32px; line-height: 1.2; margin: 0 0 6px; }
 h2 { font-size: 20px; margin: 36px 0 8px; }
 .title { display: flex; align-items: center; gap: 12px; }
-.title svg { width: 40px; height: 40px; flex: none; }
+.title img { width: 40px; height: 40px; flex: none; }
 .lead { font-size: 18px; }
 .muted { color: var(--muted); }
 .crumb { margin: 0 0 24px; font-size: 14px; }
