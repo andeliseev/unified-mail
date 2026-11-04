@@ -180,6 +180,18 @@ It asks for a password, then writes the private key to `~/.tauri/unified-mail.ke
 3. Start the test app with an extra config: `npm run dev -- --config <file>`, where the file sets `plugins.updater` to the test key's `pubkey`, `endpoints: ["http://127.0.0.1:<port>/latest.json"]` and `dangerousInsecureTransportProtocol: true`.
 4. A file with a bad signature, or one signed with another key, must be refused with an error toast.
 
+## App icon
+
+The icon is drawn in [`app-icon.svg`](../app-icon.svg): a blue tile whose white flap is masked inside a thin blue rim, so the tile's edge stays unbroken on light taskbars. The same drawing is the sidebar logo in `src/index.html` and the website's `favicon.svg` (also its heading logo). Change all three together.
+
+To regenerate the app's icon files after changing it:
+
+```bash
+npx tauri icon app-icon.svg -o <a temp folder>
+```
+
+Then copy only the files `src-tauri/icons/` already has: `32x32.png`, `64x64.png`, `128x128.png`, `128x128@2x.png`, `icon.png`, `icon.ico` and `icon.icns`. The tool also makes Android, iOS and Windows Store icons, which this app doesn't use.
+
 ## Website (home page and privacy policy)
 
 Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io), which gets only the `site/` folder's history.

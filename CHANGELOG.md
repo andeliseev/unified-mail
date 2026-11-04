@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- A new app icon: the blue tile is the envelope, with its flap folded down. The website uses it too.
+
 ## 0.1.7 (2026-11-03)
 
 - Wide emails fit the reading pane as soon as they open. Before, an email with a slow image could stay cut off, with a sideways scroll bar and links that didn't work, for 20 seconds or more.
