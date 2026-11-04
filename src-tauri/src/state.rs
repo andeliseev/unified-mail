@@ -144,6 +144,9 @@ pub struct Trashed {
 pub struct AccountError {
     pub account: String,
     pub message: String,
+    /// Google no longer accepts the account's sign-in: the UI offers Reconnect instead of
+    /// showing `message`.
+    pub expired: bool,
 }
 
 struct AccessToken {
@@ -159,6 +162,9 @@ pub struct AppState {
     accounts: Mutex<Vec<String>>,
     settings: Mutex<Settings>,
     tokens: Mutex<HashMap<String, AccessToken>>,
+    /// Accounts whose sign-in Google rejected (or whose keychain entry is gone), until they
+    /// sign in again.
+    expired: Mutex<HashSet<String>>,
     /// Current contents of each folder, for every account.
     cache: Mutex<HashMap<Folder, FolderCache>>,
     /// Messages whose metadata failed to load and were already reported (`account/id`).
@@ -193,6 +199,7 @@ impl AppState {
             accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
             settings: Mutex::new(read_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
+            expired: Mutex::new(HashSet::new()),
             cache: Mutex::new(cache),
             reported_failures: Mutex::new(HashSet::new()),
             dir,
@@ -225,16 +232,32 @@ impl AppState {
     /// Runs the browser sign-in and returns the account's email address.
     /// Signing in to an existing account again just replaces its token.
     pub async fn add_account(&self) -> Result<String, String> {
+        self.sign_in(None).await
+    }
+
+    /// Signs in to `account` again after its sign-in expired, with Google's chooser preselecting
+    /// it. Choosing a different account there changes nothing.
+    pub async fn reconnect(&self, account: &str) -> Result<String, String> {
+        self.sign_in(Some(account)).await
+    }
+
+    async fn sign_in(&self, expected: Option<&str>) -> Result<String, String> {
         let creds = self.creds()?;
-        let tokens = oauth::authorize(&self.http, &creds).await?;
+        let tokens = oauth::authorize(&self.http, &creds, expected).await?;
         let refresh_token = tokens
             .refresh_token
             .ok_or("Google did not return a refresh token. Try adding the account again.")?;
         let email = gmail::profile_email(&self.http, &tokens.access_token).await?;
+        if let Some(expected) = expected.filter(|expected| !expected.eq_ignore_ascii_case(&email)) {
+            return Err(format!(
+                "You signed in to {email}, not {expected}. To reconnect {expected}, choose it in Google's sign-in."
+            ));
+        }
         keyring_entry(&email)?
             .set_password(&refresh_token)
             .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
         self.store_token(&email, tokens.access_token, tokens.expires_in);
+        self.expired.lock().unwrap().remove(&email);
 
         let accounts = {
             let mut accounts = self.accounts.lock().unwrap();
@@ -256,6 +279,7 @@ impl AppState {
             let _ = entry.delete_credential();
         }
         self.tokens.lock().unwrap().remove(email);
+        self.expired.lock().unwrap().remove(email);
         let accounts = {
             let mut accounts = self.accounts.lock().unwrap();
             accounts.retain(|a| a != email);
@@ -277,6 +301,7 @@ impl AppState {
     pub async fn refresh(&self, folder: Folder) -> FolderResult {
         let accounts = self.accounts.lock().unwrap().clone();
         let results = join_all(accounts.iter().map(|a| self.sync_account(a, folder, None))).await;
+        let expired = self.expired.lock().unwrap().clone();
 
         let mut errors = Vec::new();
         let mut more = HashMap::new();
@@ -291,10 +316,14 @@ impl AppState {
                         cache.retain(|_, m| &m.account != account);
                         cache.extend(page.messages.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
                         if let Some(message) = page.warning {
-                            errors.push(AccountError { account: account.clone(), message });
+                            errors.push(AccountError { account: account.clone(), message, expired: false });
                         }
                     }
-                    Err(message) => errors.push(AccountError { account: account.clone(), message }),
+                    Err(message) => errors.push(AccountError {
+                        account: account.clone(),
+                        message,
+                        expired: expired.contains(account),
+                    }),
                 }
             }
             sorted(cache)
@@ -482,18 +511,23 @@ impl AppState {
             return Ok(token);
         }
         let creds = self.creds()?;
-        let refresh_token = keyring_entry(account)?
-            .get_password()
-            .map_err(|_| format!("No saved sign-in for {account}. Use \"Add account\" to sign in again."))?;
-        let tokens = oauth::refresh(&self.http, &creds, &refresh_token).await.map_err(|e| {
-            if e == oauth::EXPIRED {
-                format!("Sign-in for {account} has expired. Use \"Add account\" to sign in again.")
-            } else {
-                e
-            }
-        })?;
+        let Ok(refresh_token) = keyring_entry(account)?.get_password() else {
+            return Err(self.mark_expired(account, "There's no saved sign-in for"));
+        };
+        let tokens = match oauth::refresh(&self.http, &creds, &refresh_token).await {
+            Ok(tokens) => tokens,
+            Err(e) if e == oauth::EXPIRED => return Err(self.mark_expired(account, "The sign-in has expired for")),
+            Err(e) => return Err(e),
+        };
+        self.expired.lock().unwrap().remove(account);
         self.store_token(account, tokens.access_token.clone(), tokens.expires_in);
         Ok(tokens.access_token)
+    }
+
+    /// Remembers that `account` needs signing in again, and returns the error to show for it.
+    fn mark_expired(&self, account: &str, problem: &str) -> String {
+        self.expired.lock().unwrap().insert(account.to_string());
+        format!("{problem} {account}. Click Reconnect above the message list to sign in again.")
     }
 
     fn store_token(&self, account: &str, value: String, expires_in: u64) {

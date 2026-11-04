@@ -46,9 +46,10 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `get_setup` | | `{ builtInClient, clientId, accounts }` |
 | `save_client` | `clientId, clientSecret` | Only used when no client is built in |
 | `add_account` | | Email address; runs the browser sign-in and starts push |
+| `reconnect_account` | `email` | Email address; signs in again to an expired account (preselected in Google's chooser), restarts its push. Fails if another account is chosen |
 | `remove_account` | `email` | Stops push, revokes the token, deletes it from the keychain |
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
-| `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account; `more[account]` says whether older mail exists |
+| `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
 | `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
 | `get_message` | `account, id` | Headers plus HTML/text body. It doesn't change the message; the UI then calls `set_unread` |
 | `set_unread` | `account, id, unread` | Marks the message read (on opening, Mark as read) or unread (Mark as unread) |

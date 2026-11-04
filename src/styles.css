@@ -149,6 +149,27 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .list-head h2 { margin: 0; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { display: grid; place-items: center; border: 0; padding: 6px; }
 #refresh.spin svg { animation: spin 0.9s linear infinite; }
+/* Expired sign-ins: a line per account above the message list, in the Update button's orange. */
+#reconnect {
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--hover);
+  background: color-mix(in srgb, var(--update) 10%, var(--panel));
+}
+.reconnect-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 18px; font-size: 13px; }
+.reconnect-row + .reconnect-row { border-top: 1px solid var(--border); }
+.reconnect-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reconnect-row button, #account-list li button.reconnect {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--update);
+  color: var(--update-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.reconnect-row button:hover, #account-list li button.reconnect:hover { background: var(--update); filter: brightness(1.1); }
+.nav-item.expired .count { color: var(--update); font-size: 13px; font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 #messages {

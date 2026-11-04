@@ -18,7 +18,9 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Undo, Trash and All Mail against real Gmail accounts (tested with a mock backend only so far)
 - [ ] Push only watches the Inbox; All Mail and Trash refresh with it, on focus and every 5 min
 - [ ] More folders: Sent, Starred, Spam, user labels
-- [ ] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
+- [x] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
+- [ ] Reconnect against a real expired sign-in (checked with a fake backend only so far). One way: remove the app's access at myaccount.google.com/permissions for a test account
+- [ ] An account whose sign-in expires mid-session shows Reconnect only after the next sync; opening a message from it before that shows the error as a toast
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
 - [x] Older mail loads while scrolling (pages of 50 per account, merged in date order)
 - [ ] Older pages aren't re-synced: something archived elsewhere stays visible there until the folder is reopened or the app restarts

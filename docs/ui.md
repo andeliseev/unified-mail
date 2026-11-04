@@ -172,7 +172,18 @@ Clicking a notification while it's on screen brings the window forward and sends
 - With a built-in client, the OAuth section is hidden. First run shows the empty list with an **Add Gmail account** button.
 - Without one, Settings opens on first run and can't be closed until a client is saved. Pasting the downloaded client JSON into the Client ID field fills both fields.
 - **Remove** on an account asks for a second click to confirm. The app avoids `confirm()` dialogs.
-- **Add account** shows a "finish signing in in your browser" overlay. Cancel only hides the overlay: the backend keeps waiting until its 5-minute timeout, and a sign-in that completes later is still added.
+- **Add account** shows a "finish signing in in your browser" overlay. Cancel only hides the overlay: the backend keeps waiting until its 5-minute timeout, and a sign-in that completes later is still added. **Reconnect** works the same way (`signIn(account)`).
+- An account whose sign-in expired also has a **Reconnect** button next to Remove (see [Expired sign-ins](#expired-sign-ins)).
+
+### Expired sign-ins
+
+When Google stops accepting an account's sign-in (revoked access, a changed password, or a Testing project's 7-day limit), syncs report it with `expired: true` (see [auth.md](auth.md#tokens)). Each sync covers every account, so `state.expired` is replaced with that sync's list. For each expired account:
+
+- a line above the message list (`#reconnect`, `renderReconnect`), in the Update button's orange: "Sign-in expired for X" and a **Reconnect** button;
+- "!" in place of its unread count in the sidebar, with a tooltip saying why;
+- **Reconnect** next to Remove in Settings.
+
+Reconnect opens Google's sign-in with the account preselected (`reconnect_account`). On success the line goes away, push restarts with the new token, and the folders sync. Expired accounts no longer get the error toast after every sync; other sync problems still do.
 - **Updates:** `checkForUpdate` runs 10 s after launch (after the first sync), every 6 hours (`UPDATE_CHECK_MS`), and every time Settings opens, so a release published while the app is open shows up there. When a newer version exists:
   - an orange **Update to X** button (`--update`) appears next to the version, and the sidebar's Settings button gets an orange dot;
   - clicking the button shows "Updating…" and runs `install_update`; a failure shows a toast, brings the button back and checks again;

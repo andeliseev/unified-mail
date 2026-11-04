@@ -34,11 +34,24 @@ fn save_client(state: State<'_, AppState>, client_id: String, client_secret: Str
 #[tauri::command]
 async fn add_account(window: WebviewWindow, state: State<'_, AppState>) -> Result<String, String> {
     let email = state.add_account().await?;
-    idle::start(window.app_handle(), &email);
-    // Sign-in happened in the browser; bring the app back.
+    signed_in(&window, &email);
+    Ok(email)
+}
+
+/// Signs in again to an account whose sign-in expired, with that account preselected.
+#[tauri::command]
+async fn reconnect_account(window: WebviewWindow, state: State<'_, AppState>, email: String) -> Result<String, String> {
+    let email = state.reconnect(&email).await?;
+    signed_in(&window, &email);
+    Ok(email)
+}
+
+/// After a sign-in: (re)starts push for the account with its new token, and brings the app
+/// back, since sign-in happened in the browser.
+fn signed_in(window: &WebviewWindow, email: &str) {
+    idle::start(window.app_handle(), email);
     let _ = window.unminimize();
     let _ = window.set_focus();
-    Ok(email)
 }
 
 #[tauri::command]
@@ -242,6 +255,7 @@ fn main() {
             get_setup,
             save_client,
             add_account,
+            reconnect_account,
             remove_account,
             cached_folder,
             refresh_folder,

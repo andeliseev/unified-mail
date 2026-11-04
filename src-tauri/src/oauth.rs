@@ -40,29 +40,30 @@ fn default_expiry() -> u64 {
 }
 
 /// Opens Google sign-in in the system browser and waits for the redirect back to us.
-pub async fn authorize(http: &reqwest::Client, creds: &ClientCreds) -> Result<Tokens, String> {
+/// `login_hint` (an email address) preselects that account, for reconnecting it.
+pub async fn authorize(http: &reqwest::Client, creds: &ClientCreds, login_hint: Option<&str>) -> Result<Tokens, String> {
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(err)?;
     let redirect_uri = format!("http://127.0.0.1:{}", listener.local_addr().map_err(err)?.port());
     let verifier = random_token(48);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_token(16);
 
-    let auth_url = Url::parse_with_params(
-        AUTH_URL,
-        &[
-            ("client_id", creds.client_id.as_str()),
-            ("redirect_uri", redirect_uri.as_str()),
-            ("response_type", "code"),
-            ("scope", SCOPE),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", state.as_str()),
-            ("access_type", "offline"),
-            // Always show the account chooser and always return a refresh token.
-            ("prompt", "select_account consent"),
-        ],
-    )
-    .map_err(err)?;
+    let mut params = vec![
+        ("client_id", creds.client_id.as_str()),
+        ("redirect_uri", redirect_uri.as_str()),
+        ("response_type", "code"),
+        ("scope", SCOPE),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+        ("state", state.as_str()),
+        ("access_type", "offline"),
+        // Always show the account chooser and always return a refresh token.
+        ("prompt", "select_account consent"),
+    ];
+    if let Some(email) = login_hint {
+        params.push(("login_hint", email));
+    }
+    let auth_url = Url::parse_with_params(AUTH_URL, &params).map_err(err)?;
     open::that_detached(auth_url.as_str()).map_err(|e| format!("Could not open the browser: {e}"))?;
 
     let code = timeout(SIGN_IN_TIMEOUT, wait_for_code(&listener, &state))

@@ -129,6 +129,7 @@ const state = {
   full: null,            // the open message's body, to show it again with other colors
   originalColors: false, // dark mode: show the open email in its original light colors
   accounts: [],
+  expired: new Set(),    // accounts whose sign-in Google no longer accepts: they offer Reconnect
   folder: 'inbox',       // folder on screen
   lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
   loaded: { inbox: false, all: false, trash: false },  // list filled from cache or a sync
@@ -283,11 +284,15 @@ async function refresh() {
     });
     notifyNewMail(results[0]);  // folders[0] is the Inbox
     state.lastSync = Date.now();
+    // Every sync covers every account, so this is the full list of expired sign-ins.
+    const errors = results.flatMap((r) => r.errors);
+    state.expired = new Set(errors.filter((e) => e.expired).map((e) => e.account));
     render();
     setStatus('');
-    // Each folder reports an account's sign-in problem; show it once, and never over Undo.
-    const errors = new Set(results.flatMap((r) => r.errors.map((e) => `${e.account}: ${e.message}`)));
-    if (errors.size && !state.undo) toast([...errors].join('\n'), 8000);
+    // An expired sign-in shows as Reconnect above the list. Other problems come from each
+    // folder synced; show them once, and never over Undo.
+    const messages = new Set(errors.filter((e) => !e.expired).map((e) => `${e.account}: ${e.message}`));
+    if (messages.size && !state.undo) toast([...messages].join('\n'), 8000);
   } catch (e) {
     setStatus('');
     toast(String(e));
@@ -499,6 +504,7 @@ function renderSidebar() {
       label: account,
       color: colorOf(account),
       count: unread.get(account) || 0,
+      expired: state.expired.has(account),
       active: state.filter === account,
       onClick: () => setFilter(account),
     })),
@@ -507,21 +513,40 @@ function renderSidebar() {
   $('#list-title').textContent = title;
   $('#list-title').title = title;
   renderSettingsAccounts();
+  renderReconnect();
   renderBadge([...unread.values()].reduce((a, b) => a + b, 0));
 }
 
-/** A sidebar entry: a folder (`icon`), an account (`color`), or "All accounts" (neither). */
-function navItem({ label, icon, color, count = 0, active, onClick }) {
+/**
+ * A sidebar entry: a folder (`icon`), an account (`color`), or "All accounts" (neither).
+ * An `expired` account shows "!" instead of its count.
+ */
+function navItem({ label, icon, color, count = 0, expired = false, active, onClick }) {
   const button = document.createElement('button');
-  button.className = 'nav-item' + (active ? ' active' : '') + (icon || color ? '' : ' all');
+  button.className = 'nav-item' + (active ? ' active' : '') + (icon || color ? '' : ' all') + (expired ? ' expired' : '');
   button.innerHTML = (icon ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icon}"/></svg>` : '<span class="dot"></span>') +
     '<span class="label"></span><span class="count"></span>';
   if (color) button.style.setProperty('--acc', color);
   button.querySelector('.label').textContent = label;
-  button.querySelector('.count').textContent = count || '';
-  button.title = label;
+  button.querySelector('.count').textContent = expired ? '!' : count || '';
+  button.title = expired ? `${label}: sign-in expired, reconnect it above the message list` : label;
   button.addEventListener('click', onClick);
   return button;
+}
+
+/** One line per expired account above the message list, each with a Reconnect button. */
+function renderReconnect() {
+  const expired = state.accounts.filter((account) => state.expired.has(account));
+  $('#reconnect').hidden = !expired.length;
+  $('#reconnect').replaceChildren(...expired.map((account) => {
+    const row = document.createElement('div');
+    row.className = 'reconnect-row';
+    row.innerHTML = '<span></span><button>Reconnect</button>';
+    row.querySelector('span').textContent = `Sign-in expired for ${account}`;
+    row.querySelector('span').title = account;
+    row.querySelector('button').addEventListener('click', () => signIn(account));
+    return row;
+  }));
 }
 
 function setFilter(account) {
@@ -1147,9 +1172,12 @@ function renderSettingsAccounts() {
   $('#account-list').replaceChildren(...state.accounts.map((account) => {
     const li = document.createElement('li');
     li.style.setProperty('--acc', colorOf(account));
-    li.innerHTML = '<i class="dot"></i><span></span><button>Remove</button>';
+    li.innerHTML = '<i class="dot"></i><span></span><button class="reconnect" hidden>Reconnect</button><button class="remove">Remove</button>';
     li.querySelector('span').textContent = account;
-    const button = li.querySelector('button');
+    const reconnect = li.querySelector('.reconnect');
+    reconnect.hidden = !state.expired.has(account);
+    reconnect.addEventListener('click', () => signIn(account));
+    const button = li.querySelector('.remove');
     button.addEventListener('click', async () => {
       if (!button.classList.contains('confirm')) {
         button.classList.add('confirm');
@@ -1203,15 +1231,27 @@ function pasteClientJson(e) {
   } catch { /* not JSON; paste normally */ }
 }
 
-async function addAccount() {
+function addAccount() {
+  return signIn();
+}
+
+/**
+ * Runs Google's sign-in in the browser: for a new account, or with `reconnect` (an email) to
+ * sign in again to an account whose sign-in expired. That account is preselected in Google's
+ * chooser, and picking another one there changes nothing.
+ */
+async function signIn(reconnect = null) {
   if (!state.configured) { openSettings(); return; }
   const seq = ++state.authSeq;
   $('#waiting').hidden = false;
   try {
-    const email = await invoke('add_account');
+    const email = reconnect
+      ? await invoke('reconnect_account', { email: reconnect })
+      : await invoke('add_account');
     if (!state.accounts.includes(email)) state.accounts.push(email);
+    state.expired.delete(email);
     render();
-    toast(`Added ${email}`, 2500);
+    toast(`${reconnect ? 'Reconnected' : 'Added'} ${email}`, 2500);
     if (seq === state.authSeq) $('#settings').hidden = true;
     refresh();
   } catch (e) {

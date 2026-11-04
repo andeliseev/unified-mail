@@ -12,7 +12,7 @@ This is Google's [OAuth for installed apps](https://developers.google.com/identi
 6. Call Gmail `users/me/profile` to learn the account's email address.
 7. Save the refresh token in the OS keychain and the email in `accounts.json`, then start push for the account.
 
-Signing in again to an account that's already added just replaces its token. That's also how an expired sign-in is fixed.
+Signing in again to an account that's already added just replaces its token. That's also how an expired sign-in is fixed: **Reconnect** (`reconnect_account`) runs the same sign-in with `login_hint` set to the account, so Google's chooser preselects it. If a different account is chosen there anyway, nothing is saved and the user is told which account to pick.
 
 ## Built-in client (`build.rs`)
 
@@ -33,7 +33,7 @@ The app requests one scope, `https://mail.google.com/`, because it's the only sc
 
 - The **access token** is cached in memory per account and treated as expired 60 s before Google's `expires_in`. When it expires, it's refreshed with the refresh token from the keychain.
 - The **refresh token** lives in the keychain (`keyring` crate: Windows Credential Manager, macOS Keychain).
-- If Google answers a refresh with `invalid_grant`, the user sees: *"Sign-in for X has expired. Use "Add account" to sign in again."*
+- If Google answers a refresh with `invalid_grant`, or the keychain has no token for the account, the account is marked expired (`AppState.expired`) until it signs in again. Syncs report it with `expired: true`, and the UI shows a **Reconnect** line above the message list instead of an error toast (see [ui.md](ui.md#expired-sign-ins)). Other commands for that account fail with *"The sign-in has expired for X. Click Reconnect above the message list to sign in again."* While a Google project is in Testing, its refresh tokens expire after 7 days, so this comes up weekly.
 - A failed IMAP login drops the cached access token, so the next attempt fetches a fresh one.
 - Removing an account revokes the token at `oauth2.googleapis.com/revoke` (best effort, in the background) and deletes it from the keychain.
 
