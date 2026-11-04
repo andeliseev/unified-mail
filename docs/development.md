@@ -182,7 +182,7 @@ It asks for a password, then writes the private key to `~/.tauri/unified-mail.ke
 
 ## App icon
 
-The icon is drawn in [`app-icon.svg`](../app-icon.svg): a blue tile whose white flap is masked inside a thin blue rim, so the tile's edge stays unbroken on light taskbars. The same drawing is the sidebar logo in `src/index.html` and the website's `favicon.svg` (also its heading logo). Change all three together.
+The icon is drawn in [`app-icon.svg`](../app-icon.svg): a white envelope outline with rounded corners on a blue tile, with a wide blue rim around it. The flap starts on the sides where the corners end. Google's review of the sign-in screen's branding turned down the earlier icon, a bare flap on the tile, as not identifying the app. The same drawing is the sidebar logo in `src/index.html` and the website's `favicon.svg` (also its heading logo). Change all three together, and the sidebar logo in the README screenshots (`docs/images/`).
 
 To regenerate the app's icon files after changing it:
 
