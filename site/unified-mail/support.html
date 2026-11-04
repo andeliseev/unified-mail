@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Support · Unified Mail</title>
+  <meta name="description" content="Ways to support the development of Unified Mail, a free and open-source email app for Gmail.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <p class="crumb"><a href="./">Unified Mail</a></p>
+    <h1>Support Unified Mail</h1>
+
+    <h2>Crypto</h2>
+    <ul class="wallets">
+      <li><span><b>USDT</b> (TRC-20)</span> <code>TWnVxMwiCTayRkiycaXzFMuGw2JtRAemT1</code> <button type="button" class="copy" title="Copy address" aria-label="Copy address"></button></li>
+      <li><span><b>USDT</b> (ERC-20)</span> <code>0x8452f02ab70b9c4a12f392d06524ae0d979f8d28</code> <button type="button" class="copy" title="Copy address" aria-label="Copy address"></button></li>
+      <li><span><b>GRAM</b></span> <code>UQAPUJlvS6PKUFzdhAJsEgw4s9QzDyx1w1AfmovcHXr7_GBL</code> <button type="button" class="copy" title="Copy address" aria-label="Copy address"></button></li>
+      <li><span><b>Bitcoin</b></span> <code>1PsNk1cx6AGeLye4ChQ7tfisPpZrprf4zs</code> <button type="button" class="copy" title="Copy address" aria-label="Copy address"></button></li>
+    </ul>
+
+    <p class="muted">Contact: <a href="mailto:andeliseev@gmail.com">andeliseev@gmail.com</a> · <a href="./">Home</a> · <a href="privacy.html">Privacy Policy</a></p>
+  </main>
+  <script>
+    // Copy buttons copy the address on their row and show a check mark for a moment.
+    // Where the clipboard API is blocked, the older copy command copies the selected address;
+    // if that fails too, the address stays selected, ready for Ctrl+C.
+    for (const button of document.querySelectorAll('.copy')) {
+      button.addEventListener('click', async () => {
+        const address = button.parentElement.querySelector('code');
+        let copied;
+        try {
+          await navigator.clipboard.writeText(address.textContent);
+          copied = true;
+        } catch {
+          getSelection().selectAllChildren(address);
+          copied = document.execCommand('copy');
+        }
+        if (!copied) return;
+        button.classList.add('done');
+        button.title = 'Copied';
+        button.setAttribute('aria-label', 'Copied');
+        clearTimeout(button.timer);
+        button.timer = setTimeout(() => {
+          button.classList.remove('done');
+          button.title = 'Copy address';
+          button.setAttribute('aria-label', 'Copy address');
+        }, 1500);
+      });
+    }
+  </script>
+</body>
+</html>

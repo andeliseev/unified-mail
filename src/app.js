@@ -983,6 +983,21 @@ function scrollMessage(direction) {
   if (frame && frame.contentWindow) frame.contentWindow.scrollBy({ top: direction * frame.clientHeight * 0.9 });
 }
 
+/**
+ * The key a shortcut sees. With a Latin layout it's the character typed, so Dvorak and AZERTY users
+ * get their own J, K, E. With any other layout (Russian, Greek…) the letters and Shift+3 count as
+ * the key in the same place on an English keyboard: Russian `о` is J, `№` is #.
+ */
+function shortcutKey(e) {
+  if (/^[a-z#]$/i.test(e.key)) return e.key;
+  if (/^Key[A-Z]$/.test(e.code)) {
+    const letter = e.code.slice(3);
+    return e.shiftKey ? letter : letter.toLowerCase();
+  }
+  if (e.code === 'Digit3' && e.shiftKey) return '#';
+  return e.key;
+}
+
 /** `inMessage`: the key was pressed inside the email frame, which scrolls itself. */
 function onKey(e, inMessage = false) {
   if (!$('#menu').hidden) {
@@ -995,7 +1010,8 @@ function onKey(e, inMessage = false) {
     return;
   }
   if (e.target.closest && e.target.closest('input, textarea')) return;
-  switch (e.key) {
+  const key = shortcutKey(e);
+  switch (key) {
     case 'j': move(1); break;
     case 'k': move(-1); break;
     case 'ArrowDown': case 'ArrowUp':
@@ -1011,7 +1027,7 @@ function onKey(e, inMessage = false) {
     case 'u': case 'U': case 'i': case 'I': {  // Shift+U / Shift+I, as in Gmail
       if (!e.shiftKey) return;
       const m = openMessage();
-      if (m) setUnread(m, e.key.toLowerCase() === 'u');
+      if (m) setUnread(m, key.toLowerCase() === 'u');
       break;
     }
     case 'z': runUndo(); break;

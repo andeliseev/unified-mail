@@ -41,6 +41,44 @@ h2 { font-size: 20px; margin: 36px 0 8px; }
 a { color: var(--accent); }
 ul { padding-left: 22px; }
 li { margin: 4px 0; }
+/* Wallets: name, address and copy icon on one line, the addresses lined up. */
+.wallets { list-style: none; padding-left: 0; }
+.wallets li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 8px; }
+.wallets li > span { min-width: 8.5em; margin-right: 4px; }
+/* As wide as the longest address (TON's 48 characters), so the copy icons line up. */
+.wallets code { min-width: 48ch; user-select: all; }
+/* Copy button: an icon drawn in the text color through a mask, a check mark once copied. */
+.copy {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='8' y='8' width='12' height='12' rx='2'/%3E%3Cpath d='M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2'/%3E%3C/svg%3E");
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.copy::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+.copy:hover { color: var(--accent); background: var(--code); }
+.copy.done {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E");
+  color: var(--accent);
+}
+/* Phones: the name on top, the address and copy icon under it. */
+@media (max-width: 640px) {
+  .wallets li > span { flex-basis: 100%; }
+  .wallets code { flex: 1; min-width: 0; }
+}
 code {
   font: 14px ui-monospace, Consolas, monospace;
   background: var(--code);

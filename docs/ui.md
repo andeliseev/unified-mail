@@ -141,6 +141,10 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 | `Z` | Undo the last action, while its toast shows |
 | `Esc` | Close Settings or the right-click menu |
 
+The Delete button's tooltip names `Del`, which everyone has; `#` is Gmail's key for it, kept for Gmail habits.
+
+Shortcuts work in any keyboard layout (`shortcutKey`). With a Latin layout they go by the character typed (`e.key`), so Dvorak and AZERTY users get their own `J`, `K`, `E`. With any other layout, such as Russian, the letters type something else (`J` is `о`), so they go by the key's position (`e.code`, `KeyJ`), and `Shift+3` (Russian `№`) counts as `#`.
+
 The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
 ## Notifications and the icon badge
@@ -175,5 +179,5 @@ Clicking a notification while it's on screen brings the window forward and sends
   - check failures (offline, nothing released yet, the test app's empty endpoint list) stay quiet.
 - At the bottom (`#about`), three lines:
   - the app's version, from Tauri's `getVersion()` (the version in `tauri.conf.json`, which the Release workflow sets), with the update controls;
-  - links to GitHub, Releases, the website and the privacy policy, opened in the browser like the other `data-href` links;
+  - links to GitHub, Releases, the website, the privacy policy and the Support page, opened in the browser like the other `data-href` links;
   - the copyright line from `LICENSE`.

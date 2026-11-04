@@ -4,6 +4,9 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Keyboard shortcuts (J, K, E, #, Z, Shift+U, Shift+I) work with any keyboard layout, such as Russian, without switching to English first.
+- The Delete button's tooltip names the Delete key instead of #. Both still delete.
+
 ## 0.1.10 (2026-11-04)
 
 - Dates are in English like the rest of the app ("Nov 4"), instead of in your system's language. Times keep your system's clock style: 24-hour or AM/PM.
