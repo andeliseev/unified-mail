@@ -1,6 +1,7 @@
-//! Accounts, tokens and the per-folder message caches.
+//! Accounts, tokens and the per-folder message caches. What depends on an account's mail
+//! service (Gmail) goes through its `Mailbox` (see `provider.rs`).
 //!
-//! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (emails),
+//! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (accounts),
 //! `settings.json` (appearance), `<folder>-cache.json` (last snapshot of each folder).
 //! Refresh tokens live in the OS keychain.
 
@@ -10,20 +11,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-use futures_util::{future::join_all, stream, StreamExt};
+use futures_util::future::join_all;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::gmail::{self, FullMessage, MessageSummary};
+use crate::gmail;
 use crate::oauth;
+use crate::provider::{Account, Folder, FullMessage, Mailbox, MessageSummary, Provider};
 
 const KEYRING_SERVICE: &str = "unified-mail";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
 const SETTINGS_FILE: &str = "settings.json";
-/// Newest messages shown per account in each folder.
-const PAGE_SIZE: u32 = 50;
-/// Parallel metadata requests per account (Gmail allows ~50/s per user).
-const FETCH_CONCURRENCY: usize = 8;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,43 +68,11 @@ struct Settings {
     theme: Theme,
 }
 
-/// A mail list the app shows, unified across accounts.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum Folder {
-    Inbox,
-    /// Gmail's All Mail: everything outside Spam and Trash, which is what an unfiltered list returns.
-    All,
-    Trash,
-}
-
-impl Folder {
-    const EVERY: [Folder; 3] = [Folder::Inbox, Folder::All, Folder::Trash];
-
-    /// Labels a message must carry to be in this folder.
-    fn labels(self) -> &'static [&'static str] {
-        match self {
-            Folder::Inbox => &["INBOX"],
-            Folder::All => &[],
-            Folder::Trash => &["TRASH"],
-        }
-    }
-
-    /// Labels of this folder's unread messages.
-    fn unread_labels(self) -> &'static [&'static str] {
-        match self {
-            Folder::Inbox => &["INBOX", "UNREAD"],
-            Folder::All => &["UNREAD"],
-            Folder::Trash => &["TRASH", "UNREAD"],
-        }
-    }
-
-    fn cache_file(self) -> &'static str {
-        match self {
-            Folder::Inbox => "inbox-cache.json",
-            Folder::All => "all-cache.json",
-            Folder::Trash => "trash-cache.json",
-        }
+fn cache_file(folder: Folder) -> &'static str {
+    match folder {
+        Folder::Inbox => "inbox-cache.json",
+        Folder::All => "all-cache.json",
+        Folder::Trash => "trash-cache.json",
     }
 }
 
@@ -159,7 +125,7 @@ pub struct AppState {
     http: reqwest::Client,
     dir: PathBuf,
     creds: Mutex<Option<ClientCreds>>,
-    accounts: Mutex<Vec<String>>,
+    accounts: Mutex<Vec<Account>>,
     settings: Mutex<Settings>,
     tokens: Mutex<HashMap<String, AccessToken>>,
     /// Accounts whose sign-in Google rejected (or whose keychain entry is gone), until they
@@ -185,7 +151,7 @@ impl AppState {
         let cache = Folder::EVERY
             .into_iter()
             .map(|folder| {
-                let cached: Vec<MessageSummary> = read_json(&dir.join(folder.cache_file())).unwrap_or_default();
+                let cached: Vec<MessageSummary> = read_json(&dir.join(cache_file(folder))).unwrap_or_default();
                 (folder, cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect())
             })
             .collect();
@@ -196,7 +162,7 @@ impl AppState {
                 .build()
                 .expect("failed to build HTTP client"),
             creds: Mutex::new(read_json(&dir.join(CLIENT_FILE))),
-            accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
+            accounts: Mutex::new(read_accounts(&dir.join(ACCOUNTS_FILE))),
             settings: Mutex::new(read_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
             expired: Mutex::new(HashSet::new()),
@@ -210,7 +176,7 @@ impl AppState {
         Setup {
             built_in_client: ClientCreds::embedded().is_some(),
             client_id: self.creds.lock().unwrap().as_ref().map(|c| c.client_id.clone()),
-            accounts: self.accounts.lock().unwrap().clone(),
+            accounts: self.emails(),
             theme: self.settings.lock().unwrap().theme,
         }
     }
@@ -229,25 +195,46 @@ impl AppState {
         Ok(())
     }
 
-    /// Runs the browser sign-in and returns the account's email address.
+    /// The added accounts' email addresses, in the order they were added.
+    fn emails(&self) -> Vec<String> {
+        self.accounts.lock().unwrap().iter().map(|a| a.email.clone()).collect()
+    }
+
+    /// The mail service `account` belongs to.
+    pub fn provider(&self, account: &str) -> Result<Provider, String> {
+        self.accounts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.email == account)
+            .map(|a| a.provider)
+            .ok_or_else(|| format!("{account} isn't added to Unified Mail."))
+    }
+
+    /// Runs the browser sign-in for a new Gmail account and returns its email address.
     /// Signing in to an existing account again just replaces its token.
     pub async fn add_account(&self) -> Result<String, String> {
-        self.sign_in(None).await
+        self.sign_in(Provider::Gmail, None).await
     }
 
-    /// Signs in to `account` again after its sign-in expired, with Google's chooser preselecting
+    /// Signs in to `account` again after its sign-in expired, with the sign-in page preselecting
     /// it. Choosing a different account there changes nothing.
     pub async fn reconnect(&self, account: &str) -> Result<String, String> {
-        self.sign_in(Some(account)).await
+        self.sign_in(self.provider(account)?, Some(account)).await
     }
 
-    async fn sign_in(&self, expected: Option<&str>) -> Result<String, String> {
-        let creds = self.creds()?;
-        let tokens = oauth::authorize(&self.http, &creds, expected).await?;
-        let refresh_token = tokens
-            .refresh_token
-            .ok_or("Google did not return a refresh token. Try adding the account again.")?;
-        let email = gmail::profile_email(&self.http, &tokens.access_token).await?;
+    async fn sign_in(&self, provider: Provider, expected: Option<&str>) -> Result<String, String> {
+        let (email, refresh_token, access_token, expires_in) = match provider {
+            Provider::Gmail => {
+                let creds = self.creds()?;
+                let tokens = oauth::authorize(&self.http, &creds, expected).await?;
+                let refresh_token = tokens
+                    .refresh_token
+                    .ok_or("Google did not return a refresh token. Try adding the account again.")?;
+                let email = gmail::profile_email(&self.http, &tokens.access_token).await?;
+                (email, refresh_token, tokens.access_token, tokens.expires_in)
+            }
+        };
         if let Some(expected) = expected.filter(|expected| !expected.eq_ignore_ascii_case(&email)) {
             return Err(format!(
                 "You signed in to {email}, not {expected}. To reconnect {expected}, choose it in Google's sign-in."
@@ -256,13 +243,13 @@ impl AppState {
         keyring_entry(&email)?
             .set_password(&refresh_token)
             .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
-        self.store_token(&email, tokens.access_token, tokens.expires_in);
+        self.store_token(&email, access_token, expires_in);
         self.expired.lock().unwrap().remove(&email);
 
         let accounts = {
             let mut accounts = self.accounts.lock().unwrap();
-            if !accounts.contains(&email) {
-                accounts.push(email.clone());
+            if !accounts.iter().any(|a| a.email == email) {
+                accounts.push(Account { email: email.clone(), provider });
             }
             accounts.clone()
         };
@@ -282,7 +269,7 @@ impl AppState {
         self.expired.lock().unwrap().remove(email);
         let accounts = {
             let mut accounts = self.accounts.lock().unwrap();
-            accounts.retain(|a| a != email);
+            accounts.retain(|a| a.email != email);
             accounts.clone()
         };
         write_json(&self.dir.join(ACCOUNTS_FILE), &accounts)?;
@@ -299,7 +286,7 @@ impl AppState {
     /// Syncs one folder of every account in parallel. An account that fails keeps its
     /// cached messages and is reported in `errors`.
     pub async fn refresh(&self, folder: Folder) -> FolderResult {
-        let accounts = self.accounts.lock().unwrap().clone();
+        let accounts = self.emails();
         let results = join_all(accounts.iter().map(|a| self.sync_account(a, folder, None))).await;
         let expired = self.expired.lock().unwrap().clone();
 
@@ -328,14 +315,13 @@ impl AppState {
             }
             sorted(cache)
         };
-        let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
+        let _ = write_json(&self.dir.join(cache_file(folder)), &messages);
         FolderResult { messages, errors, more }
     }
 
     /// The account's next page of messages older than `before` (ms), for scrolling.
     /// Older pages aren't cached; the caches hold only each folder's newest page.
     pub async fn older(&self, folder: Folder, account: &str, before: i64) -> Result<OlderPage, String> {
-        let q = gmail::before_query(before);
         let inbox_ids = async {
             if folder != Folder::All {
                 return Ok(Vec::new());
@@ -343,25 +329,19 @@ impl AppState {
             let token = self.access_token(account).await?;
             // As with unread: any Inbox message in this page is among the newest PAGE_SIZE
             // Inbox messages before the same date.
-            Ok(gmail::list_ids(&self.http, &token, &["INBOX"], false, Some(&q), PAGE_SIZE).await?.ids)
+            Ok(self.mailbox(account, &token)?.list(Folder::Inbox, Some(before)).await?.ids)
         };
-        let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(&q)), inbox_ids)?;
+        let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(before)), inbox_ids)?;
         Ok(OlderPage { messages: page.messages, more: page.more, inbox, warning: page.warning })
     }
 
-    /// Lists one page of the account's folder (the newest, or those matching `q`) and fetches
-    /// metadata only for messages not seen before. A message that fails to load is skipped,
-    /// so one odd message can't hide the whole folder.
-    async fn sync_account(&self, account: &str, folder: Folder, q: Option<&str>) -> Result<AccountSync, String> {
+    /// Lists one page of the account's folder (the newest, or with `before` the newest older
+    /// than that) and fetches summaries only for messages not seen before. A message that
+    /// fails to load is skipped, so one odd message can't hide the whole folder.
+    async fn sync_account(&self, account: &str, folder: Folder, before: Option<i64>) -> Result<AccountSync, String> {
         let token = self.access_token(account).await?;
-        let trash = folder == Folder::Trash;
-        let (page, unread) = tokio::try_join!(
-            gmail::list_ids(&self.http, &token, folder.labels(), trash, q, PAGE_SIZE),
-            // Any unread message in this page is also among the PAGE_SIZE newest unread
-            // ones of the same query, so this one call keeps read state current.
-            gmail::list_ids(&self.http, &token, folder.unread_labels(), trash, q, PAGE_SIZE),
-        )?;
-        let unread: HashSet<String> = unread.ids.into_iter().collect();
+        let mailbox = self.mailbox(account, &token)?;
+        let (page, unread) = tokio::try_join!(mailbox.list(folder, before), mailbox.unread(folder, before))?;
         let ids = page.ids;
 
         let mut known: HashMap<String, MessageSummary> = {
@@ -378,12 +358,7 @@ impl AppState {
                 .collect()
         };
         let missing: Vec<String> = ids.iter().filter(|id| !known.contains_key(*id)).cloned().collect();
-        let (http, token) = (&self.http, token.as_str());
-        let fetched: Vec<Result<MessageSummary, (String, String)>> = stream::iter(missing)
-            .map(|id| async move { gmail::get_summary(http, token, account, &id).await.map_err(|e| (id, e)) })
-            .buffer_unordered(FETCH_CONCURRENCY)
-            .collect()
-            .await;
+        let fetched = mailbox.summaries(missing).await;
 
         let mut new_failures = Vec::new();
         {
@@ -421,13 +396,13 @@ impl AppState {
     /// Fetches a message to show. The UI marks it read separately (`set_unread`).
     pub async fn get_message(&self, account: &str, id: &str) -> Result<FullMessage, String> {
         let token = self.access_token(account).await?;
-        gmail::get_full(&self.http, &token, id).await
+        self.mailbox(account, &token)?.message(id).await
     }
 
     /// Marks a message read (opening it, "Mark as read") or unread ("Mark as unread").
     pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
         let token = self.access_token(account).await?;
-        gmail::set_unread(&self.http, &token, id, unread).await?;
+        self.mailbox(account, &token)?.set_unread(id, unread).await?;
         // The same message can be in several folders (Inbox and All Mail).
         let key = cache_key(account, id);
         for cache in self.cache.lock().unwrap().values_mut() {
@@ -440,7 +415,7 @@ impl AppState {
 
     pub async fn archive(&self, account: &str, id: &str) -> Result<(), String> {
         let token = self.access_token(account).await?;
-        gmail::archive(&self.http, &token, id).await?;
+        self.mailbox(account, &token)?.archive(id).await?;
         self.forget(account, id, &[Folder::Inbox]);
         Ok(())
     }
@@ -448,8 +423,7 @@ impl AppState {
     /// Moves to Trash and reports whether the message was in the Inbox, so Undo can put it back there.
     pub async fn trash(&self, account: &str, id: &str) -> Result<Trashed, String> {
         let token = self.access_token(account).await?;
-        let was_in_inbox = gmail::labels(&self.http, &token, id).await?.iter().any(|l| l == "INBOX");
-        gmail::trash(&self.http, &token, id).await?;
+        let was_in_inbox = self.mailbox(account, &token)?.trash(id).await?;
         self.forget(account, id, &[Folder::Inbox, Folder::All]);
         Ok(Trashed { was_in_inbox })
     }
@@ -458,14 +432,16 @@ impl AppState {
     /// Trash, then optionally puts it back in the Inbox.
     pub async fn restore(&self, account: &str, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
         let token = self.access_token(account).await?;
+        self.mailbox(account, &token)?.restore(id, from_trash, to_inbox).await?;
         if from_trash {
-            gmail::untrash(&self.http, &token, id).await?;
             self.forget(account, id, &[Folder::Trash]);
         }
-        if to_inbox {
-            gmail::move_to_inbox(&self.http, &token, id).await?;
-        }
         Ok(())
+    }
+
+    /// The account's mail at its service, signed in with `token` (from `access_token`).
+    fn mailbox<'a>(&'a self, account: &'a str, token: &'a str) -> Result<Mailbox<'a>, String> {
+        Ok(Mailbox { provider: self.provider(account)?, http: &self.http, token, account })
     }
 
     /// Drops a message from folders it just left. Folders it joined pick it up on their next sync.
@@ -485,7 +461,7 @@ impl AppState {
             edit(cache);
             sorted(cache)
         };
-        let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
+        let _ = write_json(&self.dir.join(cache_file(folder)), &messages);
     }
 
     fn creds(&self) -> Result<ClientCreds, String> {
@@ -510,11 +486,16 @@ impl AppState {
         if let Some(token) = cached {
             return Ok(token);
         }
-        let creds = self.creds()?;
-        let Ok(refresh_token) = keyring_entry(account)?.get_password() else {
-            return Err(self.mark_expired(account, "There's no saved sign-in for"));
+        let refreshed = match self.provider(account)? {
+            Provider::Gmail => {
+                let creds = self.creds()?;
+                let Ok(refresh_token) = keyring_entry(account)?.get_password() else {
+                    return Err(self.mark_expired(account, "There's no saved sign-in for"));
+                };
+                oauth::refresh(&self.http, &creds, &refresh_token).await
+            }
         };
-        let tokens = match oauth::refresh(&self.http, &creds, &refresh_token).await {
+        let tokens = match refreshed {
             Ok(tokens) => tokens,
             Err(e) if e == oauth::EXPIRED => return Err(self.mark_expired(account, "The sign-in has expired for")),
             Err(e) => return Err(e),
@@ -553,6 +534,13 @@ fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| format!("System keychain error: {e}"))
 }
 
+/// `accounts.json`, skipping entries this version can't read (an account of a mail service
+/// added by a newer version), so the other accounts still load.
+fn read_accounts(path: &Path) -> Vec<Account> {
+    let entries: Vec<serde_json::Value> = read_json(path).unwrap_or_default();
+    entries.into_iter().filter_map(|entry| serde_json::from_value(entry).ok()).collect()
+}
+
 fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
@@ -571,22 +559,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn folder_names_match_the_ui() {
-        let names: Vec<String> = Folder::EVERY.iter().map(|f| serde_json::to_string(f).unwrap()).collect();
-        assert_eq!(names, [r#""inbox""#, r#""all""#, r#""trash""#]);
-        assert_eq!(serde_json::from_str::<Folder>(r#""trash""#).unwrap(), Folder::Trash);
+    fn each_folder_has_its_cache_file() {
+        let files: HashSet<_> = Folder::EVERY.iter().map(|&f| cache_file(f)).collect();
+        assert_eq!(files.len(), 3);
+        // The Inbox keeps its old file name, so existing caches still load.
+        assert_eq!(cache_file(Folder::Inbox), "inbox-cache.json");
     }
 
     #[test]
-    fn unread_lists_narrow_the_folder() {
-        for folder in Folder::EVERY {
-            let unread = folder.unread_labels();
-            assert!(folder.labels().iter().all(|l| unread.contains(l)), "{folder:?}");
-            assert!(unread.contains(&"UNREAD"), "{folder:?}");
-        }
-        let files: HashSet<_> = Folder::EVERY.iter().map(|f| f.cache_file()).collect();
-        assert_eq!(files.len(), 3);
-        // The Inbox keeps its old file name, so existing caches still load.
-        assert_eq!(Folder::Inbox.cache_file(), "inbox-cache.json");
+    fn accounts_file_survives_entries_it_cannot_read() {
+        let dir = std::env::temp_dir().join(format!("unified-mail-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(ACCOUNTS_FILE);
+
+        fs::write(&path, r#"["a@gmail.com","b@gmail.com"]"#).unwrap();
+        let emails: Vec<String> = read_accounts(&path).into_iter().map(|a| a.email).collect();
+        assert_eq!(emails, ["a@gmail.com", "b@gmail.com"]);
+
+        // An account of a service this version doesn't know (from a newer version) is skipped,
+        // and the others still load.
+        fs::write(&path, r#"["a@gmail.com",{"email":"c@yandex.ru","provider":"yandex"}]"#).unwrap();
+        let accounts = read_accounts(&path);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].provider, Provider::Gmail);
+
+        assert!(read_accounts(&dir.join("missing.json")).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

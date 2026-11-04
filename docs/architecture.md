@@ -9,15 +9,17 @@ flowchart LR
   end
   subgraph Rust["Rust process (src-tauri/src)"]
     Main["main.rs<br/>commands"]
-    State["state.rs<br/>accounts, tokens, inbox cache"]
-    Gmail["gmail.rs<br/>REST client"]
+    State["state.rs<br/>accounts, tokens, folder caches"]
+    Provider["provider.rs<br/>Mailbox: per-service operations"]
+    Gmail["gmail.rs<br/>Gmail REST client"]
     OAuth["oauth.rs<br/>sign-in"]
     Idle["idle.rs<br/>IMAP IDLE watchers"]
   end
   UI -- invoke --> Main
   Idle -- "mail-changed event" --> UI
   Main --> State
-  State --> Gmail
+  State --> Provider
+  Provider --> Gmail
   State --> OAuth
   Idle --> State
   Gmail --> GAPI["gmail.googleapis.com"]
@@ -31,8 +33,9 @@ flowchart LR
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge |
-| `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
-| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
+| `state.rs` | `AppState`: OAuth client, account list, access-token cache, folder caches, expired sign-ins, file persistence, keychain. Knows nothing of Gmail's labels or API: it asks the account's `Mailbox` |
+| `provider.rs` | The app's mail vocabulary (`Folder`, `MessageSummary`, `FullMessage`), the `Provider` an account belongs to (only `Gmail` so far), and `Mailbox`: list a folder page, its unread ids, summaries, full message, read/unread, archive, trash, restore. Each operation matches on the provider |
+| `gmail.rs` | Gmail through its REST API: folders as label filters, list, metadata, full message, archive, trash, restore, mark read/unread, and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
@@ -89,7 +92,7 @@ Plugins:
 | Refresh tokens | OS keychain, service `unified-mail`, user = email | `keyring` crate |
 | Access tokens | Memory only | Expire 60 s early; wall clock, see below |
 | OAuth client (Settings fallback) | `<app data>/client.json` | JSON |
-| Account list | `<app data>/accounts.json` | JSON array of emails |
+| Account list | `<app data>/accounts.json` | JSON array: a Gmail account is its email as a string (as before providers existed); another service's account would be `{ "email", "provider" }`. Entries this version can't read are skipped, not fatal |
 | Settings (appearance) | `<app data>/settings.json` | `{ "theme": "system" }`; missing fields get defaults |
 | Folder snapshots | `<app data>/inbox-cache.json`, `all-cache.json`, `trash-cache.json` | JSON array of `MessageSummary` |
 
@@ -103,3 +106,4 @@ Plugins:
 - **Access-token expiry uses `SystemTime`, not `Instant`.** On macOS `Instant` stops while the machine sleeps, which would leave expired tokens looking valid.
 - **Errors are `String`s.** Every failure ends up as a message in the UI, so a typed error enum would add code without adding value yet.
 - **Message ids are checked.** They go into URL paths, so `gmail.rs` accepts only alphanumeric ids.
+- **Mail services are an enum, not a trait object.** `Provider` lists the services and every `Mailbox` operation matches on it. That needs no `dyn`/`async-trait` machinery, and adding a service makes the compiler point at every operation it must implement. Ids stay opaque strings to `state.rs` and the UI.

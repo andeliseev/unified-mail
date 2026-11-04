@@ -4,10 +4,11 @@
 mod gmail;
 mod idle;
 mod oauth;
+mod provider;
 mod state;
 
-use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
+use provider::{Folder, FullMessage, MessageSummary};
+use state::{AppState, ClientCreds, FolderResult, OlderPage, Setup, Theme, Trashed};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;

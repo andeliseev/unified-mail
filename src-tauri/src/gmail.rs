@@ -1,45 +1,65 @@
-//! Thin client for the Gmail REST API: https://developers.google.com/gmail/api/reference/rest
+//! Gmail accounts, through the Gmail REST API: https://developers.google.com/gmail/api/reference/rest
+//!
+//! The app's folders are label filters here: the Inbox is the `INBOX` label, Trash is `TRASH`,
+//! and All Mail is every message outside Spam and Trash. Archive removes `INBOX`.
 
+use std::collections::HashSet;
+
+use futures_util::{stream, StreamExt};
 use reqwest::{header::CONTENT_LENGTH, Client, RequestBuilder, Response};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
+use crate::provider::{Body, Folder, FullMessage, MessageSummary, Page, PAGE_SIZE};
+
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+/// Parallel metadata requests per account (Gmail allows ~50/s per user).
+const FETCH_CONCURRENCY: usize = 8;
 
-/// One row of the inbox list. Cached on disk so the app can paint before the first sync.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageSummary {
-    pub account: String,
-    pub id: String,
-    pub thread_id: String,
-    pub from: String,
-    pub subject: String,
-    pub snippet: String,
-    /// Milliseconds since the Unix epoch.
-    pub date: i64,
-    pub unread: bool,
+/// Labels a message must carry to be in `folder`.
+fn folder_labels(folder: Folder) -> &'static [&'static str] {
+    match folder {
+        Folder::Inbox => &["INBOX"],
+        Folder::All => &[],
+        Folder::Trash => &["TRASH"],
+    }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FullMessage {
-    pub from: String,
-    pub to: String,
-    pub cc: String,
-    pub subject: String,
-    pub date: i64,
-    pub html: Option<Body>,
-    pub text: Option<Body>,
+/// Labels of `folder`'s unread messages.
+fn unread_labels(folder: Folder) -> &'static [&'static str] {
+    match folder {
+        Folder::Inbox => &["INBOX", "UNREAD"],
+        Folder::All => &["UNREAD"],
+        Folder::Trash => &["TRASH", "UNREAD"],
+    }
 }
 
-/// A body part exactly as Gmail returns it: base64url bytes, plus the charset its header
-/// declares. Gmail may already have converted the bytes to UTF-8 despite that header, so
-/// the webview tries UTF-8 first, then the declared charset (`decodeBody` in app.js).
-#[derive(Serialize)]
-pub struct Body {
-    pub data: String,
-    pub charset: String,
+/// One page of `folder`, newest first, or with `before` (ms) the newest ones older than that.
+pub async fn list(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<Page, String> {
+    let q = before.map(before_query);
+    list_ids(http, token, folder_labels(folder), folder == Folder::Trash, q.as_deref(), PAGE_SIZE).await
+}
+
+/// The newest unread messages of the same query as `list`. Any unread message in `list`'s page
+/// is also among the PAGE_SIZE newest unread ones, so this one call keeps read state current.
+pub async fn unread(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<HashSet<String>, String> {
+    let q = before.map(before_query);
+    let page = list_ids(http, token, unread_labels(folder), folder == Folder::Trash, q.as_deref(), PAGE_SIZE).await?;
+    Ok(page.ids.into_iter().collect())
+}
+
+/// Summaries for these messages, a few requests at a time. One that fails is returned as `(id, error)`.
+pub async fn summaries(
+    http: &Client,
+    token: &str,
+    account: &str,
+    ids: Vec<String>,
+) -> Vec<Result<MessageSummary, (String, String)>> {
+    stream::iter(ids)
+        .map(|id| async move { get_summary(http, token, account, &id).await.map_err(|e| (id, e)) })
+        .buffer_unordered(FETCH_CONCURRENCY)
+        .collect()
+        .await
 }
 
 #[derive(Deserialize)]
@@ -103,16 +123,9 @@ pub async fn profile_email(http: &Client, token: &str) -> Result<String, String>
     Ok(profile.email_address)
 }
 
-/// One page of a message list, newest first.
-pub struct Page {
-    pub ids: Vec<String>,
-    /// More messages exist beyond this page.
-    pub more: bool,
-}
-
 /// The newest messages carrying all of `labels` (and matching the Gmail search `q`, if any).
 /// Spam and Trash are left out unless `include_spam_trash` (needed to list Trash).
-pub async fn list_ids(
+async fn list_ids(
     http: &Client,
     token: &str,
     labels: &[&str],
@@ -151,11 +164,11 @@ pub async fn list_ids(
 
 /// Gmail search for messages older than `before_ms`. Search works in whole seconds, so this
 /// rounds up and also matches messages from the same second; callers drop the duplicates.
-pub fn before_query(before_ms: i64) -> String {
+fn before_query(before_ms: i64) -> String {
     format!("before:{}", before_ms.div_euclid(1000) + 1)
 }
 
-pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) -> Result<MessageSummary, String> {
+async fn get_summary(http: &Client, token: &str, account: &str, id: &str) -> Result<MessageSummary, String> {
     check_id(id)?;
     let url = format!(
         "{API}/messages/{id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject\
@@ -205,7 +218,7 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
 }
 
 /// Labels currently on a message.
-pub async fn labels(http: &Client, token: &str, id: &str) -> Result<Vec<String>, String> {
+async fn labels(http: &Client, token: &str, id: &str) -> Result<Vec<String>, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Labels {
@@ -223,7 +236,7 @@ pub async fn archive(http: &Client, token: &str, id: &str) -> Result<(), String>
 }
 
 /// Adds the INBOX label: undoes Archive, and puts a message restored from Trash back in the Inbox.
-pub async fn move_to_inbox(http: &Client, token: &str, id: &str) -> Result<(), String> {
+async fn move_to_inbox(http: &Client, token: &str, id: &str) -> Result<(), String> {
     modify(http, token, id, &["INBOX"], &[]).await
 }
 
@@ -236,15 +249,24 @@ pub async fn set_unread(http: &Client, token: &str, id: &str, unread: bool) -> R
     }
 }
 
-/// Moves to Trash, like Gmail's Delete button. Gmail purges Trash after 30 days.
-pub async fn trash(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    post_empty(http, token, &format!("{API}/messages/{id}/trash"), id).await
+/// Moves to Trash, like Gmail's Delete button (Gmail purges Trash after 30 days), and reports
+/// whether the message was in the Inbox.
+pub async fn trash(http: &Client, token: &str, id: &str) -> Result<bool, String> {
+    let was_in_inbox = labels(http, token, id).await?.iter().any(|l| l == "INBOX");
+    post_empty(http, token, &format!("{API}/messages/{id}/trash"), id).await?;
+    Ok(was_in_inbox)
 }
 
-/// Takes a message out of Trash. Gmail doesn't document whether this restores the INBOX
-/// label, so callers that want the message back in the Inbox also call `move_to_inbox`.
-pub async fn untrash(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    post_empty(http, token, &format!("{API}/messages/{id}/untrash"), id).await
+/// Optionally takes a message out of Trash, then optionally puts it back in the Inbox. Gmail
+/// doesn't document whether untrashing restores the INBOX label, so it's added separately.
+pub async fn restore(http: &Client, token: &str, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
+    if from_trash {
+        post_empty(http, token, &format!("{API}/messages/{id}/untrash"), id).await?;
+    }
+    if to_inbox {
+        move_to_inbox(http, token, id).await?;
+    }
+    Ok(())
 }
 
 async fn post_empty(http: &Client, token: &str, url: &str, id: &str) -> Result<(), String> {
@@ -501,6 +523,15 @@ mod tests {
         assert_eq!(decode::<List>(br#"{"messages":[{"id":"a"}]}"#).unwrap().messages.len(), 1);
         // A message still needs its id; an empty body must not pass as one.
         assert!(decode::<RawMessage>(b"").is_err());
+    }
+
+    #[test]
+    fn unread_lists_narrow_the_folder() {
+        for folder in Folder::EVERY {
+            let unread = unread_labels(folder);
+            assert!(folder_labels(folder).iter().all(|l| unread.contains(l)), "{folder:?}");
+            assert!(unread.contains(&"UNREAD"), "{folder:?}");
+        }
     }
 
     #[test]

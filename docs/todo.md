@@ -65,7 +65,8 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 - [ ] **Folders:** Inbox → `INBOX`; Trash → the `\Trash` folder (found via `XLIST`); Archive → move to Yandex's "Archive" folder, creating it if missing, as Yandex's own Archive button does. All Mail doesn't exist on Yandex: show Inbox + Archive merged.
 - [ ] **Reading:** fetch envelopes, flags and bodies over IMAP, and decode MIME ourselves (Gmail's API does this for us): structure, charsets, RFC 2047 headers. Use a MIME crate such as `mail-parser`, checking the size impact first (estimated +0.5–1 MB). Previews (snippets) come from the start of the text body.
 - [ ] **Identity:** IMAP UIDs are per folder and change on move. Messages need a provider-specific id (folder + UIDVALIDITY + UID), with `UIDPLUS` supplying the new UID after a move for Undo. `keyOf`, the pending moves, Undo and the All Mail tags currently assume Gmail's global ids.
-- [ ] **Provider layer:** split `gmail.rs`/`state.rs` behind a common interface (list page, older page, get message, archive, trash, restore, mark read/unread), so the UI stays the same.
+- [x] **Provider layer:** `provider.rs` has the `Provider` enum and `Mailbox` (list page, unread ids, summaries, full message, read/unread, archive, trash, restore); `state.rs` no longer knows Gmail. Accounts carry their provider in `accounts.json`. Still Gmail-specific: sign-in and token refresh (`oauth.rs`, Google's client) are one match arm in `AppState`, and push's XOAUTH2 login.
+- [ ] **Moves that change ids:** `archive`, `trash` and `restore` return nothing (or only `was_in_inbox`), because Gmail ids never change. For IMAP they'll need to return the message's new id, and the UI's pending moves and Undo will need to use it.
 - [ ] **Privacy policy:** add Yandex (what's accessed, where it's stored).
 
 ## Distribution

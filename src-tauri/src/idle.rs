@@ -21,7 +21,6 @@ use crate::state::AppState;
 /// UI event fired when an account's inbox changed; payload is the account email.
 pub const MAIL_CHANGED: &str = "mail-changed";
 
-const HOST: &str = "imap.gmail.com";
 /// Re-issue IDLE well within Gmail's ~29 minute limit. A connection that died
 /// silently (e.g. while the computer slept) is noticed at the next cycle.
 const IDLE_CYCLE: Duration = Duration::from_secs(5 * 60);
@@ -76,18 +75,19 @@ async fn watch(app: AppHandle, account: String) {
 
 async fn connect(app: &AppHandle, account: &str) -> Result<Session, String> {
     let state = app.state::<AppState>();
+    let host = state.provider(account)?.imap_host();
     let token = state.access_token(account).await?;
     // The cached token may be stale; on any failure the next attempt fetches a fresh one.
-    login(account, &token).await.inspect_err(|_| state.invalidate_token(account))
+    login(host, account, &token).await.inspect_err(|_| state.invalidate_token(account))
 }
 
-async fn login(account: &str, token: &str) -> Result<Session, String> {
-    let tcp = timeout(STEP_TIMEOUT, TcpStream::connect((HOST, 993)))
+async fn login(host: &str, account: &str, token: &str) -> Result<Session, String> {
+    let tcp = timeout(STEP_TIMEOUT, TcpStream::connect((host, 993)))
         .await
         .map_err(|_| "connection timed out".to_string())?
         .map_err(|e| e.to_string())?;
     let tls = TlsConnector::from(native_tls::TlsConnector::new().map_err(|e| e.to_string())?);
-    let stream = timeout(STEP_TIMEOUT, tls.connect(HOST, tcp))
+    let stream = timeout(STEP_TIMEOUT, tls.connect(host, tcp))
         .await
         .map_err(|_| "TLS handshake timed out".to_string())?
         .map_err(|e| e.to_string())?;
@@ -171,7 +171,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn gmail_rejects_bad_token_without_hanging() {
-        let error = login("nobody@gmail.com", "not-a-real-token").await.err().unwrap();
+        let error = login("imap.gmail.com", "nobody@gmail.com", "not-a-real-token").await.err().unwrap();
         assert!(error.contains("Invalid credentials"), "{error}");
     }
 }
