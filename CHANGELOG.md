@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.1.10 (2026-11-04)
+
 - Dates are in English like the rest of the app ("Nov 4"), instead of in your system's language. Times keep your system's clock style: 24-hour or AM/PM.
 
 ## 0.1.9 (2026-11-04)
