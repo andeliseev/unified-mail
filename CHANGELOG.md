@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.1.8 (2026-11-04)
+
 - A new app icon: the blue tile is the envelope, with its flap folded down. The website uses it too.
 
 ## 0.1.7 (2026-11-03)
