@@ -204,6 +204,8 @@ Google requires a home page and a privacy policy, on a domain listed under **Aut
 
 The Support page is linked from the app's Settings, the README and GitHub's Sponsor button (`.github/FUNDING.yml`). Change payment options on the page, with no app release needed.
 
+The site also has the pages of [TorrStream Lite](https://github.com/andeliseev/TorrStreamLite) in `site/torrstream-lite/`: a home page, a privacy policy and a support page, at https://andeliseev.github.io/torrstream-lite/. They're published the same way. Both support pages list the same payment options, so change them together.
+
 After changing `site/`, commit the change on its own (its message becomes public) and publish:
 
 ```bash
