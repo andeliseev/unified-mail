@@ -1,0 +1,104 @@
+:root {
+  --bg: #ffffff;
+  --text: #1d2026;
+  --muted: #6b7280;
+  --accent: #0b7a54;
+  --code: #f2f4f7;
+  --line: #e4e6ea;
+  --shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1c20;
+    --text: #e6e8eb;
+    --muted: #9298a2;
+    --accent: #4fd1a1;
+    --code: #262a31;
+    --line: #2b2f36;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 20px 64px;
+}
+
+h1 { font-size: 32px; line-height: 1.2; margin: 0 0 6px; }
+h2 { font-size: 20px; margin: 36px 0 8px; }
+.title { display: flex; align-items: center; gap: 12px; }
+.title img { width: 40px; height: 40px; flex: none; }
+.lead { font-size: 18px; }
+/* The app's window, wider than the text on large screens: up to 1000 px, centered. */
+.shot {
+  display: block;
+  margin: 28px calc(50% - min(500px, 50vw - 20px)) 24px;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--line), var(--shadow);
+}
+.muted { color: var(--muted); }
+.crumb { margin: 0 0 24px; font-size: 14px; }
+a { color: var(--accent); }
+ul { padding-left: 22px; }
+li { margin: 4px 0; }
+/* Wallets: name, address and copy icon on one line, the addresses lined up. */
+.wallets { list-style: none; padding-left: 0; }
+.wallets li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 8px; }
+.wallets li > span { min-width: 8.5em; margin-right: 4px; }
+/* As wide as the longest address (TON's 48 characters), so the copy icons line up. */
+.wallets code { min-width: 48ch; user-select: all; }
+/* Copy button: an icon drawn in the text color through a mask, a check mark once copied. */
+.copy {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='8' y='8' width='12' height='12' rx='2'/%3E%3Cpath d='M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2'/%3E%3C/svg%3E");
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.copy::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+.copy:hover { color: var(--accent); background: var(--code); }
+.copy.done {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E");
+  color: var(--accent);
+}
+/* Phones: the name on top, the address and copy icon under it. */
+@media (max-width: 640px) {
+  .wallets li > span { flex-basis: 100%; }
+  .wallets code { flex: 1; min-width: 0; }
+}
+code {
+  font: 14px ui-monospace, Consolas, monospace;
+  background: var(--code);
+  padding: 1px 5px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
