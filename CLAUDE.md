@@ -10,7 +10,7 @@
 
 ## Working rules
 
-- **Never run the app on real Gmail accounts.** A bug could archive, delete or mark real mail. Test the UI with a fake backend, and the real app only as the test app (`npm run dev`, or `--config src-tauri/tauri.dev.conf.json`) with test accounts the user names. A build with the app's real identity (`io.unifiedmail.desktop`) opens the accounts of the installed app. See [docs/development.md](docs/development.md#testing-without-your-own-mail).
+- **Never run the app on real Gmail accounts.** A bug could archive, delete or mark real mail. Test the UI with a fake backend, and the real app only as the test app (`npm run dev`, or `--config src-tauri/tauri.dev.conf.json`) with test accounts the user names. A build with the app's real identity (`com.andeliseev.unified-mail`) opens the accounts of the installed app. See [docs/development.md](docs/development.md#testing-without-your-own-mail).
 - **Small binary is a core goal.** Check the size impact of any new crate with `npx tauri build --no-bundle` and record notable changes in [docs/development.md](docs/development.md#size-budget). Prefer what the OS already ships (webview, native-tls, `TextDecoder`) over bundled code.
 - `src/` is plain HTML/CSS/JS served as is. Don't add a framework or build step.
 - Never hold a `std::sync::Mutex` guard across `.await` (Tauri async commands must be `Send`).

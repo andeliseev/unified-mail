@@ -216,6 +216,21 @@ fn open_external(url: String) -> Result<(), String> {
     open::that_detached(&url).map_err(|e| e.to_string())
 }
 
+/// Where the webview keeps its cache and website data for this identifier.
+fn webview_dirs(app: &tauri::App) -> Vec<std::path::PathBuf> {
+    let path = app.path();
+    let dirs = if cfg!(target_os = "macos") {
+        // WKWebView: ~/Library/Caches/<identifier> and ~/Library/WebKit/<identifier>.
+        vec![path.app_cache_dir(), path.home_dir().map(|home| home.join("Library").join("WebKit").join(&app.config().identifier))]
+    } else if cfg!(windows) {
+        // WebView2's user data, in %LOCALAPPDATA%\<identifier>.
+        vec![path.app_local_data_dir()]
+    } else {
+        Vec::new()
+    };
+    dirs.into_iter().flatten().collect()
+}
+
 fn main() {
     tauri::Builder::default()
         // Launching the app again (also what clicking an old notification in the Action Center
@@ -225,7 +240,11 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
         .setup(|app| {
-            let state = AppState::load(app.path().app_data_dir()?);
+            let dir = app.path().app_data_dir()?;
+            // Up to 0.1.11 the app was io.unifiedmail.desktop. Before anything reads the data folder
+            // or the webview starts, move what that identifier left.
+            state::move_earlier_data(&app.config().identifier, &dir, &webview_dirs(app));
+            let state = AppState::load(dir);
             let Setup { accounts, theme, .. } = state.setup();
             // The window is created here, not from tauri.conf.json ("create": false), so it starts
             // in the chosen theme. Setting a theme on a window that already exists misses its

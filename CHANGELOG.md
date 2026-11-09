@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Unified Mail's data folder is now called `com.andeliseev.unified-mail`. Your accounts, settings and saved message lists move there by themselves the first time this version starts.
+
 ## 0.1.11 (2026-11-04)
 
 - Keyboard shortcuts (J, K, E, #, Z, Shift+U, Shift+I) work with any keyboard layout, such as Russian, without switching to English first.

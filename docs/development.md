@@ -224,9 +224,9 @@ If what the app accesses or stores changes, update `site/unified-mail/privacy.ht
 
 Never run a development build on your real Gmail accounts: a bug could archive, delete or mark real mail.
 
-- `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `io.unifiedmail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
+- `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `com.andeliseev.unified-mail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
 - Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
-- Release builds (`npm run build`, `npx tauri build`) use the real identity, `io.unifiedmail.desktop`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
+- Release builds (`npm run build`, `npx tauri build`) use the real identity, `com.andeliseev.unified-mail`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
 - For the UI alone, use a fake backend, as described next.
 
 ## Testing the UI without Google
@@ -251,7 +251,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
    - `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent` send real wheel and key input without moving your mouse.
 
    This is how the email scrolling bug was reproduced and its fix checked.
-4. Afterwards, delete `%APPDATA%\io.unifiedmail.devtest` and `%LOCALAPPDATA%\io.unifiedmail.devtest`, then rebuild normally.
+4. Afterwards, delete `%APPDATA%\com.andeliseev.unified-mail.devtest` and `%LOCALAPPDATA%\com.andeliseev.unified-mail.devtest`, then rebuild normally.
 
 ## Manual test checklist
 

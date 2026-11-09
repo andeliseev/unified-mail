@@ -566,9 +566,87 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
         .map_err(|e| format!("Could not save {}: {e}", path.display()))
 }
 
+/// The identifiers of the app and the test app up to 0.1.11, by the ones they have now.
+const EARLIER_IDENTIFIERS: [(&str, &str); 2] =
+    [("com.andeliseev.unified-mail", "io.unifiedmail.desktop"), ("com.andeliseev.unified-mail.devtest", "io.unifiedmail.devtest")];
+
+/// Moves the data folder of the earlier identifier (accounts, settings, cached message lists) to `dir`,
+/// this identifier's, unless `dir` already has files. Then deletes what the webview kept for the earlier
+/// identifier next to each of `webview_dirs`. Sign-ins are in the keychain and don't move.
+pub fn move_earlier_data(identifier: &str, dir: &Path, webview_dirs: &[PathBuf]) {
+    let Some(&(_, earlier)) = EARLIER_IDENTIFIERS.iter().find(|(now, _)| *now == identifier) else {
+        return;
+    };
+    let old = dir.with_file_name(earlier);
+    let has_files = fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some());
+    if !old.is_dir() || has_files {
+        return;
+    }
+    let _ = fs::remove_dir(dir); // an empty folder would be in the way
+    if fs::rename(&old, dir).is_err() {
+        // Windows refuses to move a folder while a file in it is open: copy instead, and keep the
+        // earlier webview data, since that app may still be running.
+        let _ = fs::create_dir_all(dir);
+        for entry in fs::read_dir(&old).into_iter().flatten().flatten() {
+            let _ = fs::copy(entry.path(), dir.join(entry.file_name()));
+        }
+        return;
+    }
+    for webview in webview_dirs {
+        let _ = fs::remove_dir_all(webview.with_file_name(earlier));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty folder under the system's temp folder, for one test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("unified-mail-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn earlier_data_moves_to_the_new_identifier() {
+        let base = scratch("move");
+        let (old, new) = (base.join("io.unifiedmail.desktop"), base.join("com.andeliseev.unified-mail"));
+        let old_web = base.join("web").join("io.unifiedmail.desktop");
+        for dir in [&old, &new, &old_web] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(old.join(ACCOUNTS_FILE), r#"["a@example.com"]"#).unwrap();
+
+        move_earlier_data("com.andeliseev.unified-mail", &new, &[base.join("web").join("com.andeliseev.unified-mail")]);
+
+        assert_eq!(fs::read_to_string(new.join(ACCOUNTS_FILE)).unwrap(), r#"["a@example.com"]"#);
+        assert!(!old.exists(), "the earlier folder is moved, not copied");
+        assert!(!old_web.exists(), "the earlier webview data is deleted");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn data_under_the_new_identifier_stays() {
+        let base = scratch("keep");
+        let (old, new) = (base.join("io.unifiedmail.devtest"), base.join("com.andeliseev.unified-mail.devtest"));
+        let old_web = base.join("web").join("io.unifiedmail.devtest");
+        for dir in [&old, &new, &old_web] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(old.join(ACCOUNTS_FILE), "[]").unwrap();
+        fs::write(new.join(SETTINGS_FILE), "{}").unwrap();
+
+        move_earlier_data("com.andeliseev.unified-mail.devtest", &new, &[base.join("web").join("com.andeliseev.unified-mail.devtest")]);
+        assert!(old.join(ACCOUNTS_FILE).exists() && old_web.exists());
+        assert!(!new.join(ACCOUNTS_FILE).exists());
+
+        // Other identifiers have nothing to move.
+        move_earlier_data("org.example.other", &base.join("org.example.other"), &[]);
+        assert!(!base.join("org.example.other").exists());
+        fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn folder_names_match_the_ui() {

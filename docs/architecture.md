@@ -93,7 +93,9 @@ Plugins:
 | Settings (appearance) | `<app data>/settings.json` | `{ "theme": "system" }`; missing fields get defaults |
 | Folder snapshots | `<app data>/inbox-cache.json`, `all-cache.json`, `trash-cache.json` | JSON array of `MessageSummary` |
 
-`<app data>` is `%APPDATA%\io.unifiedmail.desktop` on Windows and `~/Library/Application Support/io.unifiedmail.desktop` on macOS. The test app (`npm run dev`) uses `io.unifiedmail.devtest` instead (see [development.md](development.md#testing-without-your-own-mail)). Files are written to a `.tmp` file and then renamed, so a crash can't leave a half-written file.
+`<app data>` is `%APPDATA%\com.andeliseev.unified-mail` on Windows and `~/Library/Application Support/com.andeliseev.unified-mail` on macOS. The test app (`npm run dev`) uses `com.andeliseev.unified-mail.devtest` instead (see [development.md](development.md#testing-without-your-own-mail)). Files are written to a `.tmp` file and then renamed, so a crash can't leave a half-written file.
+
+Up to 0.1.11 the identifiers were `io.unifiedmail.desktop` and `io.unifiedmail.devtest`. At startup, before the data is read or the window opens, the app renames the earlier data folder to the new name, unless the new folder already has files, and then deletes the webview cache the earlier name left (`%LOCALAPPDATA%\<identifier>` on Windows, `~/Library/Caches/<identifier>` and `~/Library/WebKit/<identifier>` on macOS). When Windows won't rename the folder because a file in it is open, the app copies the files and leaves the earlier folder. `bundle.publisher` stays `unifiedmail`, which Tauri used to take from the earlier identifier: the Windows installer remembers the install folder in the registry under that name, so updates still find a folder the user chose.
 
 ## Design decisions
 
