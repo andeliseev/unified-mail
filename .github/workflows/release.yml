@@ -101,10 +101,14 @@ jobs:
         id: commit
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          # Whoever started the release authors its commit, through their private
+          # noreply address: it counts as theirs, and no bot joins the contributors.
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
         run: |
           if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "$ACTOR"
+            git config user.email "$ACTOR_ID+$ACTOR@users.noreply.github.com"
             git commit -am "Release $TAG"
             git push
           fi

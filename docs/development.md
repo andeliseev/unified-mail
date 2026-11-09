@@ -127,7 +127,7 @@ The workflow then:
 1. Works out the version with [`scripts/next-version.mjs`](../scripts/next-version.mjs). It stops if that isn't newer than the last release.
 2. Sets it with [`scripts/set-version.mjs`](../scripts/set-version.mjs) in `package.json`, `package-lock.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`.
 3. Moves the **Unreleased** lines of [`CHANGELOG.md`](../CHANGELOG.md) under `## X.Y.Z (date)` with [`scripts/changelog.mjs`](../scripts/changelog.mjs), leaving an empty Unreleased section for the next changes. With nothing under Unreleased, the run shows a warning and the release has no "What's new".
-4. Commits all that as "Release vX.Y.Z" to the branch. Run `git pull` afterwards before you commit locally.
+4. Commits all that as "Release vX.Y.Z" to the branch, authored by whoever ran the workflow (with their GitHub noreply address, so no bot appears among the contributors). Run `git pull` afterwards before you commit locally.
 5. Creates a draft release `vX.Y.Z` whose text starts with **What's new** (those changelog lines), replacing a draft left by a failed run.
 6. Builds the chosen platforms in parallel and uploads them to the draft: Windows (NSIS `.exe` + `.msi`) and macOS (one universal `.dmg` for Apple Silicon and Intel).
 7. Publishes the release only if every build succeeded. Only then does the `vX.Y.Z` tag exist.
