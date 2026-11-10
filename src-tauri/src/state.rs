@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures_util::{future::join_all, stream, StreamExt};
@@ -162,6 +162,17 @@ pub struct AppState {
     accounts: Mutex<Vec<String>>,
     settings: Mutex<Settings>,
     tokens: Mutex<HashMap<String, AccessToken>>,
+    /// Each account's refresh token once read from the keychain, so it's read once per launch.
+    /// On macOS a new build of the app (every update) asks for the keychain password on its
+    /// first read of each one.
+    refresh_tokens: Mutex<HashMap<String, String>>,
+    /// Accounts whose keychain read failed (on macOS: the password prompt was refused). They
+    /// aren't read again until the app restarts or they sign in again, so the prompt doesn't
+    /// keep coming back.
+    unreadable: Mutex<HashSet<String>>,
+    /// One token refresh at a time per account. Push and every folder's sync start together,
+    /// and each would otherwise read the keychain (and ask for the password) and ask Google.
+    refreshing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Accounts whose sign-in Google rejected (or whose keychain entry is gone), until they
     /// sign in again.
     expired: Mutex<HashSet<String>>,
@@ -199,6 +210,9 @@ impl AppState {
             accounts: Mutex::new(read_json(&dir.join(ACCOUNTS_FILE)).unwrap_or_default()),
             settings: Mutex::new(read_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()),
             tokens: Mutex::new(HashMap::new()),
+            refresh_tokens: Mutex::new(HashMap::new()),
+            unreadable: Mutex::new(HashSet::new()),
+            refreshing: Mutex::new(HashMap::new()),
             expired: Mutex::new(HashSet::new()),
             cache: Mutex::new(cache),
             reported_failures: Mutex::new(HashSet::new()),
@@ -256,6 +270,8 @@ impl AppState {
         keyring_entry(&email)?
             .set_password(&refresh_token)
             .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
+        self.refresh_tokens.lock().unwrap().insert(email.clone(), refresh_token);
+        self.unreadable.lock().unwrap().remove(&email);
         self.store_token(&email, tokens.access_token, tokens.expires_in);
         self.expired.lock().unwrap().remove(&email);
 
@@ -271,8 +287,10 @@ impl AppState {
     }
 
     pub fn remove_account(&self, email: &str) -> Result<(), String> {
+        let known = self.refresh_tokens.lock().unwrap().remove(email);
+        self.unreadable.lock().unwrap().remove(email);
         if let Ok(entry) = keyring_entry(email) {
-            if let Ok(refresh_token) = entry.get_password() {
+            if let Some(refresh_token) = known.or_else(|| entry.get_password().ok()) {
                 let http = self.http.clone();
                 tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
             }
@@ -500,28 +518,61 @@ impl AppState {
     }
 
     pub async fn access_token(&self, account: &str) -> Result<String, String> {
-        let cached = {
-            let tokens = self.tokens.lock().unwrap();
-            tokens
-                .get(account)
-                .filter(|t| SystemTime::now() < t.expires_at)
-                .map(|t| t.value.clone())
-        };
-        if let Some(token) = cached {
+        if let Some(token) = self.cached_token(account) {
+            return Ok(token);
+        }
+        // Calls for the same account wait here for the first one, then find its token.
+        let refreshing = self.refreshing.lock().unwrap().entry(account.to_string()).or_default().clone();
+        let _refreshing = refreshing.lock().await;
+        if let Some(token) = self.cached_token(account) {
             return Ok(token);
         }
         let creds = self.creds()?;
-        let Ok(refresh_token) = keyring_entry(account)?.get_password() else {
-            return Err(self.mark_expired(account, "There's no saved sign-in for"));
-        };
+        let refresh_token = self.refresh_token(account)?;
         let tokens = match oauth::refresh(&self.http, &creds, &refresh_token).await {
             Ok(tokens) => tokens,
-            Err(e) if e == oauth::EXPIRED => return Err(self.mark_expired(account, "The sign-in has expired for")),
+            Err(e) if e == oauth::EXPIRED => {
+                self.refresh_tokens.lock().unwrap().remove(account);
+                return Err(self.mark_expired(account, "The sign-in has expired for"));
+            }
             Err(e) => return Err(e),
         };
         self.expired.lock().unwrap().remove(account);
         self.store_token(account, tokens.access_token.clone(), tokens.expires_in);
         Ok(tokens.access_token)
+    }
+
+    fn cached_token(&self, account: &str) -> Option<String> {
+        let tokens = self.tokens.lock().unwrap();
+        tokens.get(account).filter(|t| SystemTime::now() < t.expires_at).map(|t| t.value.clone())
+    }
+
+    /// The account's refresh token: from memory, or else from the keychain, once per launch.
+    fn refresh_token(&self, account: &str) -> Result<String, String> {
+        if let Some(token) = self.refresh_tokens.lock().unwrap().get(account) {
+            return Ok(token.clone());
+        }
+        let unreadable = || {
+            format!(
+                "Couldn't read the saved sign-in for {account} from the system keychain. To try again, quit and \
+                 reopen Unified Mail. On a Mac, when it asks for your password, enter it and click Always Allow."
+            )
+        };
+        if self.unreadable.lock().unwrap().contains(account) {
+            return Err(unreadable());
+        }
+        match keyring_entry(account)?.get_password() {
+            Ok(token) => {
+                self.refresh_tokens.lock().unwrap().insert(account.to_string(), token.clone());
+                Ok(token)
+            }
+            Err(keyring::Error::NoEntry) => Err(self.mark_expired(account, "There's no saved sign-in for")),
+            Err(e) => {
+                eprintln!("[keychain] {account}: {e}");
+                self.unreadable.lock().unwrap().insert(account.to_string());
+                Err(unreadable())
+            }
+        }
     }
 
     /// Remembers that `account` needs signing in again, and returns the error to show for it.

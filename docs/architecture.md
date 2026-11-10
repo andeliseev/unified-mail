@@ -88,7 +88,7 @@ Plugins:
 
 | Data | Where | Format |
 | --- | --- | --- |
-| Refresh tokens | OS keychain, service `unified-mail`, user = email | `keyring` crate |
+| Refresh tokens | OS keychain, service `unified-mail`, user = email; read once per launch, then kept in memory | `keyring` crate |
 | Access tokens | Memory only | Expire 60 s early; wall clock, see below |
 | OAuth client (Settings fallback) | `<app data>/client.json` | JSON |
 | Account list | `<app data>/accounts.json` | JSON array of emails |

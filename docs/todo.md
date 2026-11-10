@@ -81,7 +81,7 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 
 - [x] GitHub Actions release workflow for Windows and macOS installers (see [development.md](development.md#releases-github-actions))
 - [x] Open source: MIT license, public repo, so releases are public downloads
-- [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper)
+- [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper). On macOS a stable signature would also stop the keychain asking for the password after every update (see [auth.md](auth.md#tokens)); a self-signed certificate used by the Release workflow would do that part for free
 - [x] Auto-update (`tauri-plugin-updater`): Settings offers an Update button
 - [ ] The first real update: installed apps get the updater only from the first release that has it, so the update after that one is the first end-to-end check (Windows NSIS and MSI, and macOS, which is untested). Locally checked so far: finding an update, downloading it, and refusing bad signatures
 - [ ] Third-party licenses: the MIT/Apache crates built into the app ask for their notices to ship with it. Generate a list (e.g. `cargo about`) and link it from Settings or include it in the installer

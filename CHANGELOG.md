@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: after an update, the keychain password prompt comes up once per account instead of again and again, and no longer comes back every hour. Click **Always Allow** to stop it until the next update. Refusing it no longer makes the account look signed out.
+
 ## 0.1.13 (2026-11-10)
 
 - macOS: new-mail notifications play a sound, as on Windows. You can turn it off in System Settings → Notifications → Unified Mail.
