@@ -50,7 +50,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Clicking an old notification in the Windows Action Center only brings the window forward, without opening the message. That needs a COM activator, which the notification plugin doesn't have
 - [ ] The badge, like the sidebar, counts unread mail only among loaded messages (each account's newest 50 in the Inbox, plus older pages scrolled to). Gmail's `labels.get` for `INBOX` would give the exact count
 - [x] macOS: notifications and the Dock badge work in a release built and installed locally (ad-hoc signed, not notarized)
-- [ ] macOS notifications are silent: no sound is set there, while Windows plays the system's Mail sound
+- [x] macOS notifications play the system's default notification sound, as Windows ones play its Mail sound
 - [ ] **Tray icon** on Windows: keep running in the background when the window is closed, as the app already does in the Dock on macOS
 - [ ] macOS: once the window is closed, only the Dock icon or a notification brings it back. A Window menu item for it, like Mail's Window → Message Viewer, would add a keyboard way
 - [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)

@@ -251,7 +251,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] First run: no Settings prompt with a built-in client; **Add Gmail account** shown
 - [ ] Sign in to two accounts; both appear, unified list sorted by date
 - [ ] Send yourself mail: it appears within a few seconds (push)
-- [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
+- [ ] With the app in the background, send mail to a test account: a notification with a sound (Windows: the Mail sound; macOS: the default notification sound); clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
 - [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, level with the list header. The window drags by the sidebar's top, the list header and the strip above the message, also on the first click while another app is in front; a double-click there zooms

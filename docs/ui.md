@@ -203,6 +203,7 @@ The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/
 - Older mail that moves back into the Inbox (Undo, Move to Inbox, moved in Gmail web) is older than the mark, so it doesn't notify either.
 - Nothing shows while the window is in front (`document.hasFocus()`).
 - Each message gets its own notification: the sender as title, the subject as body, plus the account when there are several. More than `MAX_NOTIFICATIONS` (3) at once become one "N new messages" summary listing the senders.
+- They play a sound, which `notify` in `main.rs` has to name: the system's Mail sound on Windows, the default notification sound on macOS. Both systems let people turn it off per app.
 
 Clicking a notification while it's on screen brings the window forward and sends `open-message`. `openFromNotification` then switches to the Inbox, drops an account filter that would hide the message, and opens it. On Windows, a click on an old notification in the Action Center isn't reported to the app. It launches the app instead, and the single-instance plugin turns that into bringing the window forward.
 

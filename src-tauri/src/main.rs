@@ -146,9 +146,12 @@ fn notify(
     id: Option<String>,
 ) -> Result<(), String> {
     let mut notification = app.notification().builder().title(title).body(body);
-    // Windows toasts are silent unless they name a sound; this is the system's new-mail sound.
+    // Notifications are silent unless they name a sound. On Windows this is the system's new-mail
+    // sound; on macOS, the system's default notification sound.
     if cfg!(windows) {
         notification = notification.sound("Mail");
+    } else if cfg!(target_os = "macos") {
+        notification = notification.sound("NSUserNotificationDefaultSoundName");
     }
     if let (Some(account), Some(id)) = (account, id) {
         notification = notification.extra("account", account).extra("id", id);
