@@ -14,18 +14,26 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 ### Title bar
 
-On Windows the app draws its own title bar, so the icon and name appear once, in the sidebar, instead of in a grey system bar above it. macOS keeps its system title bar.
+The window has no grey system title bar, so the icon and name appear once, at the top of the sidebar.
 
-- `main.rs` builds the window with `decorations(false)` on Windows only. Tauri still resizes it from the edges (its undecorated-resize handler), keeps the shadow, and on Windows 11 the rounded corners.
-- `initTitleBar` (when the user agent says Windows):
-  - adds `own-title-bar` to `<html>` and shows `#window-bar`, a 32 px strip at the top of the reader;
-  - makes the sidebar's brand, the list header and that strip drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). Dragging is the system's own, so dragging to a screen edge snaps. A double-click maximizes or restores.
-  - wires Minimize, Maximize / Restore Down and Close (`core:window:allow-minimize`, `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` in `capabilities/default.json`).
+`initTitleBar` (when the user agent says Windows or Macintosh):
+- adds `own-title-bar` to `<html>` and shows `#window-bar`, a 32 px strip at the top of the reader;
+- makes the sidebar's brand, the list header and that strip drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). Dragging is the system's own, so on Windows dragging to a screen edge snaps. A double-click maximizes or restores; on macOS it zooms, on mouse-up, as the system does.
+
+**Windows:**
+- `main.rs` builds the window with `decorations(false)`. Tauri still resizes it from the edges (its undecorated-resize handler), keeps the shadow, and on Windows 11 the rounded corners.
+- `initTitleBar` wires Minimize, Maximize / Restore Down and Close (`core:window:allow-minimize`, `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` in `capabilities/default.json`).
 - The buttons are 46 × 32 px with glyphs from the system's Segoe Fluent Icons (Windows 11) or Segoe MDL2 Assets (Windows 10), as in Windows' own title bars, so no icon font is bundled. Close turns red on hover. Maximize switches to Restore Down on every resize (`onResized` → `isMaximized`).
 - They're `position: fixed` with a z-index above Settings, the sign-in overlay, the menu and the toast, so the window can always be closed.
 - They dim while another window is in front (`onFocusChanged`, the window's focus). The page's own `blur` isn't used: it also fires when a click moves focus into the email frame.
 
 Not available without the system title bar: the Snap Layouts flyout when hovering Maximize (Windows 11), and the title bar's right-click menu (Restore, Move, Size…). `Win+↑/↓/←/→` and dragging to the screen edges still snap.
+
+**macOS:**
+- `main.rs` keeps the system's window buttons but makes the title bar see-through over the page (`TitleBarStyle::Overlay`) and hides its title. The window keeps the title for Mission Control, the Window menu and VoiceOver.
+- `traffic_light_position(18, 18)` puts the buttons over the sidebar, in line with the brand's icon and centered on the list header's row, whose 28 px start 12 px down. `.mac .brand` pads the brand down to leave them room, and `#window-buttons` stays hidden.
+- `accept_first_mouse(true)`: the drag areas are in the page, so the first click on an inactive window has to reach the page for the window to drag at once, as with a system title bar. Other first clicks act at once too, as on Windows: clicking a message in an inactive window opens it.
+- In full screen the system hides the buttons, so the room above the brand stays empty.
 
 ### Closing the window
 

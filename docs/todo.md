@@ -37,7 +37,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Remember window size and position
 - [ ] Own title bar on Windows: no Snap Layouts flyout on Maximize and no title bar right-click menu (Restore, Move, Size…). `tauri-plugin-decorum` brings Snap Layouts back, but it's another crate; check its size first
 - [ ] Own title bar on Windows 10: Tauri says an undecorated window with a shadow gets a 1px white border there, which would show in dark mode. Only checked on Windows 11
-- [ ] macOS: the system title bar still repeats the sidebar's "Unified Mail". `titleBarStyle: "Overlay"` with `hiddenTitle` would float the window buttons over the sidebar, with room left above the brand. Needs a Mac to check
+- [x] macOS: the system title bar repeated the sidebar's "Unified Mail". The window buttons now float over the sidebar above the brand (`TitleBarStyle::Overlay`, hidden title)
+- [ ] macOS full screen: the system hides the window buttons, leaving the room above the sidebar's brand empty. A class set from `isFullscreen` on resize could drop it
 
 ## New features
 

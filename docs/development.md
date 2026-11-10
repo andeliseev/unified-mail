@@ -254,6 +254,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
+- [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, level with the list header. The window drags by the sidebar's top, the list header and the strip above the message, also on the first click while another app is in front; a double-click there zooms
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] Read a message on the phone: it turns read in the app

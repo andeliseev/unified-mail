@@ -254,10 +254,21 @@ fn main() {
             // title bar on Windows.
             let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("No main window in tauri.conf.json")?;
             let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.theme(window_theme(theme));
-            // On Windows the UI draws its own title bar: the sidebar's brand, a drag area and
-            // the window buttons (docs/ui.md#title-bar). Tauri keeps resizing at the edges.
+            // The UI draws its own title bar, so the app's name appears once, in the sidebar
+            // (docs/ui.md#title-bar). On Windows the window has no system title bar, and the UI
+            // also draws the window buttons. Tauri keeps resizing at the edges.
             #[cfg(windows)]
             let window = window.decorations(false);
+            // On macOS the system's buttons stay, over the sidebar above its brand, centered on
+            // the list header's row; the title bar itself is see-through, with its title hidden.
+            // The page's drag areas need the first click on an inactive window to reach the page,
+            // as a system title bar would.
+            #[cfg(target_os = "macos")]
+            let window = window
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .traffic_light_position(tauri::LogicalPosition::new(18.0, 18.0))
+                .accept_first_mouse(true);
             window.build()?;
             app.manage(state);
             app.manage(idle::Watchers::default());

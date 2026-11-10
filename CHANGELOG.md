@@ -4,6 +4,7 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: the grey title bar is gone, so the app's name no longer shows twice. The window's buttons sit at the top of the sidebar, above the name. Drag the window by the sidebar's top, the list's header or the strip above the message. A click in the window while another app is in front now works right away, for example to drag the window or open a message.
 - macOS: closing the window (the red button or Cmd+W) no longer quits Unified Mail. It keeps running in the Dock, so new mail still arrives and notifies you. Click the Dock icon to bring the window back; Cmd+Q quits.
 - Windows: the grey Windows title bar is gone. The app's own icon and name at the top of the sidebar now head the window, and Minimize, Maximize and Close sit in its top-right corner. Drag the window by the sidebar's top, the list's header or the strip above the message.
 - Pointing at a message in the list shows small Archive, Delete and Mark as read/unread buttons in place of its time, so you can act on it without opening it. In All Mail and Trash they offer Move to Inbox where the reader does.

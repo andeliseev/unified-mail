@@ -221,19 +221,26 @@ async function init() {
 }
 
 /**
- * On Windows the window has no system title bar (main.rs), so the app draws its own. The
- * sidebar's brand, the list header and a strip above the reader drag the window, and a
- * double-click on them maximizes it. Minimize, Maximize and Close sit in the top-right corner.
- * macOS keeps its system title bar.
+ * The window has no grey system title bar (main.rs), so the app's name appears once, at the top
+ * of the sidebar. The sidebar's brand, the list header and a strip above the reader drag the
+ * window, and a double-click on them maximizes it (zooms on macOS). On macOS the system's
+ * window buttons sit over the sidebar, above the brand. On Windows the app draws Minimize,
+ * Maximize and Close in the top-right corner.
  */
 function initTitleBar() {
-  if (!navigator.userAgent.includes('Windows')) return;
-  const win = window.__TAURI__.window.getCurrentWindow();
+  const mac = navigator.userAgent.includes('Macintosh');
+  if (!mac && !navigator.userAgent.includes('Windows')) return;
   const root = document.documentElement;
   root.classList.add('own-title-bar');
+  root.classList.toggle('mac', mac);
   $('#window-bar').hidden = false;
   // "deep": anywhere inside drags, except on buttons.
   for (const el of [$('.brand'), $('.list-head'), $('#window-bar')]) el.dataset.tauriDragRegion = 'deep';
+  if (mac) {
+    $('#window-buttons').hidden = true;
+    return;
+  }
+  const win = window.__TAURI__.window.getCurrentWindow();
   $('#win-min').addEventListener('click', () => win.minimize());
   $('#win-max').addEventListener('click', () => win.toggleMaximize());
   $('#win-close').addEventListener('click', () => win.close());
