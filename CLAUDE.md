@@ -19,5 +19,6 @@
 - Never commit `src-tauri/google-client.json` (the OAuth client, git-ignored).
 - Commits are authored as `Andrei Eliseev <andeliseev@gmail.com>` (set in this repo's git config). Never add `Co-Authored-By` lines or any other Claude/AI attribution to commit messages, pull requests or release notes.
 - `README.md` stays user-facing (download, first launch, sign-in, privacy). Developer details go in `docs/`.
+- The website (home page, privacy policy, support page) is in its own repository, [andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io), in `unified-mail/` ([docs/development.md](docs/development.md#website-home-page-and-privacy-policy)). When what the app accesses or stores changes, update the privacy policy there; when the app icon changes, its favicon too.
 - When behavior changes, update the matching file in `docs/`. Add things you notice but don't do to `docs/todo.md`.
-- Every change people using the app would notice gets a line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), written for them (what changed for them, not how), in the same commit. The Release workflow turns those lines into the release's notes. Changes only to docs, the website or the release tooling don't go there.
+- Every change people using the app would notice gets a line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), written for them (what changed for them, not how), in the same commit. The Release workflow turns those lines into the release's notes. Changes only to docs or the release tooling don't go there.

@@ -55,6 +55,6 @@ Publishing (Testing → In production) needs these values on the **Branding** pa
 | Application privacy policy link | https://andeliseev.github.io/unified-mail/privacy.html |
 | Authorized domains | `andeliseev.github.io` |
 
-The pages are in `site/` (see [development.md](development.md#website-home-page-and-privacy-policy)).
+The pages are in the [andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io) repository (see [development.md](development.md#website-home-page-and-privacy-policy)).
 
 Google Workspace admins can block unverified apps or IMAP for their domain. Using a project inside the same Workspace with the **Internal** audience avoids the verification warning for that domain.

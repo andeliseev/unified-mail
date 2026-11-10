@@ -182,7 +182,7 @@ It asks for a password, then writes the private key to `~/.tauri/unified-mail.ke
 
 ## App icon
 
-The icon is drawn in [`app-icon.svg`](../app-icon.svg): a white envelope outline with rounded corners on a blue tile, with a wide blue rim around it. The flap starts on the sides where the corners end. Google's review of the sign-in screen's branding turned down the earlier icon, a bare flap on the tile, as not identifying the app. The same drawing is the sidebar logo in `src/index.html` and the website's `favicon.svg` (also its heading logo). Change all three together, and the sidebar logo in the README screenshots (`docs/images/`).
+The icon is drawn in [`app-icon.svg`](../app-icon.svg): a white envelope outline with rounded corners on a blue tile, with a wide blue rim around it. The flap starts on the sides where the corners end. Google's review of the sign-in screen's branding turned down the earlier icon, a bare flap on the tile, as not identifying the app. The same drawing is the sidebar logo in `src/index.html` and the website's `unified-mail/favicon.svg`, also its heading logo, in the [website's repository](#website-home-page-and-privacy-policy). Change all three together, and the sidebar logo in the README screenshots (`docs/images/`).
 
 To regenerate the app's icon files after changing it:
 
@@ -194,7 +194,7 @@ Then copy only the files `src-tauri/icons/` already has: `32x32.png`, `64x64.png
 
 ## Website (home page and privacy policy)
 
-Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They live in `site/` and are served by GitHub Pages from the repo [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io), which gets only the `site/` folder's history.
+Google requires a home page and a privacy policy, on a domain listed under **Authorized domains**, before the OAuth app can be published. They're in their own repository, [andeliseev/andeliseev.github.io](https://github.com/andeliseev/andeliseev.github.io), in `unified-mail/`, and GitHub Pages serves it. Clone it next to this one. Its README and CLAUDE.md say how to change and publish it: commit and push `main`.
 
 | Page | URL |
 | --- | --- |
@@ -202,17 +202,11 @@ Google requires a home page and a privacy policy, on a domain listed under **Aut
 | Privacy policy | https://andeliseev.github.io/unified-mail/privacy.html |
 | Support (donations in crypto) | https://andeliseev.github.io/unified-mail/support.html |
 
-The Support page is linked from the app's Settings, the README and GitHub's Sponsor button (`.github/FUNDING.yml`). Change payment options on the page, with no app release needed.
+The Support page is linked from the app's Settings, the README and GitHub's Sponsor button (`.github/FUNDING.yml`). Change payment options there, with no app release needed.
 
-The site also has the pages of [TorrStream Lite](https://github.com/andeliseev/TorrStreamLite) in `site/torrstream-lite/`: a home page, a privacy policy and a support page, at https://andeliseev.github.io/torrstream-lite/. They're published the same way. Both support pages list the same payment options, so change them together.
+When what the app accesses or stores changes, update `unified-mail/privacy.html` there and its effective date, in a commit of that repository. The same goes for `unified-mail/favicon.svg` when the [app icon](#app-icon) changes.
 
-After changing `site/`, commit the change on its own (its message becomes public) and publish:
-
-```bash
-git subtree push --prefix=site https://github.com/andeliseev/andeliseev.github.io.git main
-```
-
-If what the app accesses or stores changes, update `site/unified-mail/privacy.html` and its effective date.
+Until November 2026 the pages were in this repository's `site/` folder and published from here with `git subtree`.
 
 ## Debugging
 
