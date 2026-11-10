@@ -70,9 +70,11 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 
 #app {
   display: grid;
-  /* The reader keeps at least 280px; in narrow windows the list shrinks first.
-     230 + 250 + 280 = the 760px minimum window width. */
-  grid-template-columns: 230px minmax(250px, 400px) minmax(280px, 1fr);
+  /* The list is as wide as it was dragged (--list-width, initListResize), 400px by default.
+     A narrower window takes the reader down to 400px first, where a 600px newsletter still
+     fits at MIN_EMAIL_ZOOM, and then the list down to 250px.
+     230 + 250 + 400 = the 880px minimum window width (minWidth in tauri.conf.json). */
+  grid-template-columns: 230px minmax(250px, var(--list-width, 400px)) minmax(400px, 1fr);
   /* Without an explicit row, the row grows to fit a long message list and the panes
      overflow the window, so neither the list nor the message can scroll. */
   grid-template-rows: minmax(0, 1fr);
@@ -159,12 +161,29 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 /* Message list */
 
 #list-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   border-right: 1px solid var(--border);
   background: var(--panel);
 }
+/* An 8px strip over the list's right border; it shows an accent line under the mouse. */
+#list-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  z-index: 5;
+  cursor: col-resize;
+}
+#list-resize:hover, .resizing #list-resize {
+  background: linear-gradient(var(--accent), var(--accent)) center / 2px 100% no-repeat;
+}
+/* While dragging, the email frame mustn't take the mouse, and nothing gets selected. */
+.resizing iframe { pointer-events: none; }
+.resizing, .resizing * { cursor: col-resize !important; user-select: none; }
 .list-head {
   display: flex;
   align-items: center;

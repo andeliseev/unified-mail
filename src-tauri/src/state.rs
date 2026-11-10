@@ -50,6 +50,8 @@ pub struct Setup {
     pub client_id: Option<String>,
     pub accounts: Vec<String>,
     pub theme: Theme,
+    /// The message list's width in px, set by dragging its edge; None for the default.
+    pub list_width: Option<u32>,
 }
 
 /// Settings → Appearance.
@@ -68,6 +70,7 @@ pub enum Theme {
 #[serde(default)]
 struct Settings {
     theme: Theme,
+    list_width: Option<u32>,
 }
 
 /// A mail list the app shows, unified across accounts.
@@ -221,17 +224,25 @@ impl AppState {
     }
 
     pub fn setup(&self) -> Setup {
+        let settings = self.settings.lock().unwrap();
         Setup {
             built_in_client: ClientCreds::embedded().is_some(),
             client_id: self.creds.lock().unwrap().as_ref().map(|c| c.client_id.clone()),
             accounts: self.accounts.lock().unwrap().clone(),
-            theme: self.settings.lock().unwrap().theme,
+            theme: settings.theme,
+            list_width: settings.list_width,
         }
     }
 
     pub fn save_theme(&self, theme: Theme) -> Result<(), String> {
         let mut settings = self.settings.lock().unwrap();
         settings.theme = theme;
+        write_json(&self.dir.join(SETTINGS_FILE), &*settings)
+    }
+
+    pub fn save_list_width(&self, width: Option<u32>) -> Result<(), String> {
+        let mut settings = self.settings.lock().unwrap();
+        settings.list_width = width;
         write_json(&self.dir.join(SETTINGS_FILE), &*settings)
     }
 

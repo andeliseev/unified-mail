@@ -12,6 +12,11 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 `#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, the email iframe for the message.
 
+The columns are `230px minmax(250px, var(--list-width, 400px)) minmax(400px, 1fr)`:
+- **The list is as wide as it was dragged.** `#list-resize`, an 8px strip over its right border, drags it between `LIST_MIN` (250) and `LIST_MAX` (600) px (`initListResize`), never squeezing the reader below `READER_MIN`, so the saved width is the one seen. It's saved with `set_list_width` in `settings.json` and applied at launch. A double-click goes back to the default, 400px.
+- While dragging, `.resizing` on `<html>` keeps the email frame from taking the mouse and the page from being selected. The drag uses pointer capture, so it follows the mouse over the email too.
+- **Narrowing the window** takes the reader down to 400px first, then the list down to 250px. The grid gives the list its width before the reader's `1fr` gets the rest. 400px is where a 600px newsletter still fits at `MIN_EMAIL_ZOOM` (0.6) with the frame's margins. 230 + 250 + 400 = 880px, the window's `minWidth` (`tauri.conf.json`, `tauri.dev.conf.json`).
+
 ### Title bar
 
 The window has no grey system title bar, so the icon and name appear once, at the top of the sidebar.

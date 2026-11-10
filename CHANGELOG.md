@@ -4,6 +4,9 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Drag the line between the message list and the message to make the list narrower or wider. The app remembers the width; double-click the line to reset it.
+- A narrow window no longer squeezes the message: it stays at least 400 px wide, so a typical newsletter still fits, and the list narrows instead. The smallest window is a little wider than before (880 px).
+
 ## 0.1.14 (2026-11-10)
 
 - macOS: after an update, the keychain password prompt comes up once per account instead of again and again, and no longer comes back every hour. Click **Always Allow** to stop it until the next update. Refusing it no longer makes the account look signed out.

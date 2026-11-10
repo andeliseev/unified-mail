@@ -20,6 +20,11 @@ const MAX_NOTIFICATIONS = 3;
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 // Emails wider than the reader are scaled down to fit, but not below this; past it they scroll.
 const MIN_EMAIL_ZOOM = 0.6;
+// Dragging the message list's edge (initListResize) sets its width within these. The reader
+// keeps READER_MIN, as in the CSS grid, which narrows the list in narrow windows.
+const LIST_MIN = 250;
+const LIST_MAX = 600;
+const READER_MIN = 400;
 // HTML emails bring their own margins, so the frame adds little; plain text gets more room.
 const FRAME_CSS = `
   html { background: #fff; color: #202124; }
@@ -191,12 +196,14 @@ const openMessage = () => state.current && (byKey(keyOf(state.current)) || state
 
 async function init() {
   initTitleBar();
+  initListResize();
   bindEvents();
   const setup = await invoke('get_setup');
   state.builtInClient = setup.builtInClient;
   state.configured = setup.builtInClient || Boolean(setup.clientId);
   state.accounts = setup.accounts;
   state.theme = setup.theme;
+  setListWidth(setup.listWidth);
   renderTheme();
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
@@ -232,6 +239,51 @@ async function init() {
  * window buttons sit over the sidebar, above the brand. On Windows the app draws Minimize,
  * Maximize and Close in the top-right corner.
  */
+/**
+ * Dragging the list's right edge sets the list's width, saved in settings.json; a double-click
+ * goes back to the default. The width can't squeeze the reader below READER_MIN, so what's saved
+ * is what was seen. A narrower window later narrows the list too, through the CSS grid.
+ */
+function initListResize() {
+  const handle = $('#list-resize');
+  let drag = null;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, width: $('#list-pane').getBoundingClientRect().width, now: null };
+    document.documentElement.classList.add('resizing');
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const room = innerWidth - $('#sidebar').getBoundingClientRect().width - READER_MIN;
+    drag.now = Math.round(Math.max(LIST_MIN, Math.min(drag.width + e.clientX - drag.x, LIST_MAX, room)));
+    setListWidth(drag.now);
+  });
+  const end = () => {
+    if (!drag) return;
+    document.documentElement.classList.remove('resizing');
+    if (drag.now) saveListWidth(drag.now);
+    drag = null;
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('dblclick', () => {
+    setListWidth(null);
+    saveListWidth(null);
+  });
+}
+
+/** `width` in px, or null for the CSS default. */
+function setListWidth(width) {
+  if (width) $('#app').style.setProperty('--list-width', `${width}px`);
+  else $('#app').style.removeProperty('--list-width');
+}
+
+function saveListWidth(width) {
+  invoke('set_list_width', { width }).catch((e) => toast(String(e)));
+}
+
 function initTitleBar() {
   if (!IS_MAC && !navigator.userAgent.includes('Windows')) return;
   const root = document.documentElement;

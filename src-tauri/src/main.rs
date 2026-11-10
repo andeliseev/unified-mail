@@ -183,6 +183,12 @@ async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Re
     app.restart()
 }
 
+/// The message list's width in px, set by dragging its edge; null goes back to the default.
+#[tauri::command]
+fn set_list_width(state: State<'_, AppState>, width: Option<u32>) -> Result<(), String> {
+    state.save_list_width(width)
+}
+
 /// Settings → Appearance. The window's theme also sets the page's `prefers-color-scheme`
 /// (on Windows Tauri passes it on to WebView2), so the CSS's dark mode follows it as is.
 #[tauri::command]
@@ -320,6 +326,7 @@ fn main() {
             check_update,
             install_update,
             set_theme,
+            set_list_width,
             open_external,
         ])
         .build(tauri::generate_context!())
