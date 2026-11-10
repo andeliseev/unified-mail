@@ -12,6 +12,21 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 `#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, the email iframe for the message.
 
+### Title bar
+
+On Windows the app draws its own title bar, so the icon and name appear once, in the sidebar, instead of in a grey system bar above it. macOS keeps its system title bar.
+
+- `main.rs` builds the window with `decorations(false)` on Windows only. Tauri still resizes it from the edges (its undecorated-resize handler), keeps the shadow, and on Windows 11 the rounded corners.
+- `initTitleBar` (when the user agent says Windows):
+  - adds `own-title-bar` to `<html>` and shows `#window-bar`, a 32 px strip at the top of the reader;
+  - makes the sidebar's brand, the list header and that strip drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). Dragging is the system's own, so dragging to a screen edge snaps. A double-click maximizes or restores.
+  - wires Minimize, Maximize / Restore Down and Close (`core:window:allow-minimize`, `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` in `capabilities/default.json`).
+- The buttons are 46 × 32 px with glyphs from the system's Segoe Fluent Icons (Windows 11) or Segoe MDL2 Assets (Windows 10), as in Windows' own title bars, so no icon font is bundled. Close turns red on hover. Maximize switches to Restore Down on every resize (`onResized` → `isMaximized`).
+- They're `position: fixed` with a z-index above Settings, the sign-in overlay, the menu and the toast, so the window can always be closed.
+- They dim while another window is in front (`onFocusChanged`, the window's focus). The page's own `blur` isn't used: it also fires when a click moves focus into the email frame.
+
+Not available without the system title bar: the Snap Layouts flyout when hovering Maximize (Windows 11), and the title bar's right-click menu (Restore, Move, Size…). `Win+↑/↓/←/→` and dragging to the screen edges still snap.
+
 ## State and rendering
 
 There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.
@@ -174,8 +189,8 @@ Clicking a notification while it's on screen brings the window forward and sends
 ## Settings and first run
 
 - **Appearance:** System, Light or Dark, as a three-way switch (`#theme`). `set_theme` sets the window's theme and saves it in `settings.json`.
-  - The window's theme decides the native title bar and what the page's `prefers-color-scheme` reports. On Windows Tauri passes it on to WebView2; on macOS the page follows the window. So the CSS dark palette follows it as is.
-  - At launch Rust creates the window itself, already in the saved theme (`"create": false` in the config). A theme set on a window that already exists reaches the page but not the Windows title bar.
+  - The window's theme decides the macOS title bar and what the page's `prefers-color-scheme` reports. On Windows Tauri passes it on to WebView2; on macOS the page follows the window. So the CSS dark palette follows it as is.
+  - At launch Rust creates the window itself, already in the saved theme (`"create": false` in the config). A theme set on a window that already exists reaches the page but not the Windows title bar. That was the reason; since the app draws its own title bar on Windows, it also builds the window without one there (see [Title bar](#title-bar)).
   - The email frame stays white either way.
 
 - With a built-in client, the OAuth section is hidden. First run shows the empty list with an **Add Gmail account** button.

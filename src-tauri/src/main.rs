@@ -250,9 +250,12 @@ fn main() {
             // in the chosen theme. Setting a theme on a window that already exists misses its
             // title bar on Windows.
             let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("No main window in tauri.conf.json")?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
-                .theme(window_theme(theme))
-                .build()?;
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.theme(window_theme(theme));
+            // On Windows the UI draws its own title bar: the sidebar's brand, a drag area and
+            // the window buttons (docs/ui.md#title-bar). Tauri keeps resizing at the edges.
+            #[cfg(windows)]
+            let window = window.decorations(false);
+            window.build()?;
             app.manage(state);
             app.manage(idle::Watchers::default());
             for account in &accounts {

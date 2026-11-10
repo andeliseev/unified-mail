@@ -100,6 +100,30 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 }
 .brand svg { width: 22px; height: 22px; stroke: none; }
 
+/* Windows: the app's own title bar (initTitleBar). The brand reaches the top edge so all of
+   it drags the window. */
+.own-title-bar #sidebar { padding-top: 0; }
+.own-title-bar .brand { padding-top: 18px; }
+#window-bar { flex: none; height: 32px; }
+/* Fixed, so Settings and the sign-in overlay don't cover them. */
+#window-buttons { position: fixed; top: 0; right: 0; z-index: 40; display: flex; }
+#window-buttons button {
+  width: 46px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font: 10px "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  color: var(--text);
+}
+.inactive #window-buttons button { color: var(--muted); }
+#window-buttons button:hover { background: var(--hover); background: color-mix(in srgb, var(--text) 9%, transparent); }
+#window-buttons button:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+#window-buttons #win-close:hover { background: #c42b1c; color: #fff; }
+#window-buttons #win-close:active { background: #c83c30; color: #fff; }
+/* The strip above the reader already gives the message's buttons room. */
+.own-title-bar .msg-head { padding-top: 2px; }
+
 .nav-item, .side-btn {
   display: flex;
   align-items: center;

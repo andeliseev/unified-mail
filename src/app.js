@@ -188,6 +188,7 @@ const openMessage = () => state.current && (byKey(keyOf(state.current)) || state
 // ---------- Startup ----------
 
 async function init() {
+  initTitleBar();
   bindEvents();
   const setup = await invoke('get_setup');
   state.builtInClient = setup.builtInClient;
@@ -217,6 +218,37 @@ async function init() {
   // Not right at launch, so the first sync goes first.
   setTimeout(checkForUpdate, 10 * 1000);
   setInterval(checkForUpdate, UPDATE_CHECK_MS);
+}
+
+/**
+ * On Windows the window has no system title bar (main.rs), so the app draws its own. The
+ * sidebar's brand, the list header and a strip above the reader drag the window, and a
+ * double-click on them maximizes it. Minimize, Maximize and Close sit in the top-right corner.
+ * macOS keeps its system title bar.
+ */
+function initTitleBar() {
+  if (!navigator.userAgent.includes('Windows')) return;
+  const win = window.__TAURI__.window.getCurrentWindow();
+  const root = document.documentElement;
+  root.classList.add('own-title-bar');
+  $('#window-bar').hidden = false;
+  // "deep": anywhere inside drags, except on buttons.
+  for (const el of [$('.brand'), $('.list-head'), $('#window-bar')]) el.dataset.tauriDragRegion = 'deep';
+  $('#win-min').addEventListener('click', () => win.minimize());
+  $('#win-max').addEventListener('click', () => win.toggleMaximize());
+  $('#win-close').addEventListener('click', () => win.close());
+  const showMaximized = async () => {
+    const maximized = await win.isMaximized();
+    const button = $('#win-max');
+    button.textContent = maximized ? '' : '';
+    button.title = maximized ? 'Restore Down' : 'Maximize';  // Windows' own names
+    button.setAttribute('aria-label', button.title);
+  };
+  showMaximized();
+  win.onResized(showMaximized);
+  // The buttons dim while another window is in front, as Windows' own do. This follows the
+  // window's focus, not the page's: the page also blurs when a click goes into the email.
+  win.onFocusChanged(({ payload: focused }) => root.classList.toggle('inactive', !focused));
 }
 
 function bindEvents() {

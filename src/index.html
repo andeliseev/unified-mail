@@ -65,6 +65,16 @@
     </section>
 
     <main id="reader">
+      <!-- Windows only (initTitleBar): the app draws its own title bar. This strip is where the
+           window is dragged; the buttons stay on top of Settings and other overlays. Glyphs from
+           the system's Segoe Fluent Icons / Segoe MDL2 Assets, as in Windows' own title bars. -->
+      <div id="window-bar" hidden>
+        <div id="window-buttons">
+          <button id="win-min" title="Minimize" aria-label="Minimize" tabindex="-1">&#xE921;</button>
+          <button id="win-max" title="Maximize" aria-label="Maximize" tabindex="-1">&#xE922;</button>
+          <button id="win-close" title="Close" aria-label="Close" tabindex="-1">&#xE8BB;</button>
+        </div>
+      </div>
       <div id="reader-empty" class="empty"><p>Select a message to read</p></div>
       <article id="message" hidden>
         <header class="msg-head">
