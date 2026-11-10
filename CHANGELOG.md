@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.1.13 (2026-11-10)
+
 - macOS: new-mail notifications play a sound, as on Windows. You can turn it off in System Settings → Notifications → Unified Mail.
 - macOS: links in emails open in your browser, and right-clicking in an email shows Open link, Copy link and Copy. Before, clicking a link did nothing, and the right-click menu's items didn't work. Keyboard shortcuts such as J, K and E also work after you click into an email.
 
