@@ -3,9 +3,11 @@
 
 mod gmail;
 mod idle;
+mod imap;
 mod oauth;
 mod provider;
 mod state;
+mod yandex;
 
 use provider::{Folder, FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, FolderResult, OlderPage, Setup, Theme, Trashed};
@@ -32,6 +34,7 @@ fn save_client(state: State<'_, AppState>, client_id: String, client_secret: Str
     state.save_client(ClientCreds { client_id, client_secret })
 }
 
+/// Signs in to a new Gmail account in the browser.
 #[tauri::command]
 async fn add_account(window: WebviewWindow, state: State<'_, AppState>) -> Result<String, String> {
     let email = state.add_account().await?;
@@ -39,12 +42,27 @@ async fn add_account(window: WebviewWindow, state: State<'_, AppState>) -> Resul
     Ok(email)
 }
 
-/// Signs in again to an account whose sign-in expired, with that account preselected.
+/// Adds a Yandex Mail account with its address and an app password, after Yandex accepts them.
+/// For an account that's already added, this replaces its password (Reconnect).
+#[tauri::command]
+async fn add_yandex_account(app: AppHandle, state: State<'_, AppState>, email: String, password: String) -> Result<String, String> {
+    let email = state.add_yandex_account(&email, &password).await?;
+    idle::start(&app, &email);
+    Ok(email)
+}
+
+/// Signs in again to a Gmail account whose sign-in expired, with that account preselected.
 #[tauri::command]
 async fn reconnect_account(window: WebviewWindow, state: State<'_, AppState>, email: String) -> Result<String, String> {
     let email = state.reconnect(&email).await?;
     signed_in(&window, &email);
     Ok(email)
+}
+
+/// The sign-in overlay's Cancel: stops the sign-in waiting for the browser.
+#[tauri::command]
+fn cancel_sign_in() {
+    oauth::cancel_pending();
 }
 
 /// After a sign-in: (re)starts push for the account with its new token, and brings the app
@@ -257,6 +275,8 @@ fn main() {
             save_client,
             add_account,
             reconnect_account,
+            add_yandex_account,
+            cancel_sign_in,
             remove_account,
             cached_folder,
             refresh_folder,

@@ -14,14 +14,16 @@ use std::time::{Duration, SystemTime};
 use futures_util::future::join_all;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::gmail;
 use crate::oauth;
+use crate::{gmail, imap, yandex};
 use crate::provider::{Account, Folder, FullMessage, Mailbox, MessageSummary, Provider};
 
 const KEYRING_SERVICE: &str = "unified-mail";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
 const SETTINGS_FILE: &str = "settings.json";
+/// How long a Yandex app password stays in memory before it's read from the keychain again.
+const YANDEX_PASSWORD_CACHE_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +49,8 @@ pub struct Setup {
     pub built_in_client: bool,
     pub client_id: Option<String>,
     pub accounts: Vec<String>,
+    /// Each account's mail service, which decides how it signs in (and reconnects).
+    pub providers: HashMap<String, Provider>,
     pub theme: Theme,
 }
 
@@ -177,6 +181,7 @@ impl AppState {
             built_in_client: ClientCreds::embedded().is_some(),
             client_id: self.creds.lock().unwrap().as_ref().map(|c| c.client_id.clone()),
             accounts: self.emails(),
+            providers: self.accounts.lock().unwrap().iter().map(|a| (a.email.clone(), a.provider)).collect(),
             theme: self.settings.lock().unwrap().theme,
         }
     }
@@ -214,52 +219,78 @@ impl AppState {
     /// Runs the browser sign-in for a new Gmail account and returns its email address.
     /// Signing in to an existing account again just replaces its token.
     pub async fn add_account(&self) -> Result<String, String> {
-        self.sign_in(Provider::Gmail, None).await
+        self.sign_in(None).await
     }
 
-    /// Signs in to `account` again after its sign-in expired, with the sign-in page preselecting
-    /// it. Choosing a different account there changes nothing.
+    /// Signs in to a Gmail `account` again after its sign-in expired, with Google's chooser
+    /// preselecting it. Choosing a different account there changes nothing. (A Yandex account
+    /// reconnects by entering a new app password: `add_yandex_account`.)
     pub async fn reconnect(&self, account: &str) -> Result<String, String> {
-        self.sign_in(self.provider(account)?, Some(account)).await
+        match self.provider(account)? {
+            Provider::Gmail => self.sign_in(Some(account)).await,
+            Provider::Yandex => Err("A Yandex account reconnects with a new app password.".into()),
+        }
     }
 
-    async fn sign_in(&self, provider: Provider, expected: Option<&str>) -> Result<String, String> {
-        let (email, refresh_token, access_token, expires_in) = match provider {
-            Provider::Gmail => {
-                let creds = self.creds()?;
-                let tokens = oauth::authorize(&self.http, &creds, expected).await?;
-                let refresh_token = tokens
-                    .refresh_token
-                    .ok_or("Google did not return a refresh token. Try adding the account again.")?;
-                let email = gmail::profile_email(&self.http, &tokens.access_token).await?;
-                (email, refresh_token, tokens.access_token, tokens.expires_in)
-            }
-        };
+    async fn sign_in(&self, expected: Option<&str>) -> Result<String, String> {
+        let creds = self.creds()?;
+        let tokens = oauth::authorize(&self.http, &creds, expected).await?;
+        let refresh_token = tokens
+            .refresh_token
+            .ok_or("Google did not return a refresh token. Try adding the account again.")?;
+        let email = gmail::profile_email(&self.http, &tokens.access_token).await?;
         if let Some(expected) = expected.filter(|expected| !expected.eq_ignore_ascii_case(&email)) {
             return Err(format!(
                 "You signed in to {email}, not {expected}. To reconnect {expected}, choose it in Google's sign-in."
             ));
         }
-        keyring_entry(&email)?
-            .set_password(&refresh_token)
-            .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
-        self.store_token(&email, access_token, expires_in);
-        self.expired.lock().unwrap().remove(&email);
-
-        let accounts = {
-            let mut accounts = self.accounts.lock().unwrap();
-            if !accounts.iter().any(|a| a.email == email) {
-                accounts.push(Account { email: email.clone(), provider });
-            }
-            accounts.clone()
-        };
-        write_json(&self.dir.join(ACCOUNTS_FILE), &accounts)?;
+        self.save_sign_in(&email, Provider::Gmail, &refresh_token)?;
+        self.store_token(&email, tokens.access_token, tokens.expires_in);
         Ok(email)
     }
 
+    /// Adds a Yandex Mail account, or replaces its app password (Reconnect), once Yandex has
+    /// accepted the address and password.
+    pub async fn add_yandex_account(&self, email: &str, password: &str) -> Result<String, String> {
+        let email = email.trim().to_lowercase();
+        // Yandex shows app passwords in groups; spaces copied with one don't belong to it.
+        let password: String = password.chars().filter(|c| !c.is_whitespace()).collect();
+        if email.split_once('@').is_none_or(|(user, host)| user.is_empty() || !host.contains('.')) {
+            return Err("Enter the full address, like name@yandex.ru.".into());
+        }
+        if password.is_empty() {
+            return Err("Enter the app password.".into());
+        }
+        yandex::check_sign_in(&email, &password).await?;
+        self.save_sign_in(&email, Provider::Yandex, &password)?;
+        self.store_token(&email, password, YANDEX_PASSWORD_CACHE_SECS);
+        Ok(email)
+    }
+
+    /// Keeps an account's sign-in (a Gmail refresh token or a Yandex app password) in the
+    /// keychain, and adds the account if it's new.
+    fn save_sign_in(&self, email: &str, provider: Provider, secret: &str) -> Result<(), String> {
+        keyring_entry(email)?
+            .set_password(secret)
+            .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
+        self.expired.lock().unwrap().remove(email);
+        let accounts = {
+            let mut accounts = self.accounts.lock().unwrap();
+            match accounts.iter_mut().find(|a| a.email == email) {
+                Some(account) => account.provider = provider,
+                None => accounts.push(Account { email: email.to_string(), provider }),
+            }
+            accounts.clone()
+        };
+        write_json(&self.dir.join(ACCOUNTS_FILE), &accounts)
+    }
+
     pub fn remove_account(&self, email: &str) -> Result<(), String> {
+        let provider = self.provider(email).ok();
         if let Ok(entry) = keyring_entry(email) {
-            if let Ok(refresh_token) = entry.get_password() {
+            // Google lets the app give up its access. A Yandex app password stays valid until
+            // it's deleted in Yandex ID.
+            if let (Ok(refresh_token), Some(Provider::Gmail)) = (entry.get_password(), provider) {
                 let http = self.http.clone();
                 tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
             }
@@ -326,10 +357,10 @@ impl AppState {
             if folder != Folder::All {
                 return Ok(Vec::new());
             }
-            let token = self.access_token(account).await?;
+            let secret = self.credential(account).await?;
             // As with unread: any Inbox message in this page is among the newest PAGE_SIZE
             // Inbox messages before the same date.
-            Ok(self.mailbox(account, &token)?.list(Folder::Inbox, Some(before)).await?.ids)
+            self.mailbox(account, &secret)?.ids(Folder::Inbox, Some(before)).await
         };
         let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(before)), inbox_ids)?;
         Ok(OlderPage { messages: page.messages, more: page.more, inbox, warning: page.warning })
@@ -339,10 +370,10 @@ impl AppState {
     /// than that) and fetches summaries only for messages not seen before. A message that
     /// fails to load is skipped, so one odd message can't hide the whole folder.
     async fn sync_account(&self, account: &str, folder: Folder, before: Option<i64>) -> Result<AccountSync, String> {
-        let token = self.access_token(account).await?;
-        let mailbox = self.mailbox(account, &token)?;
-        let (page, unread) = tokio::try_join!(mailbox.list(folder, before), mailbox.unread(folder, before))?;
-        let ids = page.ids;
+        let secret = self.credential(account).await?;
+        let mailbox = self.mailbox(account, &secret)?;
+        let page = mailbox.page(folder, before).await.map_err(|e| self.note_rejection(account, e))?;
+        let (ids, unread) = (page.ids, page.unread);
 
         let mut known: HashMap<String, MessageSummary> = {
             let caches = self.cache.lock().unwrap();
@@ -395,14 +426,14 @@ impl AppState {
 
     /// Fetches a message to show. The UI marks it read separately (`set_unread`).
     pub async fn get_message(&self, account: &str, id: &str) -> Result<FullMessage, String> {
-        let token = self.access_token(account).await?;
-        self.mailbox(account, &token)?.message(id).await
+        let secret = self.credential(account).await?;
+        self.mailbox(account, &secret)?.message(id).await.map_err(|e| self.note_rejection(account, e))
     }
 
     /// Marks a message read (opening it, "Mark as read") or unread ("Mark as unread").
     pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
-        let token = self.access_token(account).await?;
-        self.mailbox(account, &token)?.set_unread(id, unread).await?;
+        let secret = self.credential(account).await?;
+        self.mailbox(account, &secret)?.set_unread(id, unread).await.map_err(|e| self.note_rejection(account, e))?;
         // The same message can be in several folders (Inbox and All Mail).
         let key = cache_key(account, id);
         for cache in self.cache.lock().unwrap().values_mut() {
@@ -414,16 +445,16 @@ impl AppState {
     }
 
     pub async fn archive(&self, account: &str, id: &str) -> Result<(), String> {
-        let token = self.access_token(account).await?;
-        self.mailbox(account, &token)?.archive(id).await?;
+        let secret = self.credential(account).await?;
+        self.mailbox(account, &secret)?.archive(id).await?;
         self.forget(account, id, &[Folder::Inbox]);
         Ok(())
     }
 
     /// Moves to Trash and reports whether the message was in the Inbox, so Undo can put it back there.
     pub async fn trash(&self, account: &str, id: &str) -> Result<Trashed, String> {
-        let token = self.access_token(account).await?;
-        let was_in_inbox = self.mailbox(account, &token)?.trash(id).await?;
+        let secret = self.credential(account).await?;
+        let was_in_inbox = self.mailbox(account, &secret)?.trash(id).await?;
         self.forget(account, id, &[Folder::Inbox, Folder::All]);
         Ok(Trashed { was_in_inbox })
     }
@@ -431,17 +462,28 @@ impl AppState {
     /// Undoes Archive or Delete, or restores from Trash: optionally takes the message out of
     /// Trash, then optionally puts it back in the Inbox.
     pub async fn restore(&self, account: &str, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
-        let token = self.access_token(account).await?;
-        self.mailbox(account, &token)?.restore(id, from_trash, to_inbox).await?;
+        let secret = self.credential(account).await?;
+        self.mailbox(account, &secret)?.restore(id, from_trash, to_inbox).await?;
         if from_trash {
             self.forget(account, id, &[Folder::Trash]);
         }
         Ok(())
     }
 
-    /// The account's mail at its service, signed in with `token` (from `access_token`).
-    fn mailbox<'a>(&'a self, account: &'a str, token: &'a str) -> Result<Mailbox<'a>, String> {
-        Ok(Mailbox { provider: self.provider(account)?, http: &self.http, token, account })
+    /// The account's mail at its service, signed in with `secret` (from `credential`).
+    fn mailbox<'a>(&'a self, account: &'a str, secret: &'a str) -> Result<Mailbox<'a>, String> {
+        Ok(Mailbox { provider: self.provider(account)?, http: &self.http, secret, account })
+    }
+
+    /// An IMAP server turning the sign-in down (a Yandex app password deleted in Yandex ID, or
+    /// IMAP turned off) counts as an expired sign-in, so the UI offers Reconnect.
+    fn note_rejection(&self, account: &str, error: String) -> String {
+        if imap::is_rejection(&error) {
+            self.invalidate_token(account);
+            self.mark_expired(account, "Yandex no longer accepts the app password (or IMAP is off) for")
+        } else {
+            error
+        }
     }
 
     /// Drops a message from folders it just left. Folders it joined pick it up on their next sync.
@@ -470,12 +512,14 @@ impl AppState {
             .ok_or_else(|| "Set up the Google OAuth client in Settings first.".to_string())
     }
 
-    /// Drops the cached access token, e.g. after Google rejected it.
+    /// Drops the cached access token or app password, e.g. after the server rejected it.
     pub fn invalidate_token(&self, account: &str) {
         self.tokens.lock().unwrap().remove(account);
     }
 
-    pub async fn access_token(&self, account: &str) -> Result<String, String> {
+    /// What the account signs in with: for Gmail an OAuth access token, refreshed when it
+    /// expires; for Yandex its app password. Both come from the keychain and are kept in memory.
+    pub async fn credential(&self, account: &str) -> Result<String, String> {
         let cached = {
             let tokens = self.tokens.lock().unwrap();
             tokens
@@ -483,26 +527,32 @@ impl AppState {
                 .filter(|t| SystemTime::now() < t.expires_at)
                 .map(|t| t.value.clone())
         };
-        if let Some(token) = cached {
-            return Ok(token);
+        if let Some(secret) = cached {
+            return Ok(secret);
         }
-        let refreshed = match self.provider(account)? {
+        match self.provider(account)? {
             Provider::Gmail => {
                 let creds = self.creds()?;
                 let Ok(refresh_token) = keyring_entry(account)?.get_password() else {
                     return Err(self.mark_expired(account, "There's no saved sign-in for"));
                 };
-                oauth::refresh(&self.http, &creds, &refresh_token).await
+                let tokens = match oauth::refresh(&self.http, &creds, &refresh_token).await {
+                    Ok(tokens) => tokens,
+                    Err(e) if e == oauth::EXPIRED => return Err(self.mark_expired(account, "The sign-in has expired for")),
+                    Err(e) => return Err(e),
+                };
+                self.expired.lock().unwrap().remove(account);
+                self.store_token(account, tokens.access_token.clone(), tokens.expires_in);
+                Ok(tokens.access_token)
             }
-        };
-        let tokens = match refreshed {
-            Ok(tokens) => tokens,
-            Err(e) if e == oauth::EXPIRED => return Err(self.mark_expired(account, "The sign-in has expired for")),
-            Err(e) => return Err(e),
-        };
-        self.expired.lock().unwrap().remove(account);
-        self.store_token(account, tokens.access_token.clone(), tokens.expires_in);
-        Ok(tokens.access_token)
+            Provider::Yandex => {
+                let Ok(password) = keyring_entry(account)?.get_password() else {
+                    return Err(self.mark_expired(account, "There's no saved app password for"));
+                };
+                self.store_token(account, password.clone(), YANDEX_PASSWORD_CACHE_SECS);
+                Ok(password)
+            }
+        }
     }
 
     /// Remembers that `account` needs signing in again, and returns the error to show for it.
@@ -566,6 +616,18 @@ mod tests {
         assert_eq!(cache_file(Folder::Inbox), "inbox-cache.json");
     }
 
+    /// What's wrong with the address or password is said before anything is sent to Yandex.
+    #[tokio::test]
+    async fn yandex_sign_in_checks_its_input_first() {
+        let state = AppState::load(std::env::temp_dir().join(format!("unified-mail-input-{}", std::process::id())));
+        for email in ["", "name", "name@", "@yandex.ru", "name@localhost"] {
+            let error = state.add_yandex_account(email, "abcdefghijklmnop").await.unwrap_err();
+            assert!(error.starts_with("Enter the full address"), "{email}: {error}");
+        }
+        let error = state.add_yandex_account("name@yandex.ru", "  \n").await.unwrap_err();
+        assert_eq!(error, "Enter the app password.");
+    }
+
     #[test]
     fn accounts_file_survives_entries_it_cannot_read() {
         let dir = std::env::temp_dir().join(format!("unified-mail-test-{}", std::process::id()));
@@ -578,7 +640,7 @@ mod tests {
 
         // An account of a service this version doesn't know (from a newer version) is skipped,
         // and the others still load.
-        fs::write(&path, r#"["a@gmail.com",{"email":"c@yandex.ru","provider":"yandex"}]"#).unwrap();
+        fs::write(&path, r#"["a@gmail.com",{"email":"c@outlook.com","provider":"outlook"}]"#).unwrap();
         let accounts = read_accounts(&path);
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].provider, Provider::Gmail);

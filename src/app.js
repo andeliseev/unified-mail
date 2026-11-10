@@ -129,6 +129,7 @@ const state = {
   full: null,            // the open message's body, to show it again with other colors
   originalColors: false, // dark mode: show the open email in its original light colors
   accounts: [],
+  providers: {},         // account → its mail service, "gmail" or "yandex"
   expired: new Set(),    // accounts whose sign-in Google no longer accepts: they offer Reconnect
   folder: 'inbox',       // folder on screen
   lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
@@ -187,6 +188,7 @@ async function init() {
   state.builtInClient = setup.builtInClient;
   state.configured = setup.builtInClient || Boolean(setup.clientId);
   state.accounts = setup.accounts;
+  state.providers = setup.providers || {};
   state.theme = setup.theme;
   renderTheme();
   $('#client-section').hidden = setup.builtInClient;
@@ -220,7 +222,21 @@ function bindEvents() {
   $('#empty-add').addEventListener('click', addAccount);
   $('#open-settings').addEventListener('click', openSettings);
   $('#close-settings').addEventListener('click', closeSettings);
-  $('#cancel-wait').addEventListener('click', () => { state.authSeq++; $('#waiting').hidden = true; });
+  $('#cancel-wait').addEventListener('click', () => {
+    state.authSeq++;
+    $('#waiting').hidden = true;
+    invoke('cancel_sign_in').catch((e) => console.warn(e));
+  });
+  $('#cancel-choose').addEventListener('click', () => { $('#choose-provider').hidden = true; });
+  $('#yandex-form').addEventListener('submit', submitYandex);
+  $('#yandex-cancel').addEventListener('click', () => { $('#yandex-sign-in').hidden = true; });
+  for (const button of document.querySelectorAll('#choose-provider .provider')) {
+    button.addEventListener('click', () => {
+      $('#choose-provider').hidden = true;
+      if (button.dataset.provider === 'yandex') openYandexForm();
+      else signIn();
+    });
+  }
   $('#archive').addEventListener('click', () => act('archive'));
   $('#trash').addEventListener('click', () => act('trash'));
   $('#restore').addEventListener('click', () => act(state.folder === 'trash' ? 'restore' : 'unarchive'));
@@ -305,6 +321,7 @@ async function refresh() {
 
 /** Stores a folder's messages, re-applying changes Gmail hasn't confirmed yet. */
 function setList(folder, messages) {
+  messages.forEach(decodeSummary);
   let list = messages;
   for (const [key, move] of state.pending) {
     if (move.leave.includes(folder)) list = list.filter((m) => keyOf(m) !== key);
@@ -380,6 +397,7 @@ async function loadOlder() {
 function mergeOlder(folder, account, page) {
   const paging = state.paging[folder][account];
   const known = new Set(state.lists[folder].map(keyOf));
+  page.messages.forEach(decodeSummary);
   const fresh = page.messages.filter((m) => !known.has(keyOf(m)) && !state.pending.get(keyOf(m))?.leave.includes(folder));
   const oldest = Math.min(paging.frontier, ...page.messages.map((m) => m.date));
   // Stop if Gmail returned nothing older, so a quirk can't make this loop forever.
@@ -650,6 +668,7 @@ async function select(key) {
   const seq = ++state.openSeq;
   try {
     const full = await invoke('get_message', { account: m.account, id: m.id });
+    for (const field of ['from', 'to', 'cc', 'subject']) full[field] = decodeWords(full[field]);
     if (seq !== state.openSeq) return;
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
     showBody(full);
@@ -1030,6 +1049,11 @@ function onKey(e, inMessage = false) {
     if (e.key === 'Escape') { e.preventDefault(); return; }
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  for (const overlay of ['#choose-provider', '#yandex-sign-in']) {
+    if ($(overlay).hidden) continue;
+    if (e.key === 'Escape') $(overlay).hidden = true;
+    return;
+  }
   if (!$('#settings').hidden || !$('#waiting').hidden) {
     if (e.key === 'Escape' && state.configured && state.accounts.length) closeSettings();
     return;
@@ -1168,7 +1192,6 @@ function renderTheme() {
 }
 
 function renderSettingsAccounts() {
-  $('#settings-add').disabled = !state.configured;
   $('#account-list').replaceChildren(...state.accounts.map((account) => {
     const li = document.createElement('li');
     li.style.setProperty('--acc', colorOf(account));
@@ -1231,33 +1254,83 @@ function pasteClientJson(e) {
   } catch { /* not JSON; paste normally */ }
 }
 
+/** Add account: asks which mail service, then signs in (`signIn`). */
 function addAccount() {
-  return signIn();
+  $('#choose-provider').hidden = false;
+  $('#choose-provider .provider').focus();
 }
 
 /**
- * Runs Google's sign-in in the browser: for a new account, or with `reconnect` (an email) to
- * sign in again to an account whose sign-in expired. That account is preselected in Google's
- * chooser, and picking another one there changes nothing.
+ * Runs Google's sign-in in the browser: for a new Gmail account, or with `reconnect` (an
+ * email) to sign in again to an account whose sign-in expired. That account is preselected in
+ * Google's chooser, and picking another one there changes nothing. A Yandex account reconnects
+ * by entering a new app password instead.
  */
 async function signIn(reconnect = null) {
-  if (!state.configured) { openSettings(); return; }
+  if (reconnect && state.providers[reconnect] === 'yandex') { openYandexForm(reconnect); return; }
+  // Gmail needs a Google OAuth client: built in, or set up in Settings.
+  if (!reconnect && !state.configured) { openSettings(); return; }
   const seq = ++state.authSeq;
   $('#waiting').hidden = false;
   try {
     const email = reconnect
       ? await invoke('reconnect_account', { email: reconnect })
       : await invoke('add_account');
-    if (!state.accounts.includes(email)) state.accounts.push(email);
-    state.expired.delete(email);
-    render();
-    toast(`${reconnect ? 'Reconnected' : 'Added'} ${email}`, 2500);
+    signedIn(email, 'gmail', reconnect ? 'Reconnected' : 'Added');
     if (seq === state.authSeq) $('#settings').hidden = true;
-    refresh();
   } catch (e) {
     if (seq === state.authSeq) toast(String(e), 6000);
   } finally {
     if (seq === state.authSeq) $('#waiting').hidden = true;
+  }
+}
+
+/** After a sign-in: shows the account (new or reconnected) and syncs. */
+function signedIn(email, provider, what) {
+  if (!state.accounts.includes(email)) state.accounts.push(email);
+  state.providers[email] = provider;
+  state.expired.delete(email);
+  render();
+  toast(`${what} ${email}`, 2500);
+  refresh();
+}
+
+/**
+ * The Yandex form: address and app password. With `reconnect` (an email) the address is fixed
+ * and only a new password is asked for.
+ */
+function openYandexForm(reconnect = null) {
+  $('#yandex-title').textContent = reconnect ? `Reconnect ${reconnect}` : 'Add a Yandex Mail account';
+  $('#yandex-email').value = reconnect || '';
+  $('#yandex-email').readOnly = Boolean(reconnect);
+  $('#yandex-password').value = '';
+  $('#yandex-error').hidden = true;
+  $('#yandex-submit').disabled = false;
+  $('#yandex-submit').textContent = reconnect ? 'Reconnect' : 'Add account';
+  $('#yandex-sign-in').hidden = false;
+  (reconnect ? $('#yandex-password') : $('#yandex-email')).focus();
+}
+
+/** Checks the address and app password with Yandex, then adds (or reconnects) the account. */
+async function submitYandex(e) {
+  e.preventDefault();
+  const email = $('#yandex-email').value;
+  const reconnecting = $('#yandex-email').readOnly;
+  const label = $('#yandex-submit').textContent;
+  $('#yandex-submit').disabled = true;
+  $('#yandex-submit').textContent = 'Checking…';
+  $('#yandex-error').hidden = true;
+  try {
+    const added = await invoke('add_yandex_account', { email, password: $('#yandex-password').value });
+    $('#yandex-sign-in').hidden = true;
+    $('#settings').hidden = true;
+    signedIn(added, 'yandex', reconnecting ? 'Reconnected' : 'Added');
+  } catch (err) {
+    $('#yandex-error').textContent = String(err);
+    $('#yandex-error').hidden = false;
+  } finally {
+    $('#yandex-submit').disabled = false;
+    $('#yandex-submit').textContent = label;
   }
 }
 
@@ -1325,6 +1398,63 @@ function toast(text, ms = 4000, action = null) {
 function hideToast() {
   $('#toast').hidden = true;
   state.undo = null;
+}
+
+/**
+ * Decodes MIME encoded words in a header (`=?koi8-r?B?8NI=?=`, RFC 2047). Gmail sends headers
+ * already decoded; IMAP accounts (Yandex) pass them on as they are, and the webview's
+ * TextDecoder knows the charsets. Whitespace between two encoded words belongs to neither, and
+ * adjacent words in one charset are decoded together, since senders split characters across them.
+ */
+function decodeWords(text) {
+  if (!text || !text.includes('=?')) return text;
+  const word = /=\?([^?\s]+)\?([bBqQ])\?([^?\s]*)\?=/g;
+  let out = '';
+  let last = 0;
+  let run = null;  // adjacent words in one charset: { charset, bytes, raw }
+  const flush = () => {
+    if (!run) return;
+    try {
+      out += new TextDecoder(run.charset).decode(new Uint8Array(run.bytes));
+    } catch {
+      out += run.raw;  // a charset the webview doesn't know: show the header as it came
+    }
+    run = null;
+  };
+  for (const match of text.matchAll(word)) {
+    const [raw, label, encoding, data] = match;
+    const between = text.slice(last, match.index);
+    if (!(run && /^\s*$/.test(between))) { flush(); out += between; }
+    last = match.index + raw.length;
+    const charset = label.split('*')[0].toLowerCase();  // RFC 2231 adds *language
+    const bytes = wordBytes(encoding, data);
+    if (!bytes) { flush(); out += raw; continue; }
+    if (run && run.charset !== charset) flush();
+    if (!run) run = { charset, bytes: [], raw: '' };
+    run.bytes.push(...bytes);
+    run.raw += raw;
+  }
+  flush();
+  return out + text.slice(last);
+}
+
+/** The bytes of one encoded word's data: B is base64, Q is quoted-printable with _ for space. */
+function wordBytes(encoding, data) {
+  try {
+    const binary = encoding.toUpperCase() === 'B'
+      ? atob(data)
+      : data.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    return Array.from(binary, (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+/** Decodes a list summary's headers, and a preview passed on as an encoded word. */
+function decodeSummary(m) {
+  m.from = decodeWords(m.from);
+  m.subject = decodeWords(m.subject);
+  if (m.snippet && m.snippet.includes('=?')) m.snippet = decodeWords(m.snippet).replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 function senderName(from) {

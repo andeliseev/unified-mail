@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::gmail;
+use crate::imap::{self, Auth};
+use crate::{gmail, yandex};
 
 /// Newest messages shown per account in each folder, and the size of each older page.
 pub const PAGE_SIZE: u32 = 50;
@@ -67,9 +68,10 @@ pub struct Body {
     pub charset: String,
 }
 
-/// One page of a folder's message ids, newest first.
+/// One page of a folder: its message ids, newest first, and which of them are unread.
 pub struct Page {
     pub ids: Vec<String>,
+    pub unread: HashSet<String>,
     /// More messages exist beyond this page.
     pub more: bool,
 }
@@ -79,13 +81,25 @@ pub struct Page {
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Gmail,
+    /// Yandex Mail, over IMAP with an app password (`yandex.rs`). Read-only so far, apart from
+    /// read/unread.
+    Yandex,
 }
 
 impl Provider {
     /// The IMAP server push (IDLE) connects to.
-    pub fn imap_host(self) -> &'static str {
+    pub fn imap_server(self) -> &'static imap::Server {
         match self {
-            Provider::Gmail => "imap.gmail.com",
+            Provider::Gmail => &imap::GMAIL,
+            Provider::Yandex => &yandex::SERVER,
+        }
+    }
+
+    /// How an account signs in to that server with its `secret` (see `Mailbox`).
+    pub fn imap_auth(self, secret: &str) -> Auth<'_> {
+        match self {
+            Provider::Gmail => Auth::OAuth(secret),
+            Provider::Yandex => Auth::Password(secret),
         }
     }
 }
@@ -110,6 +124,7 @@ impl Serialize for Account {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let stored = match self.provider {
             Provider::Gmail => StoredAccount::Gmail(self.email.clone()),
+            provider => StoredAccount::WithProvider { email: self.email.clone(), provider },
         };
         stored.serialize(serializer)
     }
@@ -124,61 +139,69 @@ impl<'de> Deserialize<'de> for Account {
     }
 }
 
-/// One account's mail at its service, signed in with `token`.
+/// One account's mail at its service, signed in with `secret`: an OAuth access token (Gmail)
+/// or an app password (Yandex).
 pub struct Mailbox<'a> {
     pub provider: Provider,
     pub http: &'a Client,
-    pub token: &'a str,
+    pub secret: &'a str,
     pub account: &'a str,
 }
 
 impl Mailbox<'_> {
     /// One page of `folder`: its newest messages, or with `before` (ms) the newest ones older
-    /// than that. Such a page may also hold messages from that same second, so callers drop
-    /// the ones they already have.
-    pub async fn list(&self, folder: Folder, before: Option<i64>) -> Result<Page, String> {
+    /// than that, with which of them are unread. Such a page may also hold messages from that
+    /// same second, so callers drop the ones they already have.
+    pub async fn page(&self, folder: Folder, before: Option<i64>) -> Result<Page, String> {
         match self.provider {
-            Provider::Gmail => gmail::list(self.http, self.token, folder, before).await,
+            Provider::Gmail => gmail::page(self.http, self.secret, folder, before).await,
+            Provider::Yandex => yandex::page(self.account, self.secret, folder, before).await,
         }
     }
 
-    /// The unread messages of the same page: every unread message in `list`'s page is among them.
-    pub async fn unread(&self, folder: Folder, before: Option<i64>) -> Result<HashSet<String>, String> {
+    /// Just the ids of the same page, when read state isn't needed.
+    pub async fn ids(&self, folder: Folder, before: Option<i64>) -> Result<Vec<String>, String> {
         match self.provider {
-            Provider::Gmail => gmail::unread(self.http, self.token, folder, before).await,
+            Provider::Gmail => gmail::ids(self.http, self.secret, folder, before).await,
+            Provider::Yandex => Ok(self.page(folder, before).await?.ids),
         }
     }
 
     /// Summaries of these messages, for the list. One that fails comes back as `(id, error)`.
     pub async fn summaries(&self, ids: Vec<String>) -> Vec<Result<MessageSummary, (String, String)>> {
         match self.provider {
-            Provider::Gmail => gmail::summaries(self.http, self.token, self.account, ids).await,
+            Provider::Gmail => gmail::summaries(self.http, self.secret, self.account, ids).await,
+            Provider::Yandex => yandex::summaries(self.account, self.secret, ids).await,
         }
     }
 
     pub async fn message(&self, id: &str) -> Result<FullMessage, String> {
         match self.provider {
-            Provider::Gmail => gmail::get_full(self.http, self.token, id).await,
+            Provider::Gmail => gmail::get_full(self.http, self.secret, id).await,
+            Provider::Yandex => yandex::message(self.account, self.secret, id).await,
         }
     }
 
     pub async fn set_unread(&self, id: &str, unread: bool) -> Result<(), String> {
         match self.provider {
-            Provider::Gmail => gmail::set_unread(self.http, self.token, id, unread).await,
+            Provider::Gmail => gmail::set_unread(self.http, self.secret, id, unread).await,
+            Provider::Yandex => yandex::set_unread(self.account, self.secret, id, unread).await,
         }
     }
 
     /// Takes the message out of the Inbox, keeping it in All Mail.
     pub async fn archive(&self, id: &str) -> Result<(), String> {
         match self.provider {
-            Provider::Gmail => gmail::archive(self.http, self.token, id).await,
+            Provider::Gmail => gmail::archive(self.http, self.secret, id).await,
+            Provider::Yandex => Err(yandex::NOT_YET.into()),
         }
     }
 
     /// Moves the message to Trash. Returns whether it was in the Inbox, so Undo can put it back.
     pub async fn trash(&self, id: &str) -> Result<bool, String> {
         match self.provider {
-            Provider::Gmail => gmail::trash(self.http, self.token, id).await,
+            Provider::Gmail => gmail::trash(self.http, self.secret, id).await,
+            Provider::Yandex => Err(yandex::NOT_YET.into()),
         }
     }
 
@@ -186,7 +209,8 @@ impl Mailbox<'_> {
     /// (`from_trash`), then puts it back in the Inbox (`to_inbox`).
     pub async fn restore(&self, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
         match self.provider {
-            Provider::Gmail => gmail::restore(self.http, self.token, id, from_trash, to_inbox).await,
+            Provider::Gmail => gmail::restore(self.http, self.secret, id, from_trash, to_inbox).await,
+            Provider::Yandex => Err(yandex::NOT_YET.into()),
         }
     }
 }
@@ -215,5 +239,16 @@ mod tests {
         let tagged: Vec<Account> = serde_json::from_str(r#"[{"email":"c@gmail.com","provider":"gmail"}]"#).unwrap();
         assert_eq!(tagged[0], Account { email: "c@gmail.com".into(), provider: Provider::Gmail });
         assert!(serde_json::from_str::<Vec<Account>>(r#"[{"email":"d@x.ru","provider":"nope"}]"#).is_err());
+    }
+
+    #[test]
+    fn other_accounts_name_their_provider() {
+        let mixed = vec![
+            Account { email: "a@gmail.com".into(), provider: Provider::Gmail },
+            Account { email: "b@yandex.ru".into(), provider: Provider::Yandex },
+        ];
+        let json = serde_json::to_string(&mixed).unwrap();
+        assert_eq!(json, r#"["a@gmail.com",{"email":"b@yandex.ru","provider":"yandex"}]"#);
+        assert_eq!(serde_json::from_str::<Vec<Account>>(&json).unwrap(), mixed);
     }
 }

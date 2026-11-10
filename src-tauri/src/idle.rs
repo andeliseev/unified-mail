@@ -1,21 +1,19 @@
 //! Instant new-mail notifications: one IMAP IDLE connection per account.
 //!
-//! Gmail writes a line to an idle IMAP connection as soon as the inbox changes
-//! (new mail, or mail archived/read elsewhere). We then tell the UI, which runs
-//! the normal Gmail API sync. IMAP is used only as this signal.
+//! The server (Gmail or Yandex) writes a line to an idle IMAP connection as soon as the inbox
+//! changes (new mail, or mail archived/read elsewhere). We then tell the UI, which runs the
+//! normal sync. Here IMAP is used only as this signal.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use async_imap::extensions::idle::IdleResponse;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::net::TcpStream;
-use tokio::time::{sleep, timeout};
-use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
+use tokio::time::sleep;
 
+use crate::imap::{self, step, Session};
 use crate::state::AppState;
 
 /// UI event fired when an account's inbox changed; payload is the account email.
@@ -24,12 +22,8 @@ pub const MAIL_CHANGED: &str = "mail-changed";
 /// Re-issue IDLE well within Gmail's ~29 minute limit. A connection that died
 /// silently (e.g. while the computer slept) is noticed at the next cycle.
 const IDLE_CYCLE: Duration = Duration::from_secs(5 * 60);
-/// Limit for every other IMAP step.
-const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(5 * 60);
-
-type Session = async_imap::Session<TlsStream<TcpStream>>;
 
 /// Running watcher task per account.
 #[derive(Default)]
@@ -75,35 +69,12 @@ async fn watch(app: AppHandle, account: String) {
 
 async fn connect(app: &AppHandle, account: &str) -> Result<Session, String> {
     let state = app.state::<AppState>();
-    let host = state.provider(account)?.imap_host();
-    let token = state.access_token(account).await?;
+    let provider = state.provider(account)?;
+    let secret = state.credential(account).await?;
     // The cached token may be stale; on any failure the next attempt fetches a fresh one.
-    login(host, account, &token).await.inspect_err(|_| state.invalidate_token(account))
-}
-
-async fn login(host: &str, account: &str, token: &str) -> Result<Session, String> {
-    let tcp = timeout(STEP_TIMEOUT, TcpStream::connect((host, 993)))
+    let mut session = imap::login(provider.imap_server(), account, provider.imap_auth(&secret))
         .await
-        .map_err(|_| "connection timed out".to_string())?
-        .map_err(|e| e.to_string())?;
-    let tls = TlsConnector::from(native_tls::TlsConnector::new().map_err(|e| e.to_string())?);
-    let stream = timeout(STEP_TIMEOUT, tls.connect(host, tcp))
-        .await
-        .map_err(|_| "TLS handshake timed out".to_string())?
-        .map_err(|e| e.to_string())?;
-
-    let mut client = async_imap::Client::new(stream);
-    timeout(STEP_TIMEOUT, client.read_response())
-        .await
-        .map_err(|_| "no greeting from server".to_string())?
-        .ok_or("connection closed before greeting")?
-        .map_err(|e| e.to_string())?;
-
-    let auth = XOAuth2 { user: account, token, sent: false };
-    let mut session = timeout(STEP_TIMEOUT, client.authenticate("XOAUTH2", auth))
-        .await
-        .map_err(|_| "sign-in timed out".to_string())?
-        .map_err(|(e, _)| format!("IMAP sign-in failed: {e}"))?;
+        .inspect_err(|_| state.invalidate_token(account))?;
     step(session.select("INBOX")).await?;
     Ok(session)
 }
@@ -134,44 +105,5 @@ async fn idle(app: &AppHandle, account: &str, mut session: Session, backoff: &mu
             Ok(session) => session,
             Err(e) => return e,
         };
-    }
-}
-
-async fn step<T>(future: impl Future<Output = async_imap::error::Result<T>>) -> Result<T, String> {
-    timeout(STEP_TIMEOUT, future)
-        .await
-        .map_err(|_| "IMAP command timed out".to_string())?
-        .map_err(|e| e.to_string())
-}
-
-/// SASL XOAUTH2: https://developers.google.com/gmail/imap/xoauth2-protocol
-struct XOAuth2<'a> {
-    user: &'a str,
-    token: &'a str,
-    sent: bool,
-}
-
-impl async_imap::Authenticator for XOAuth2<'_> {
-    type Response = String;
-
-    fn process(&mut self, _challenge: &[u8]) -> String {
-        // On failure Gmail sends an error as a second challenge; an empty reply ends the exchange.
-        if std::mem::replace(&mut self.sent, true) {
-            return String::new();
-        }
-        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Talks to the real imap.gmail.com: run with `cargo test -- --ignored`.
-    #[tokio::test]
-    #[ignore]
-    async fn gmail_rejects_bad_token_without_hanging() {
-        let error = login("imap.gmail.com", "nobody@gmail.com", "not-a-real-token").await.err().unwrap();
-        assert!(error.contains("Invalid credentials"), "{error}");
     }
 }

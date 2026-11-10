@@ -1,7 +1,9 @@
 //! Google OAuth 2.0 for installed apps: system browser + loopback redirect + PKCE.
 //! https://developers.google.com/identity/protocols/oauth2/native-app
+//! (Yandex accounts don't use OAuth: they sign in with an app password, see `yandex.rs`.)
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -10,6 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use url::Url;
 
@@ -26,6 +29,36 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Returned by [`refresh`] when Google no longer accepts the refresh token.
 pub const EXPIRED: &str = "invalid_grant";
 
+/// Stops the sign-in still waiting for the browser, if any.
+static PENDING: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
+
+/// Stops a sign-in that's waiting for the browser (the UI's Cancel). It then fails with
+/// "Sign-in was cancelled", and its listener closes.
+pub fn cancel_pending() {
+    if let Some(stop) = PENDING.lock().unwrap().take() {
+        let _ = stop.send(());
+    }
+}
+
+/// Registers a new sign-in as the one waiting, stopping one still waiting.
+fn wait_here() -> oneshot::Receiver<()> {
+    cancel_pending();
+    let (stop, stopped) = oneshot::channel();
+    *PENDING.lock().unwrap() = Some(stop);
+    stopped
+}
+
+/// Waits for the browser's redirect to the loopback listener, until it times out or is
+/// cancelled. The listener closes when this returns.
+async fn redirected_code(listener: TcpListener, state: &str, stopped: oneshot::Receiver<()>) -> Result<String, String> {
+    tokio::select! {
+        waited = timeout(SIGN_IN_TIMEOUT, wait_for_code(&listener, state)) => {
+            waited.map_err(|_| "Sign-in timed out. Try again.".to_string())?
+        }
+        _ = stopped => Err("Sign-in was cancelled.".into()),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Tokens {
     pub access_token: String,
@@ -40,8 +73,10 @@ fn default_expiry() -> u64 {
 }
 
 /// Opens Google sign-in in the system browser and waits for the redirect back to us.
-/// `login_hint` (an email address) preselects that account, for reconnecting it.
+/// `login_hint` (an email address) preselects that account, for reconnecting it. A new
+/// sign-in replaces one still waiting.
 pub async fn authorize(http: &reqwest::Client, creds: &ClientCreds, login_hint: Option<&str>) -> Result<Tokens, String> {
+    let stopped = wait_here();
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(err)?;
     let redirect_uri = format!("http://127.0.0.1:{}", listener.local_addr().map_err(err)?.port());
     let verifier = random_token(48);
@@ -66,9 +101,7 @@ pub async fn authorize(http: &reqwest::Client, creds: &ClientCreds, login_hint: 
     let auth_url = Url::parse_with_params(AUTH_URL, &params).map_err(err)?;
     open::that_detached(auth_url.as_str()).map_err(|e| format!("Could not open the browser: {e}"))?;
 
-    let code = timeout(SIGN_IN_TIMEOUT, wait_for_code(&listener, &state))
-        .await
-        .map_err(|_| "Sign-in timed out. Try again.".to_string())??;
+    let code = redirected_code(listener, &state, stopped).await?;
 
     token_request(
         http,
@@ -189,4 +222,24 @@ fn random_token(bytes: usize) -> String {
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cancel, or a new sign-in, stops a sign-in waiting for the browser. (One test, because
+    /// the waiting sign-in is shared by the whole app.)
+    #[tokio::test]
+    async fn cancel_and_new_sign_ins_stop_a_waiting_one() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stopped = wait_here();
+        cancel_pending();
+        assert_eq!(redirected_code(listener, "state", stopped).await, Err("Sign-in was cancelled.".to_string()));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first = wait_here();
+        let _second = wait_here();
+        assert_eq!(redirected_code(listener, "state", first).await, Err("Sign-in was cancelled.".to_string()));
+    }
 }

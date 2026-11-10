@@ -1,5 +1,7 @@
 # Authentication
 
+Gmail accounts sign in with OAuth in the system browser (`oauth.rs`), as below. [Yandex](#yandex) accounts sign in with an app password instead. **Add account** first asks which service.
+
 ## Sign-in flow (`oauth.rs`)
 
 This is Google's [OAuth for installed apps](https://developers.google.com/identity/protocols/oauth2/native-app) flow:
@@ -7,12 +9,25 @@ This is Google's [OAuth for installed apps](https://developers.google.com/identi
 1. Bind a TCP listener on `127.0.0.1:<random port>`. The redirect URI is `http://127.0.0.1:<port>`; Google accepts any loopback port for Desktop clients.
 2. Generate a PKCE verifier (S256 challenge) and a random `state`.
 3. Open the consent URL in the **system browser** (`open` crate) with `access_type=offline` and `prompt=select_account consent`. The prompt makes Google always show the account chooser and always return a refresh token.
-4. Accept connections until one carries `?code=...`. Connections that send nothing (browser preconnects) are dropped after 3 s, and requests without a code (favicon) get a placeholder page. A wrong `state` aborts the sign-in. The whole wait times out after 5 minutes.
+4. Accept connections until one carries `?code=...`, or until Cancel (`cancel_sign_in`) or a new sign-in stops the wait. Connections that send nothing (browser preconnects) are dropped after 3 s, and requests without a code (favicon) get a placeholder page. A wrong `state` aborts the sign-in. The whole wait times out after 5 minutes.
 5. Exchange the code at `oauth2.googleapis.com/token` (with `code_verifier`) for an access token and a refresh token.
 6. Call Gmail `users/me/profile` to learn the account's email address.
 7. Save the refresh token in the OS keychain and the email in `accounts.json`, then start push for the account.
 
 Signing in again to an account that's already added just replaces its token. That's also how an expired sign-in is fixed: **Reconnect** (`reconnect_account`) runs the same sign-in with `login_hint` set to the account, so Google's chooser preselects it. If a different account is chosen there anyway, nothing is saved and the user is told which account to pick.
+
+## Yandex
+
+Yandex Mail has no REST API, so the app reads it over IMAP (`yandex.rs`). A Yandex account signs in with an **app password**: one the user creates in Yandex ID for mail, not their Yandex password. **Add account → Yandex Mail** asks for the address and that password (`add_yandex_account`). The app signs in to `imap.yandex.com` once with them (`yandex::check_sign_in`, IMAP `LOGIN`). If Yandex accepts, the password goes into the keychain and the account into `accounts.json`, as `{ "email", "provider": "yandex" }`.
+
+- **Why not OAuth.** Yandex refuses OAuth tokens with mail rights (`mail:imap_full`) to apps like this one. It answers `unauthorized_client`: "Запрещено получать токены с данными правами для данного приложения". This happened with both kinds of Yandex OAuth app. An app "for user sign-in" can register a loopback Redirect URI, but Yandex won't give it mail rights. An app "for API access or debugging" can have them, but its Redirect URI is fixed to Yandex's code page, and it still refused a test account. App passwords are also how mail programs such as Thunderbird connect to Yandex.
+- **The password is kept like a refresh token:** in the keychain under the address, and in memory for up to a day (`credential`). Spaces copied with it are dropped.
+- **A rejected password counts as an expired sign-in.** That's what happens when the password is deleted in Yandex ID or IMAP is turned off. `imap::is_rejection` recognizes the server's refusal, as opposed to a network problem. The account is then marked expired, and **Reconnect** opens the same form with the address filled in, asking for a new password.
+- Removing an account deletes the password from the keychain. The password itself stays valid until it's deleted in Yandex ID.
+- Push uses the same password (`Provider::imap_auth`).
+- **TLS 1.2 only** (`yandex::SERVER`). On Windows, the system's TLS (SChannel) dropped Yandex's long-lived TLS 1.3 connections mid-session with `SEC_E_DECRYPT_FAILURE` ("Указанные данные не могут быть расшифрованы", os error -2146893008), so push reconnected every few seconds. Short sync connections survived. curl met the same SChannel problem ([#9879](https://github.com/curl/curl/issues/9879)). Gmail stays on TLS 1.3.
+
+Each user also turns on IMAP once in Yandex Mail: Settings → Почтовые программы (Mail clients), "С сервера imap.yandex.ru по протоколу IMAP", allowing "Пароли приложений и OAuth-токены". The form says so and links there and to Yandex ID's app passwords page.
 
 ## Built-in client (`build.rs`)
 

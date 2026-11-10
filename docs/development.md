@@ -223,8 +223,9 @@ If what the app accesses or stores changes, update `site/unified-mail/privacy.ht
 Never run a development build on your real Gmail accounts: a bug could archive, delete or mark real mail.
 
 - `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `io.unifiedmail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
-- Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
+- Sign in there only with test accounts (Gmail or Yandex). Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
 - Release builds (`npm run build`, `npx tauri build`) use the real identity, `io.unifiedmail.desktop`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
+- A Yandex test account needs IMAP turned on in Yandex Mail and an app password for mail from Yandex ID (see [auth.md](auth.md#yandex)).
 - For the UI alone, use a fake backend, as described next.
 
 ## Testing the UI without Google
@@ -253,7 +254,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 
 ## Manual test checklist
 
-- [ ] First run: no Settings prompt with a built-in client; **Add Gmail account** shown
+- [ ] First run: no Settings prompt with a built-in client; **Add account** shown, asking Gmail or Yandex Mail
 - [ ] Sign in to two accounts; both appear, unified list sorted by date
 - [ ] Send yourself mail: it appears within a few seconds (push)
 - [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification

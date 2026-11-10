@@ -294,6 +294,17 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   user-select: text;
 }
 .card.small { width: 340px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+/* Yandex sign-in: address and app password. */
+#yandex-form { width: min(440px, 100%); display: flex; flex-direction: column; gap: 6px; }
+#yandex-form .steps { margin: 0 0 6px; padding-left: 20px; }
+#yandex-form .steps li { margin: 3px 0; }
+#yandex-form label { margin: 6px 0 0; font-size: 13px; }
+.form-error { margin: 4px 0 0; color: var(--danger); font-size: 13px; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+/* Add account: one button per mail service. */
+.card .provider { width: 100%; padding: 10px; font-size: 14px; font-weight: 600; }
+.card button.link { margin-top: 6px; border: 0; background: none; color: var(--muted); }
+.card button.link:hover { color: var(--text); }
 .card h2 { margin: 0 0 6px; font-size: 18px; }
 .card h3 { margin: 18px 0 6px; font-size: 14px; }
 .card .close { position: absolute; top: 14px; right: 14px; }

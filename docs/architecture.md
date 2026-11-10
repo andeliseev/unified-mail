@@ -12,6 +12,8 @@ flowchart LR
     State["state.rs<br/>accounts, tokens, folder caches"]
     Provider["provider.rs<br/>Mailbox: per-service operations"]
     Gmail["gmail.rs<br/>Gmail REST client"]
+    Yandex["yandex.rs<br/>Yandex Mail over IMAP"]
+    Imap["imap.rs<br/>IMAP sign-in (XOAUTH2)"]
     OAuth["oauth.rs<br/>sign-in"]
     Idle["idle.rs<br/>IMAP IDLE watchers"]
   end
@@ -20,11 +22,14 @@ flowchart LR
   Main --> State
   State --> Provider
   Provider --> Gmail
+  Provider --> Yandex
+  Yandex --> Imap
   State --> OAuth
   Idle --> State
   Gmail --> GAPI["gmail.googleapis.com"]
-  OAuth --> GAUTH["accounts.google.com<br/>oauth2.googleapis.com"]
-  Idle --> IMAP["imap.gmail.com:993"]
+  OAuth --> GAUTH["accounts.google.com<br/>oauth2.googleapis.com<br/>oauth.yandex.ru"]
+  Idle --> Imap
+  Imap --> IMAP["imap.gmail.com:993<br/>imap.yandex.com:993"]
   Main -- "updater plugin" --> GH["github.com<br/>releases: latest.json"]
 ```
 
@@ -34,9 +39,11 @@ flowchart LR
 | --- | --- |
 | `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, folder caches, expired sign-ins, file persistence, keychain. Knows nothing of Gmail's labels or API: it asks the account's `Mailbox` |
-| `provider.rs` | The app's mail vocabulary (`Folder`, `MessageSummary`, `FullMessage`), the `Provider` an account belongs to (only `Gmail` so far), and `Mailbox`: list a folder page, its unread ids, summaries, full message, read/unread, archive, trash, restore. Each operation matches on the provider |
+| `provider.rs` | The app's mail vocabulary (`Folder`, `MessageSummary`, `FullMessage`), the `Provider` an account belongs to (`Gmail`, `Yandex`), and `Mailbox`: a folder page with its unread ids, summaries, full message, read/unread, archive, trash, restore. Each operation matches on the provider |
 | `gmail.rs` | Gmail through its REST API: folders as label filters, list, metadata, full message, archive, trash, restore, mark read/unread, and MIME body selection |
-| `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
+| `yandex.rs` | Yandex Mail over IMAP: folders, pages by UID, summaries from `ENVELOPE` and `BODYSTRUCTURE`, a body part by section with its transfer encoding undone, `\Seen`. Ids are `<folder letter><UIDVALIDITY>.<UID>`. Archive, Delete and Undo aren't done yet. See [auth.md](auth.md#yandex) |
+| `imap.rs` | An IMAP connection over TLS (each `Server` says whether to stay on TLS 1.2, as Yandex does), signed in with an OAuth token (XOAUTH2, Gmail) or a password (LOGIN, Yandex's app password); used by push and by `yandex.rs` |
+| `oauth.rs` | Google's installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke, and Cancel |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
@@ -46,10 +53,12 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 
 | Command | Args | Returns |
 | --- | --- | --- |
-| `get_setup` | | `{ builtInClient, clientId, accounts }` |
+| `get_setup` | | `{ builtInClient, clientId, accounts, providers, theme }`; `providers[email]` is `gmail` or `yandex` |
 | `save_client` | `clientId, clientSecret` | Only used when no client is built in |
-| `add_account` | | Email address; runs the browser sign-in and starts push |
+| `add_account` | | Email address; runs Google's sign-in in the browser for a new Gmail account and starts push |
+| `add_yandex_account` | `email, password` | Email address; checks the address and app password with Yandex's IMAP server, saves them and starts push. For an added account it replaces the password (Reconnect) |
 | `reconnect_account` | `email` | Email address; signs in again to an expired account (preselected in Google's chooser), restarts its push. Fails if another account is chosen |
+| `cancel_sign_in` | | Stops a Google sign-in waiting for the browser (the overlay's Cancel) |
 | `remove_account` | `email` | Stops push, revokes the token, deletes it from the keychain |
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
 | `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
@@ -89,7 +98,7 @@ Plugins:
 
 | Data | Where | Format |
 | --- | --- | --- |
-| Refresh tokens | OS keychain, service `unified-mail`, user = email | `keyring` crate |
+| Refresh tokens (Gmail), app passwords (Yandex) | OS keychain, service `unified-mail`, user = email | `keyring` crate |
 | Access tokens | Memory only | Expire 60 s early; wall clock, see below |
 | OAuth client (Settings fallback) | `<app data>/client.json` | JSON |
 | Account list | `<app data>/accounts.json` | JSON array: a Gmail account is its email as a string (as before providers existed); another service's account would be `{ "email", "provider" }`. Entries this version can't read are skipped, not fatal |
@@ -105,5 +114,5 @@ Plugins:
 - **Locks are never held across `.await`.** `AppState` uses `std::sync::Mutex`, locked only for quick in-memory reads and writes. Network calls happen outside the lock, and Tauri async commands must be `Send`.
 - **Access-token expiry uses `SystemTime`, not `Instant`.** On macOS `Instant` stops while the machine sleeps, which would leave expired tokens looking valid.
 - **Errors are `String`s.** Every failure ends up as a message in the UI, so a typed error enum would add code without adding value yet.
-- **Message ids are checked.** They go into URL paths, so `gmail.rs` accepts only alphanumeric ids.
+- **Message ids are checked.** They go into URL paths, so `gmail.rs` accepts only alphanumeric ids, and `yandex.rs` parses its own format before using one.
 - **Mail services are an enum, not a trait object.** `Provider` lists the services and every `Mailbox` operation matches on it. That needs no `dyn`/`async-trait` machinery, and adding a service makes the compiler point at every operation it must implement. Ids stay opaque strings to `state.rs` and the UI.

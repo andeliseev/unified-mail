@@ -34,18 +34,25 @@ fn unread_labels(folder: Folder) -> &'static [&'static str] {
     }
 }
 
-/// One page of `folder`, newest first, or with `before` (ms) the newest ones older than that.
-pub async fn list(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<Page, String> {
+/// One page of `folder`, newest first, or with `before` (ms) the newest ones older than that,
+/// with which of them are unread.
+pub async fn page(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<Page, String> {
     let q = before.map(before_query);
-    list_ids(http, token, folder_labels(folder), folder == Folder::Trash, q.as_deref(), PAGE_SIZE).await
+    let trash = folder == Folder::Trash;
+    let (page, unread) = tokio::try_join!(
+        list_ids(http, token, folder_labels(folder), trash, q.as_deref(), PAGE_SIZE),
+        // Any unread message in this page is also among the PAGE_SIZE newest unread ones of
+        // the same query, so this one call keeps read state current.
+        list_ids(http, token, unread_labels(folder), trash, q.as_deref(), PAGE_SIZE),
+    )?;
+    let unread: HashSet<String> = unread.ids.into_iter().collect();
+    Ok(Page { ids: page.ids, unread, more: page.more })
 }
 
-/// The newest unread messages of the same query as `list`. Any unread message in `list`'s page
-/// is also among the PAGE_SIZE newest unread ones, so this one call keeps read state current.
-pub async fn unread(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<HashSet<String>, String> {
+/// Just the ids of the same page as `page`.
+pub async fn ids(http: &Client, token: &str, folder: Folder, before: Option<i64>) -> Result<Vec<String>, String> {
     let q = before.map(before_query);
-    let page = list_ids(http, token, unread_labels(folder), folder == Folder::Trash, q.as_deref(), PAGE_SIZE).await?;
-    Ok(page.ids.into_iter().collect())
+    Ok(list_ids(http, token, folder_labels(folder), folder == Folder::Trash, q.as_deref(), PAGE_SIZE).await?.ids)
 }
 
 /// Summaries for these messages, a few requests at a time. One that fails is returned as `(id, error)`.
@@ -123,6 +130,13 @@ pub async fn profile_email(http: &Client, token: &str) -> Result<String, String>
     Ok(profile.email_address)
 }
 
+/// Message ids of one list request, newest first.
+struct IdList {
+    ids: Vec<String>,
+    /// More messages exist beyond these.
+    more: bool,
+}
+
 /// The newest messages carrying all of `labels` (and matching the Gmail search `q`, if any).
 /// Spam and Trash are left out unless `include_spam_trash` (needed to list Trash).
 async fn list_ids(
@@ -132,7 +146,7 @@ async fn list_ids(
     include_spam_trash: bool,
     q: Option<&str>,
     max: u32,
-) -> Result<Page, String> {
+) -> Result<IdList, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct List {
@@ -156,7 +170,7 @@ async fn list_ids(
     }
     let resp = send(http.get(format!("{API}/messages")).bearer_auth(token).query(&query)).await?;
     let list: List = parse_json(resp).await?;
-    Ok(Page {
+    Ok(IdList {
         ids: list.messages.into_iter().map(|m| m.id).collect(),
         more: list.next_page_token.is_some(),
     })

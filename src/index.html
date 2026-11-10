@@ -41,7 +41,7 @@
       <ul id="messages"></ul>
       <div id="list-empty" class="empty" hidden>
         <p id="list-empty-text"></p>
-        <button id="empty-add" class="primary" hidden>Add Gmail account</button>
+        <button id="empty-add" class="primary" hidden>Add account</button>
       </div>
     </section>
 
@@ -118,7 +118,7 @@
       <section>
         <h3>Gmail accounts</h3>
         <ul id="account-list"></ul>
-        <button id="settings-add" class="primary">Add Gmail account</button>
+        <button id="settings-add" class="primary">Add account</button>
       </section>
 
       <section>
@@ -142,6 +142,37 @@
         <p>© 2026 Andrei Eliseev</p>
       </section>
     </div>
+  </div>
+
+  <div id="choose-provider" class="overlay" hidden>
+    <div class="card small" role="dialog" aria-labelledby="choose-title">
+      <h2 id="choose-title">Add an account</h2>
+      <button class="provider" data-provider="gmail">Gmail</button>
+      <button class="provider" data-provider="yandex">Yandex Mail</button>
+      <button id="cancel-choose" class="link">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Yandex Mail: address + app password (Yandex gives apps no OAuth access to mail). -->
+  <div id="yandex-sign-in" class="overlay" hidden>
+    <form id="yandex-form" class="card" role="dialog" aria-labelledby="yandex-title">
+      <h2 id="yandex-title">Add a Yandex Mail account</h2>
+      <ol class="hint steps">
+        <li>In <a href="#" data-href="https://mail.yandex.ru/#setup/client">Yandex Mail settings → Mail clients</a>,
+          turn on access over IMAP and allow <b>app passwords and OAuth tokens</b>.</li>
+        <li>Create an app password for mail in <a href="#" data-href="https://id.yandex.ru/security/app-passwords">Yandex ID</a>.</li>
+        <li>Enter your address and that password here.</li>
+      </ol>
+      <label for="yandex-email">Email</label>
+      <input id="yandex-email" type="email" autocomplete="username" spellcheck="false" placeholder="name@yandex.ru">
+      <label for="yandex-password">App password</label>
+      <input id="yandex-password" type="password" autocomplete="current-password" spellcheck="false">
+      <p id="yandex-error" class="form-error" hidden></p>
+      <div class="form-actions">
+        <button type="button" id="yandex-cancel">Cancel</button>
+        <button id="yandex-submit" class="primary">Add account</button>
+      </div>
+    </form>
   </div>
 
   <div id="waiting" class="overlay" hidden>
