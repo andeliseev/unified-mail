@@ -4,18 +4,18 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 ## Not verified yet
 
-- [ ] End-to-end with a real Google account: sign-in, sync, push, archive, trash
-- [ ] macOS build: keychain prompts for unsigned builds, WKWebView behavior of the sandboxed email iframe (link interception and the right-click menu, including Copy, were only checked in Chromium/WebView2)
-- [ ] Mark as unread, the right-click menu and the row buttons in the real app with a test Gmail account (checked with a fake backend only so far)
+- [x] End-to-end with a real Google account: sign-in, sync, push, archive, trash
+- [x] macOS build: keychain prompts for unsigned builds. Checked in a release built and installed locally
+- [x] Mark as unread, the right-click menu and the row buttons in the real app with a real Gmail account
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
-- [ ] macOS `.dmg` from the Release workflow: first run on a real Mac (ad-hoc signing, Gatekeeper prompt)
+- [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. Ad-hoc signing works (a release built locally runs), but a local build isn't quarantined, so it never shows that prompt
 - [x] First run of the Release workflow on GitHub (v0.1.0)
 
 ## Gaps in current features
 
 - [x] **Undo** for Archive, Delete and Move to Inbox; **All Mail** and **Trash** folders
-- [ ] Undo, Trash and All Mail against real Gmail accounts (tested with a mock backend only so far)
+- [x] Undo, Trash and All Mail against real Gmail accounts
 - [ ] Push only watches the Inbox; All Mail and Trash refresh with it, on focus and every 5 min
 - [ ] More folders: Sent, Starred, Spam, user labels
 - [x] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
@@ -32,7 +32,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
 - [ ] Inline `cid:` images and attachments aren't shown
 - [ ] Dark mode for emails: dark logos on transparent backgrounds stay hard to see; maybe a light backing behind small transparent images. Original could also be remembered per sender instead of per opened message
-- [ ] Dark mode for emails on macOS (WKWebView) is untested: rewriting the email's media rules and the frame following the app's dark preference
+- [x] Dark mode for emails on macOS (WKWebView): rewriting the email's media rules and the frame following the app's dark preference. Checked in a release built and installed locally
 - [ ] Optional blocking of remote images (tracking pixels), with a "Load images" button
 - [ ] Remember window size and position
 - [ ] Own title bar on Windows: no Snap Layouts flyout on Maximize and no title bar right-click menu (Restore, Move, Size…). `tauri-plugin-decorum` brings Snap Layouts back, but it's another crate; check its size first
@@ -47,7 +47,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] A setting to turn notifications off inside the app (Windows and macOS can already turn them off per app)
 - [ ] Clicking an old notification in the Windows Action Center only brings the window forward, without opening the message. That needs a COM activator, which the notification plugin doesn't have
 - [ ] The badge, like the sidebar, counts unread mail only among loaded messages (each account's newest 50 in the Inbox, plus older pages scrolled to). Gmail's `labels.get` for `INBOX` would give the exact count
-- [ ] macOS: notifications and the Dock badge are untested; notifications may need a signed app, and they're silent (no sound is set there)
+- [x] macOS: notifications and the Dock badge work in a release built and installed locally (ad-hoc signed, not notarized)
+- [ ] macOS notifications are silent: no sound is set there, while Windows plays the system's Mail sound
 - [ ] **Tray icon** on Windows: keep running in the background when the window is closed, as the app already does in the Dock on macOS
 - [ ] macOS: once the window is closed, only the Dock icon or a notification brings it back. A Window menu item for it, like Mail's Window → Message Viewer, would add a keyboard way
 - [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)
