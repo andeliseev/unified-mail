@@ -50,8 +50,7 @@ async fn reconnect_account(window: WebviewWindow, state: State<'_, AppState>, em
 /// back, since sign-in happened in the browser.
 fn signed_in(window: &WebviewWindow, email: &str) {
     idle::start(window.app_handle(), email);
-    let _ = window.unminimize();
-    let _ = window.set_focus();
+    show_window(window.app_handle());
 }
 
 #[tauri::command]
@@ -198,7 +197,11 @@ fn window_theme(theme: Theme) -> Option<tauri::Theme> {
     }
 }
 
+/// Brings the window forward, also when it's minimized or hidden. On macOS the window hides
+/// when it's closed, and the whole app when it's closed in full screen or with Cmd+H.
 fn show_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -294,6 +297,32 @@ fn main() {
             set_theme,
             open_external,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Unified Mail");
+        .build(tauri::generate_context!())
+        .expect("error while running Unified Mail")
+        .run(on_event);
+}
+
+/// macOS: closing the window (its close button, Cmd+W) only hides it, and the app stays in the
+/// Dock, as Mail does, so push and notifications go on. Clicking the Dock icon brings it back.
+/// Cmd+Q still quits: it ends the app without asking the window to close. Elsewhere closing the
+/// window quits the app.
+fn on_event(app: &AppHandle, event: tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    match event {
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
+            api.prevent_close();
+            let Some(window) = app.get_webview_window(&label) else { return };
+            // A full-screen window that hides leaves its empty, black Space on screen, so in
+            // full screen the whole app hides instead, as Cmd+H does.
+            if window.is_fullscreen().unwrap_or(false) {
+                let _ = app.hide();
+            } else {
+                let _ = window.hide();
+            }
+        }
+        tauri::RunEvent::Reopen { has_visible_windows: false, .. } => show_window(app),
+        _ => {}
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, event);
 }

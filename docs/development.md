@@ -209,6 +209,7 @@ When what the app accesses or stores changes, update `unified-mail/privacy.html`
 ## Debugging
 
 - In `npm run dev` the Rust side's stderr goes to the terminal, including `[push] ...` lines from IMAP watchers. Release builds on Windows have no console (`windows_subsystem = "windows"`).
+- On macOS closing the window doesn't quit the app ([ui.md](ui.md#closing-the-window)), so `npm run dev` keeps running. Quit with `Cmd+Q`, or `Ctrl+C` in the terminal.
 - `Ctrl+Shift+I` (`Cmd+Option+I` on macOS) opens devtools in dev builds. Right-click shows the app's own menu, not the webview's, so it has no Inspect.
 - Clear the app's state by deleting the app data folder (see [architecture.md](architecture.md#storage)). Saved sign-ins are separate: they stay in the OS keychain under service `unified-mail`.
 
@@ -253,6 +254,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with the mail sound; clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
+- [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees

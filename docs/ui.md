@@ -27,6 +27,17 @@ On Windows the app draws its own title bar, so the icon and name appear once, in
 
 Not available without the system title bar: the Snap Layouts flyout when hovering Maximize (Windows 11), and the title bar's right-click menu (Restore, Move, Size…). `Win+↑/↓/←/→` and dragging to the screen edges still snap.
 
+### Closing the window
+
+On macOS, closing the window (its close button, `Cmd+W`, or Close Window in the File and Window menus) only hides it, as Mail does. The app stays in the Dock, so push keeps running and new mail still notifies. `Cmd+Q` quits.
+
+- `on_event` in `main.rs` catches the window's `CloseRequested`, prevents the close and hides the window. `Cmd+Q` ends the app without asking the window to close, so it isn't caught.
+- In full screen it hides the whole app instead, as `Cmd+H` does: a hidden full-screen window would leave its empty Space on screen.
+- `show_window` brings it back, unhiding the app too. It runs on a click on the Dock icon (`RunEvent::Reopen` with no visible window), a click on a notification, a second launch, and a sign-in finishing in the browser.
+- While the window is hidden the page counts as hidden, so the periodic refresh pauses (`document.hidden`). Push still syncs and notifies.
+
+On Windows closing the window quits the app.
+
 ## State and rendering
 
 There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.

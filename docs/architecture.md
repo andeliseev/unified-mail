@@ -30,7 +30,7 @@ flowchart LR
 
 | Module | Responsibility |
 | --- | --- |
-| `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge |
+| `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
