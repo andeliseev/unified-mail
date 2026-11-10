@@ -200,7 +200,7 @@ Google requires a home page and a privacy policy, on a domain listed under **Aut
 | --- | --- |
 | Home | https://andeliseev.github.io/unified-mail/ |
 | Privacy policy | https://andeliseev.github.io/unified-mail/privacy.html |
-| Support (donations in crypto) | https://andeliseev.github.io/unified-mail/support.html |
+| Support (Steam wishlist gifts and crypto donations) | https://andeliseev.github.io/unified-mail/support.html |
 
 The Support page is linked from the app's Settings, the README and GitHub's Sponsor button (`.github/FUNDING.yml`). Change payment options there, with no app release needed.
 
