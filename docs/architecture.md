@@ -35,6 +35,7 @@ flowchart LR
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
+| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
 ## Commands (UI → Rust)
@@ -69,6 +70,7 @@ Two more commands are for the [new-mail alerts](ui.md#notifications-and-the-icon
 Events (Rust → UI):
 - `mail-changed`, with the account email as payload.
 - `open-message`, `{ account, id }` or null, when a notification is clicked.
+- macOS only, from `macos.rs`: `email-context-menu`, `[x, y]` in the window, for a right-click in the email, and `email-key`, `[key, code, shift]`, for every key pressed without Cmd, Ctrl or Option.
 
 And two for [updates](development.md#updates):
 

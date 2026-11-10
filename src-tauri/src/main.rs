@@ -3,6 +3,8 @@
 
 mod gmail;
 mod idle;
+#[cfg(target_os = "macos")]
+mod macos;
 mod oauth;
 mod state;
 
@@ -269,7 +271,16 @@ fn main() {
                 .hidden_title(true)
                 .traffic_light_position(tauri::LogicalPosition::new(18.0, 18.0))
                 .accept_first_mouse(true);
-            window.build()?;
+            // macOS: a link clicked in the email asks for a new window; it opens in the browser
+            // instead (macos.rs).
+            #[cfg(target_os = "macos")]
+            let window = window.on_navigation(macos::on_navigation);
+            let window = window.build()?;
+            // macOS: right-clicks and keys in the email reach the page (macos.rs).
+            #[cfg(target_os = "macos")]
+            macos::install(&window);
+            #[cfg(not(target_os = "macos"))]
+            let _ = window;
             app.manage(state);
             app.manage(idle::Watchers::default());
             for account in &accounts {

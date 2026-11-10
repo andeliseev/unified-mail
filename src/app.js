@@ -4,6 +4,8 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { getVersion } = window.__TAURI__.app;
 
+const IS_MAC = navigator.userAgent.includes('Macintosh');
+
 const PALETTE = ['#2f6df6', '#d93025', '#188038', '#e37400', '#9334e6', '#00897b', '#c2185b', '#5f6368'];
 // Push (IMAP IDLE) triggers syncs instantly; polling is only a safety net.
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -211,6 +213,9 @@ async function init() {
     pushTimer = setTimeout(refresh, PUSH_DEBOUNCE_MS);
   });
   await listen('open-message', (e) => openFromNotification(e.payload));
+  // macOS: right-clicks and keys in the email, which WebKit doesn't hand to this page (macos.rs).
+  await listen('email-context-menu', (e) => onEmailContextMenu(...e.payload));
+  await listen('email-key', (e) => onEmailKey(...e.payload));
   setInterval(() => { if (!document.hidden) refresh(); }, AUTO_REFRESH_MS);
   window.addEventListener('focus', () => {
     if (Date.now() - state.lastSync > REFRESH_ON_FOCUS_AFTER_MS) refresh();
@@ -228,15 +233,14 @@ async function init() {
  * Maximize and Close in the top-right corner.
  */
 function initTitleBar() {
-  const mac = navigator.userAgent.includes('Macintosh');
-  if (!mac && !navigator.userAgent.includes('Windows')) return;
+  if (!IS_MAC && !navigator.userAgent.includes('Windows')) return;
   const root = document.documentElement;
   root.classList.add('own-title-bar');
-  root.classList.toggle('mac', mac);
+  root.classList.toggle('mac', IS_MAC);
   $('#window-bar').hidden = false;
   // "deep": anywhere inside drags, except on buttons.
   for (const el of [$('.brand'), $('.list-head'), $('#window-bar')]) el.dataset.tauriDragRegion = 'deep';
-  if (mac) {
+  if (IS_MAC) {
     $('#window-buttons').hidden = true;
     return;
   }
@@ -764,8 +768,10 @@ function showBody(full) {
   state.full = full;  // to show it again with other colors (Original / Dark, a theme change)
   const dark = appIsDark() && !state.originalColors;
   const frame = document.createElement('iframe');
-  // allow-same-origin (without allow-scripts) only lets this page attach the link handler.
-  frame.setAttribute('sandbox', 'allow-same-origin');
+  // allow-same-origin (without allow-scripts) only lets this page reach the email to set it up
+  // and attach its handlers. WebKit (macOS) doesn't run those handlers inside the frame, so there
+  // a link click has to ask for a new window (allow-popups), which macos.rs opens in the browser.
+  frame.setAttribute('sandbox', IS_MAC ? 'allow-same-origin allow-popups' : 'allow-same-origin');
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
     `<style>${FRAME_CSS}${dark ? FRAME_DARK_CSS : ''}</style></head><body>${html}</body></html>`;
@@ -780,6 +786,9 @@ function showBody(full) {
     if (appIsDark()) setEmailColors(doc, dark);
     frame.style.visibility = '';
     fitToFrame(frame);
+    // Every link opens through <base target="_blank">, which the click handler below (or on
+    // macOS, macos.rs) catches. A link's own target, such as _top, would get around that.
+    for (const link of doc.querySelectorAll('a[target], area[target]')) link.removeAttribute('target');
     // Images can widen the layout as they arrive. Their `load` events don't bubble, so capture them.
     doc.addEventListener('load', () => scheduleFit(frame), true);
     doc.addEventListener('click', (e) => {
@@ -788,7 +797,8 @@ function showBody(full) {
       e.preventDefault();
       if (!link.getAttribute('href').startsWith('#')) openExternal(link.href);
     });
-    doc.addEventListener('keydown', (e) => onKey(e, true));
+    // On macOS keys come from macos.rs instead (onEmailKey), so they never act twice.
+    if (!IS_MAC) doc.addEventListener('keydown', (e) => onKey(e, true));
     doc.addEventListener('contextmenu', (e) => onContextMenu(e, frame));
     doc.addEventListener('mousedown', hideMenu);
   });
@@ -1174,6 +1184,30 @@ function onContextMenu(e, frame = null) {
   // Clicks in the email frame are relative to the frame.
   const offset = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
   showMenu(groups, e.clientX + offset.left, e.clientY + offset.top, row);
+}
+
+/**
+ * macOS: a right-click in the email, at `x`, `y` in the window. WebKit doesn't run this page's
+ * handlers inside the sandboxed frame, so macos.rs empties WebKit's menu and passes the click on.
+ */
+function onEmailContextMenu(x, y) {
+  const frame = $('#m-body iframe');
+  const doc = frame && frame.contentDocument;
+  if (!doc) return;
+  const box = frame.getBoundingClientRect();
+  const target = doc.elementFromPoint(x - box.left, y - box.top);
+  if (!target) return;
+  onContextMenu({ target, clientX: x - box.left, clientY: y - box.top, preventDefault() {} }, frame);
+  // Focus back on the page, so a click in the email moves it there again and closes the menu.
+  if (!$('#menu').hidden) window.focus();
+}
+
+/** macOS: a key pressed while the email has focus (see onEmailContextMenu). */
+function onEmailKey(key, code, shiftKey) {
+  const frame = $('#m-body iframe');
+  if (!frame || document.activeElement !== frame) return;
+  const target = (frame.contentDocument && frame.contentDocument.activeElement) || frame;
+  onKey({ key, code, shiftKey, target, preventDefault() {} }, true);
 }
 
 /** `groups`: lists of `{ label, run, danger }`, shown with lines between them. */

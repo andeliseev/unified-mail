@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: links in emails open in your browser, and right-clicking in an email shows Open link, Copy link and Copy. Before, clicking a link did nothing, and the right-click menu's items didn't work. Keyboard shortcuts such as J, K and E also work after you click into an email.
+
 ## 0.1.12 (2026-11-10)
 
 - macOS: the grey title bar is gone, so the app's name no longer shows twice. The window's buttons sit at the top of the sidebar, above the name. Drag the window by the sidebar's top, the list's header or the strip above the message. A click in the window while another app is in front now works right away, for example to drag the window or open a message.

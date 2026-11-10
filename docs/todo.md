@@ -6,6 +6,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 - [x] End-to-end with a real Google account: sign-in, sync, push, archive, trash
 - [x] macOS build: keychain prompts for unsigned builds. Checked in a release built and installed locally
+- [ ] macOS: links, the right-click menu and keyboard shortcuts inside an email, now passed on by `macos.rs` because WebKit doesn't run the page's handlers in the sandboxed frame. Clicking a link did nothing there, and the right-click menu was WebKit's, with items that did nothing
+- [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [x] Mark as unread, the right-click menu and the row buttons in the real app with a real Gmail account
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)

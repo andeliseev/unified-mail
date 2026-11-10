@@ -74,7 +74,12 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 
 - `sandbox="allow-same-origin"` and **no** `allow-scripts`: scripts, forms and popups are all blocked. `allow-same-origin` is there only so the parent page can reach `contentDocument` to attach handlers. With scripts off, the email itself can't use it.
 - The frame's handlers (clicks, keys, right-click) and the first fit are set up as soon as the email is parsed (`whenParsed`, which polls until the frame's document is the email's `about:srcdoc` one). They don't wait for the frame's `load`, which waits for every image: one slow tracking pixel held it for 20+ s, leaving the email unfitted and its links dead until then. Timers rather than `requestAnimationFrame`, which pauses while the window is minimized.
-- A click handler on the frame's document cancels navigation and sends `http(s)`/`mailto` links to `open_external`, which opens them in the default browser. `<base target="_blank">` makes sure an unhandled link can't navigate the frame.
+- A click handler on the frame's document cancels navigation and sends `http(s)`/`mailto` links to `open_external`, which opens them in the default browser. `<base target="_blank">` makes sure an unhandled link can't navigate the frame; links' own `target` attributes are removed, so it applies to every link.
+- **On macOS WebKit doesn't run these handlers.** It counts the page's listeners on the frame's document as that frame's scripts, which the sandbox forbids, so none of them fire there. Chromium runs them. `macos.rs` passes things on from the webview instead:
+  - The frame also gets `allow-popups`, so a link click asks for a new window. `on_navigation` sees that request and opens http(s) and mailto links with `open_external` instead. The same handler keeps the whole webview on the app's own pages.
+  - `willOpenMenu:withEvent:` empties WebKit's menu, except in text fields, and sends `email-context-menu` with the click's position. `onEmailContextMenu` finds the element with `elementFromPoint`, since the page can still read the frame's DOM, and shows the app's menu. It then focuses the page, so a click in the email closes the menu.
+  - `keyDown:` sends every key without Cmd, Ctrl or Option as `email-key`. `onEmailKey` uses it only while the email has focus. The frame's own `keydown` handler isn't attached on macOS, so no key acts twice if WebKit ever runs it.
+  - The image `load` listener doesn't fire either, so on macOS a wide image that arrives late refits the email only at the frame's `load`.
 - `srcdoc` frames inherit the page's CSP (`tauri.conf.json`): images from `https:`/`http:`/`data:` are allowed and inline styles too. Tauri is told not to add nonces to `style-src` (`dangerousDisableAssetCspModification`), because a nonce would switch off `'unsafe-inline'`.
 - In light mode the frame is white, as emails expect. In dark mode see [Dark mode for emails](#dark-mode-for-emails).
 - Some emails set `overflow: hidden` on `html` or `body`, which would make them impossible to scroll. The frame CSS forces `:root { overflow: auto !important }` and `:root > body { overflow: visible !important }`. `:root` outranks the emails' `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
@@ -157,7 +162,7 @@ Right-click shows the app's own menu (`onContextMenu`, `#menu`). The webview's m
 | Text fields | The system's own Cut/Copy/Paste menu, as in every app |
 | Anywhere else | Nothing |
 
-Right-clicks in the email arrive at the frame's document; the frame's position is added to place the menu. The menu closes on any click, key, scroll, resize, or focus moving into the email. Copy uses `navigator.clipboard.writeText`, which needs the real click.
+Right-clicks in the email arrive at the frame's document, or on macOS through `email-context-menu` (see [Sandbox](#sandbox)); the frame's position is added to place the menu. The menu closes on any click, key, scroll, resize, or focus moving into the email. Copy uses `navigator.clipboard.writeText`, which needs the real click.
 
 ## Older mail
 
