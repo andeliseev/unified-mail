@@ -94,7 +94,16 @@ A message only joins lists that are already loaded; other lists pick it up at th
 
 **Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way. If the message was open and is back in the folder on screen, it opens again. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
 
-Actions from the [right-click menu](#right-click-menu) work on that row's message (`act(kind, m)`), even if another message is open. The open message stays open, and Undo doesn't open the row's message.
+Actions from the [right-click menu](#right-click-menu) and the [row buttons](#row-buttons) work on that row's message (`act(kind, m)`), even if another message is open. The open message stays open, and Undo doesn't open the row's message. If the row is the open message, the next one opens, as with the reader's buttons.
+
+### Row buttons
+
+The row under the mouse shows small icon buttons in place of its time: the folder's actions, then Mark as read / unread, in the reader's order. A click acts on that row's message without opening it (`onRowAction`).
+
+- `renderList` clones them from `<template id="row-actions">` for each row (`rowActions`) and keeps the folder's actions. Move to Inbox stands for both `restore` (Trash) and `unarchive` (All Mail), like the reader's button. In All Mail it passes the Inbox keys it already built for the tags, so `actionsFor` doesn't search the Inbox list once per row.
+- The read button shows an open envelope for Mark as read and a closed one for Mark as unread, switched by the row's `unread` class. `showUnread` updates its tooltip.
+- The buttons share the row's background (`background: inherit`, hover or selected), so a long sender name runs under them. Delete turns red on hover, like the reader's Delete.
+- They're `tabindex="-1"`, so a list of hundreds of rows doesn't add hundreds of Tab stops. The keyboard has the same actions as shortcuts.
 
 ## Read and unread
 

@@ -39,6 +39,25 @@
       <!-- Accounts whose sign-in expired, each with a Reconnect button (renderReconnect). -->
       <div id="reconnect" hidden></div>
       <ul id="messages"></ul>
+      <!-- The buttons on the row under the mouse, in the reader's order. renderList keeps
+           the folder's actions; Move to Inbox stands for both Restore and Unarchive. -->
+      <template id="row-actions">
+        <div class="row-actions">
+          <button data-kind="archive" title="Archive (E)" aria-label="Archive" tabindex="-1">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></svg>
+          </button>
+          <button data-kind="trash" class="danger" title="Delete (Del)" aria-label="Delete" tabindex="-1">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></svg>
+          </button>
+          <button data-kind="restore" title="Move to Inbox" aria-label="Move to Inbox" tabindex="-1">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6zM12 3v7M9 7l3 3 3-3"/></svg>
+          </button>
+          <button data-kind="read" tabindex="-1">
+            <svg class="closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4zM4 7l8 6 8-6"/></svg>
+            <svg class="open" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10l8-6 8 6v9H4zM4 10l8 6 8-6"/></svg>
+          </button>
+        </div>
+      </template>
       <div id="list-empty" class="empty" hidden>
         <p id="list-empty-text"></p>
         <button id="empty-add" class="primary" hidden>Add Gmail account</button>

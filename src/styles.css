@@ -201,6 +201,42 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .msg time { font-size: 12px; color: var(--muted); flex: none; }
 .msg .subject, .msg .snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg .snippet { color: var(--muted); font-size: 12.5px; }
+/* The row under the mouse shows its actions in place of the time. Their background is the
+   row's (hover or selected), so a long sender name runs under them. */
+.row-actions {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: none;
+  gap: 4px;
+  padding-left: 8px;
+  background: inherit;
+}
+.msg:hover .row-actions { display: flex; }
+.msg:hover time { visibility: hidden; }
+.row-actions button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.row-actions button:hover {
+  color: var(--text);
+  background: var(--border);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.row-actions button.danger:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.row-actions svg { width: 14px; height: 14px; }
+/* Mark as read shows an open envelope, Mark as unread a closed one. */
+.row-actions .open, .msg.unread .row-actions .closed { display: none; }
+.msg.unread .row-actions .open { display: block; }
 #messages .more {
   padding: 14px;
   text-align: center;

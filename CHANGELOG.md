@@ -4,6 +4,7 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Pointing at a message in the list shows small Archive, Delete and Mark as read/unread buttons in place of its time, so you can act on it without opening it. In All Mail and Trash they offer Move to Inbox where the reader does.
 - Unified Mail's data folder is now called `com.andeliseev.unified-mail`. Your accounts, settings and saved message lists move there by themselves the first time this version starts.
 
 ## 0.1.11 (2026-11-04)

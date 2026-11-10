@@ -52,11 +52,17 @@ const ids = (m) => ({ account: m.account, id: m.id });
  */
 const inInbox = (m) => state.inboxExtra.has(keyOf(m)) || state.lists.inbox.some((x) => keyOf(x) === keyOf(m));
 
-/** Actions offered on an open message. */
-function actionsFor(m) {
+/**
+ * Actions offered on a message. `inboxKeys`: the keys of everything in the Inbox, when the
+ * caller already has them (renderList asks for every row, and `inInbox` searches a list).
+ */
+function actionsFor(m, inboxKeys = null) {
   switch (state.folder) {
     case 'inbox': return ['archive', 'trash'];
-    case 'all': return inInbox(m) ? ['archive', 'trash'] : ['unarchive', 'trash'];
+    case 'all': {
+      const inbox = inboxKeys ? inboxKeys.has(keyOf(m)) : inInbox(m);
+      return inbox ? ['archive', 'trash'] : ['unarchive', 'trash'];
+    }
     default: return ['restore'];
   }
 }
@@ -248,7 +254,10 @@ function bindEvents() {
 
   $('#messages').addEventListener('click', (e) => {
     const row = e.target.closest('li.msg');
-    if (row) select(row.dataset.key);
+    if (!row) return;
+    const button = e.target.closest('.row-actions button');
+    if (button) onRowAction(row, button.dataset.kind);
+    else select(row.dataset.key);
   });
   $('#messages').addEventListener('scroll', () => { hideMenu(); maybeLoadOlder(); }, { passive: true });
   document.querySelectorAll('a[data-href]').forEach((a) =>
@@ -578,6 +587,7 @@ function renderList() {
     }
     li.querySelector('.snippet').textContent = m.snippet;
     li.title = m.account;
+    li.append(rowActions(m, inboxKeys));
     fragment.append(li);
   }
   if (messages.length && accountsWithMore(state.folder).length) {
@@ -598,6 +608,34 @@ function renderList() {
       : state.syncing && !state.synced[state.folder] ? 'Loading…' : FOLDERS[state.folder].empty;
     $('#empty-add').hidden = !noAccounts;
   }
+}
+
+/** The buttons a row shows under the mouse: the folder's actions, then Mark as read/unread. */
+function rowActions(m, inboxKeys) {
+  const actions = $('#row-actions').content.firstElementChild.cloneNode(true);
+  const allowed = actionsFor(m, inboxKeys);
+  for (const button of [...actions.children]) {
+    const kind = button.dataset.kind;
+    const offered = kind === 'read' ||
+      allowed.includes(kind) || (kind === 'restore' && allowed.includes('unarchive'));
+    if (!offered) button.remove();
+  }
+  setReadButton(actions.querySelector('[data-kind="read"]'), m.unread);
+  return actions;
+}
+
+function setReadButton(button, unread) {
+  const title = unread ? 'Mark as read (Shift+I)' : 'Mark as unread (Shift+U)';
+  button.title = title;
+  button.setAttribute('aria-label', title.replace(/ \(.*/, ''));
+}
+
+/** A click on one of a row's buttons acts on that row's message, as its right-click menu does. */
+function onRowAction(row, kind) {
+  const m = byKey(row.dataset.key);
+  if (!m) return;
+  if (kind === 'read') setUnread(m, !m.unread);
+  else act(kind === 'restore' && state.folder !== 'trash' ? 'unarchive' : kind, m);
 }
 
 function markRow(key) {
@@ -982,7 +1020,10 @@ function showUnread(key, unread) {
   }
   if (state.current && keyOf(state.current) === key) state.current.unread = unread;
   const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
-  if (row) row.classList.toggle('unread', unread);
+  if (row) {
+    row.classList.toggle('unread', unread);
+    setReadButton(row.querySelector('.row-actions [data-kind="read"]'), unread);
+  }
   renderSidebar();
   renderActions();
 }
