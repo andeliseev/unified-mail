@@ -206,8 +206,6 @@ The Support page is linked from the app's Settings, the README and GitHub's Spon
 
 When what the app accesses or stores changes, update `unified-mail/privacy.html` there and its effective date, in a commit of that repository. The same goes for `unified-mail/favicon.svg` when the [app icon](#app-icon) changes.
 
-Until November 2026 the pages were in this repository's `site/` folder and published from here with `git subtree`.
-
 ## Debugging
 
 - In `npm run dev` the Rust side's stderr goes to the terminal, including `[push] ...` lines from IMAP watchers. Release builds on Windows have no console (`windows_subsystem = "windows"`).
