@@ -193,35 +193,37 @@ jobs:
 
       # The Mac app is signed with the self-signed certificate from scripts/mac-signing-certificate.sh
       # (tauri.release.conf.json names it), so every release meets the same designated requirement
-      # and Macs keep their keychain and folder permissions across updates. codesign only signs
-      # with a certificate that the Mac it runs on trusts, so this runner trusts it; Macs running
-      # the app don't need to. Tauri's own APPLE_CERTIFICATE import only takes Apple's certificates.
-      - name: Add the Mac signing certificate
+      # and Macs keep their keychain and folder permissions across updates. codesign won't sign with
+      # a certificate the Mac it runs on doesn't trust, and this runner can't be made to trust one
+      # (its authorization database is locked), so Tauri's codesign calls go to rcodesign, which
+      # signs with the .p12 itself (scripts/codesign-with-rcodesign.sh). Macs running the app don't
+      # need to trust the certificate either. RUNNER_TEMP is emptied when the job ends.
+      - name: Set up Mac signing
         if: matrix.name == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          RCODESIGN_URL: https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-macos-universal.tar.gz
+          RCODESIGN_SHA256: d98372d5524226ccf9dc0eda03d4e4f5826182dabb2fc3f2bd303ed9113a748d
         run: |
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          password="$(openssl rand -hex 16)"
-          printf %s "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/signing.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          security find-certificate -c "Unified Mail" -p "$keychain" > "$RUNNER_TEMP/signing.pem"
-          # Without a person at the keyboard, macOS only changes trust settings once this right allows it.
-          sudo security authorizationdb write com.apple.trust-settings.admin allow
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/signing.pem"
-          identities=$(security find-identity -v -p codesigning "$keychain")
-          echo "$identities"
-          if ! grep -q '"Unified Mail"' <<< "$identities"; then
-            echo "::error::codesign can't use the Mac signing certificate on this runner."
-            exit 1
-          fi
+          dir="$RUNNER_TEMP/mac-signing"
+          mkdir -p "$dir/bin"
+          curl -fsSL -o "$dir/rcodesign.tar.gz" "$RCODESIGN_URL"
+          echo "$RCODESIGN_SHA256  $dir/rcodesign.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$dir/rcodesign.tar.gz" -C "$dir"
+          rcodesign=$(find "$dir" -type f -name rcodesign | head -1)
+          printf %s "$APPLE_CERTIFICATE" | base64 --decode > "$dir/signing.p12"
+          printf %s "$APPLE_CERTIFICATE_PASSWORD" > "$dir/password"
+          cp scripts/codesign-with-rcodesign.sh "$dir/bin/codesign"
+          export RCODESIGN="$rcodesign" SIGNING_IDENTITY="Unified Mail" SIGNING_P12="$dir/signing.p12" SIGNING_P12_PASSWORD_FILE="$dir/password"
+          # A quick signature first, so a wrong certificate or password fails here, not after the build.
+          cp /usr/bin/true "$dir/check"
+          "$dir/bin/codesign" --force -s "Unified Mail" --options runtime "$dir/check"
+          /usr/bin/codesign --verify --strict "$dir/check"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          for name in RCODESIGN SIGNING_IDENTITY SIGNING_P12 SIGNING_P12_PASSWORD_FILE; do
+            echo "$name=${!name}" >> "$GITHUB_ENV"
+          done
 
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -248,10 +250,12 @@ jobs:
         if: matrix.name == 'macOS'
         run: |
           app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Unified Mail.app"
-          codesign --verify --strict "$app"
-          requirement=$(codesign -d -r- "$app" 2>&1)
+          /usr/bin/codesign --verify --strict --deep "$app"
+          requirement=$(/usr/bin/codesign -d -r- "$app" 2>&1)
           echo "$requirement"
-          if ! grep -q 'certificate leaf = H"' <<< "$requirement"; then
+          certificate=$(/usr/bin/openssl pkcs12 -in "$SIGNING_P12" -nokeys -passin "file:$SIGNING_P12_PASSWORD_FILE" |
+            /usr/bin/openssl x509 -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')
+          if ! grep -qi "H\"$certificate\"" <<< "$requirement"; then
             echo "::error::The Mac app isn't signed with the certificate, so every Mac would ask for the keychain password again."
             exit 1
           fi

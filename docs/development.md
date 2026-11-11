@@ -146,7 +146,7 @@ The workflow then:
 
 ## Mac signing
 
-The keychain and macOS's privacy permissions (such as the Downloads folder) trust an app by its designated requirement. An ad-hoc signature's requirement is the hash of its code, different in every build, so before releases were signed every update was a new app: the keychain asked for the password once per account, and the Downloads question could come back. Releases are signed with a self-signed certificate instead, which makes the requirement `identifier "com.andeliseev.unified-mail" and certificate leaf = H"<the certificate's SHA-1>"`, the same for every release.
+The keychain and macOS's privacy permissions (such as the Downloads folder) trust an app by its designated requirement. An ad-hoc signature's requirement is the hash of its code, different in every build, so before releases were signed every update was a new app: the keychain asked for the password once per account, and the Downloads question could come back. Releases are signed with a self-signed certificate instead, which makes the requirement `identifier "com.andeliseev.unified-mail" and certificate root = H"<the certificate's SHA-1>"` (it's its own root), the same for every release.
 
 **The certificate** (one time), on a Mac, from the repo, with the GitHub CLI signed in:
 
@@ -157,15 +157,16 @@ scripts/mac-signing-certificate.sh
 It makes the certificate "Unified Mail" (valid for 20 years) and saves it and its password as the `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` repository secrets. It also leaves a copy in `~/Unified Mail signing`: keep that somewhere safe, such as a password manager, and delete the folder. A new certificate changes the requirement, so every Mac would ask once more; the script won't replace the secret.
 
 **In the Release workflow:**
-- **Add the Mac signing certificate** imports it into a temporary keychain and trusts it for code signing on the runner, because `codesign` won't sign with a certificate the Mac it runs on doesn't trust ("no identity found"). Tauri's own `APPLE_CERTIFICATE` import only takes Apple's certificates (it looks for names such as "Developer ID Application:"), so the workflow imports it itself.
-- `tauri.release.conf.json` names it (`bundle.macOS.signingIdentity`). Local builds stay ad-hoc (`"-"` in `tauri.conf.json`), so an app built locally asks for the keychain password as before.
-- **Check the Mac app's signature** keeps the release a draft if the app came out without the certificate.
+- `codesign` won't sign with a certificate the Mac it runs on doesn't trust ("no identity found"), and GitHub's Mac runners can't be made to trust one: `security authorizationdb write com.apple.trust-settings.admin allow` fails with `NO (-60005)`, and others report that `codesign` still refuses after `add-trusted-cert`. Tauri's own `APPLE_CERTIFICATE` import doesn't help either: it only takes Apple's certificates (it looks for names such as "Developer ID Application:").
+- So **Set up Mac signing** downloads [rcodesign](https://github.com/indygreg/apple-platform-rs) 0.29.0 (checked against its SHA-256), which signs with the `.p12` itself, and puts [`scripts/codesign-with-rcodesign.sh`](../scripts/codesign-with-rcodesign.sh) first in `PATH` as `codesign`. Tauri signs the app's executable, the app and the `.dmg` with `codesign --force -s "Unified Mail" [--options runtime] <path>`; the stand-in passes those to rcodesign (no timestamp, the hardened runtime as asked), and any other call to the real `codesign`. The step signs a copy of `/usr/bin/true` first, so a wrong certificate or password fails before the build.
+- `tauri.release.conf.json` names the certificate (`bundle.macOS.signingIdentity`). Local builds stay ad-hoc (`"-"` in `tauri.conf.json`), so an app built locally asks for the keychain password as before.
+- **Check the Mac app's signature** keeps the release a draft unless the app verifies and its requirement names the certificate's SHA-1.
 
 Macs that run the app don't trust the certificate, and don't need to: the signature still verifies, and the keychain only compares the requirement. The app isn't notarized, so Gatekeeper still asks on the first launch of a downloaded copy (that would take a paid Apple Developer ID). Updates the app installs itself aren't checked by Gatekeeper.
 
 The first signed release asks once more per account, since its requirement isn't on the keychain's list yet. After **Always Allow**, later releases don't ask.
 
-Checked locally with a throwaway keychain: two different builds signed with a certificate from the script had the same requirement and verified on a Mac that doesn't trust it, and the second read a keychain item the first had saved, with no prompt. An ad-hoc build couldn't.
+Checked locally with rcodesign 0.29.0 and a throwaway keychain: two different test apps signed through the stand-in as Tauri signs (the executable, then the app) had the same requirement and the hardened runtime, and passed `codesign --verify --strict --deep` on a Mac that doesn't trust the certificate. The second read a keychain item the first had saved, with no prompt; an ad-hoc build couldn't. A `.dmg` signed the same way verifies too.
 
 ## Updates
 
