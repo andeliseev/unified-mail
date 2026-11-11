@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: in full screen, the top of the sidebar no longer has an empty gap where the window buttons usually are. The Unified Mail name moves up into their place.
+
 ## 0.2.1 (2026-11-11)
 
 - macOS: after an update, Unified Mail comes back under its own Dock icon. Before, it opened with a second icon next to it, and the icon you keep in the Dock looked closed. This starts with your next update after this one: updating to this version still shows the second icon one last time.

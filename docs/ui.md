@@ -38,7 +38,7 @@ Not available without the system title bar: the Snap Layouts flyout when hoverin
 - `main.rs` keeps the system's window buttons but makes the title bar see-through over the page (`TitleBarStyle::Overlay`) and hides its title. The window keeps the title for Mission Control, the Window menu and VoiceOver.
 - `traffic_light_position(18, 18)` puts the buttons over the sidebar, in line with the brand's icon and centered on the list header's row, whose 28 px start 12 px down. `.mac .brand` pads the brand down to leave them room, and `#window-buttons` stays hidden.
 - `accept_first_mouse(true)`: the drag areas are in the page, so the first click on an inactive window has to reach the page for the window to drag at once, as with a system title bar. Other first clicks act at once too, as on Windows: clicking a message in an inactive window opens it.
-- In full screen the system hides the buttons, so the room above the brand stays empty.
+- In full screen the system hides the buttons, so the brand moves up into their room, as on Windows (`.mac.full-screen .brand`). `on_event` passes every resize to `macos::on_resized`, which reads the window's style mask in AppKit and sends `full-screen` (`true` or `false`) when it changes; `initTitleBar` sets `full-screen` on `<html>` from it. The mask changes as soon as the switch starts, with its first resize. Tauri's `isFullscreen` keeps saying full screen until the animation leaving it ends, about 0.6 s later, so it isn't used on resize; a page that loads in full screen asks it once.
 
 ### Closing the window
 

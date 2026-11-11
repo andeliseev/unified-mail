@@ -294,6 +294,11 @@ function initTitleBar() {
   for (const el of [$('.brand'), $('.list-head'), $('#window-bar')]) el.dataset.tauriDragRegion = 'deep';
   if (IS_MAC) {
     $('#window-buttons').hidden = true;
+    // In full screen the system hides its window buttons, so the brand moves up into their room.
+    // macos.rs says when that changes; a page that loads in full screen asks once.
+    const fullScreen = (on) => root.classList.toggle('full-screen', on);
+    window.__TAURI__.window.getCurrentWindow().isFullscreen().then(fullScreen);
+    listen('full-screen', (e) => fullScreen(e.payload));
     return;
   }
   const win = window.__TAURI__.window.getCurrentWindow();

@@ -104,10 +104,12 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 
 /* The app's own title bar (initTitleBar). The brand reaches the top edge so all of it drags
    the window. On macOS the system's window buttons sit above it, on the list header's row
-   (main.rs places them). */
+   (main.rs places them); in full screen the system hides them, and the brand moves up as on
+   Windows (`full-screen`, macos.rs). */
 .own-title-bar #sidebar { padding-top: 0; }
 .own-title-bar .brand { padding-top: 18px; }
 .mac .brand { padding-top: 46px; }
+.mac.full-screen .brand { padding-top: 18px; }
 #window-bar { flex: none; height: 32px; }
 /* Fixed, so Settings and the sign-in overlay don't cover them. */
 #window-buttons { position: fixed; top: 0; right: 0; z-index: 40; display: flex; }

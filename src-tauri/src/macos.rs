@@ -8,15 +8,17 @@
 //!   do nothing here;
 //! - keys reach the app's shortcuts (`email-key`).
 //!
-//! It also starts the app again after an update (`relaunch_after_exit`).
+//! It also tells the page when the window enters or leaves full screen (`on_resized`), and starts
+//! the app again after an update (`relaunch_after_exit`).
 
 use objc2::runtime::{AnyObject, Imp, Sel};
 use objc2::{ffi, sel};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSMenu, NSUserInterfaceItemIdentification, NSView};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSMenu, NSUserInterfaceItemIdentification, NSView, NSWindow, NSWindowStyleMask};
 use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, Url, WebviewWindow};
 
@@ -133,6 +135,23 @@ unsafe extern "C-unwind" fn key_down(view: &NSView, cmd: Sel, event: &NSEvent) {
     }
     if let Some(webkit) = WEBKIT_KEY_DOWN.get() {
         webkit(view, cmd, event);
+    }
+}
+
+/// Whether the window was in full screen at its last resize.
+static FULL_SCREEN: AtomicBool = AtomicBool::new(false);
+
+/// On every resize: tells the page when the window enters or leaves full screen (`full-screen`),
+/// where the system hides the window buttons and the page drops the room it keeps for them.
+/// AppKit's style mask changes as soon as the switch starts, with the first resize. Tauri's
+/// `is_fullscreen` keeps saying full screen until the animation leaving it ends, about 0.6 s later.
+pub fn on_resized(window: &WebviewWindow) {
+    let Ok(ns_window) = window.ns_window() else { return };
+    // The window's NSWindow, alive as long as the window. Window events run on the main thread.
+    let style = unsafe { &*ns_window.cast::<NSWindow>() }.styleMask();
+    let full_screen = style.contains(NSWindowStyleMask::FullScreen);
+    if FULL_SCREEN.swap(full_screen, Ordering::Relaxed) != full_screen {
+        let _ = window.emit("full-screen", full_screen);
     }
 }
 

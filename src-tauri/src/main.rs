@@ -344,7 +344,7 @@ fn main() {
 /// macOS: closing the window (its close button, Cmd+W) only hides it, and the app stays in the
 /// Dock, as Mail does, so push and notifications go on. Clicking the Dock icon brings it back.
 /// Cmd+Q still quits: it ends the app without asking the window to close. Elsewhere closing the
-/// window quits the app.
+/// window quits the app. Resizes on macOS go to `macos::on_resized`, which follows full screen.
 fn on_event(app: &AppHandle, event: tauri::RunEvent) {
     #[cfg(target_os = "macos")]
     match event {
@@ -360,6 +360,11 @@ fn on_event(app: &AppHandle, event: tauri::RunEvent) {
             }
         }
         tauri::RunEvent::Reopen { has_visible_windows: false, .. } => show_window(app),
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Resized(_), .. } => {
+            if let Some(window) = app.get_webview_window(&label) {
+                macos::on_resized(&window);
+            }
+        }
         _ => {}
     }
     #[cfg(not(target_os = "macos"))]
