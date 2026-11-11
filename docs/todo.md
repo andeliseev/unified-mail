@@ -4,58 +4,40 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 ## Not verified yet
 
-- [x] End-to-end with a real Google account: sign-in, sync, push, archive, trash
-- [x] macOS build: keychain prompts for unsigned builds. Checked in a release built and installed locally
 - [ ] macOS: links, the right-click menu and keyboard shortcuts inside an email, now passed on by `macos.rs` because WebKit doesn't run the page's handlers in the sandboxed frame. Clicking a link did nothing there, and the right-click menu was WebKit's, with items that did nothing
 - [ ] macOS: after an update, the app comes back under its kept-in-Dock icon (`macos::relaunch_after_exit`). Checked with a throwaway app kept in the Dock, which updated itself as the updater does (a new copy of its bundle swapped in) and then restarted: Tauri's `open -n` gave it a second Dock icon, and the wait-then-`open` brought it back under the kept one. A real update shows it first when updating from a version newer than 0.2.0
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
-- [x] Mark as unread, the right-click menu and the row buttons in the real app with a real Gmail account
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
-- [x] Installers (`npm run build`): NSIS/MSI on Windows (built and installed locally)
 - [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. Ad-hoc signing works (a release built locally runs), but a local build isn't quarantined, so it never shows that prompt
-- [x] First run of the Release workflow on GitHub (v0.1.0)
 
 ## Gaps in current features
 
-- [x] **Undo** for Archive, Delete and Move to Inbox; **All Mail** and **Trash** folders
-- [x] Undo, Trash and All Mail against real Gmail accounts
 - [ ] Push only watches the Inbox; All Mail and Trash refresh with it, on focus and every 5 min
 - [ ] More folders: Sent, Starred, Spam, user labels
-- [x] **Reconnect button** for an expired account, instead of an error toast that says to use Add account
 - [ ] Reconnect against a real expired sign-in (checked with a fake backend only so far). One way: remove the app's access at myaccount.google.com/permissions for a test account
 - [ ] An account whose sign-in expires mid-session shows Reconnect only after the next sync; opening a message from it before that shows the error as a toast
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
-- [x] Older mail loads while scrolling (pages of 50 per account, merged in date order)
 - [ ] Older pages aren't re-synced: something archived elsewhere stays visible there until the folder is reopened or the app restarts
 - [ ] Search across all mail (Gmail `q=`), for finding old messages without scrolling
 - [ ] Rendering re-creates every row; with many thousands of loaded rows, switch to a virtualized list
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
-- [x] Marking read ran in the background, so a sync right after opening could briefly show it unread again. Now it's tracked like moves (`pendingRead`)
 - [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
 - [ ] Inline `cid:` images and attachments aren't shown
 - [ ] Dark mode for emails: dark logos on transparent backgrounds stay hard to see; maybe a light backing behind small transparent images. Original could also be remembered per sender instead of per opened message
-- [x] Dark mode for emails on macOS (WKWebView): rewriting the email's media rules and the frame following the app's dark preference. Checked in a release built and installed locally
 - [ ] Optional blocking of remote images (tracking pixels), with a "Load images" button
 - [ ] Remember window size and position
 - [ ] Own title bar on Windows: no Snap Layouts flyout on Maximize and no title bar right-click menu (Restore, Move, Size…). `tauri-plugin-decorum` brings Snap Layouts back, but it's another crate; check its size first
 - [ ] Own title bar on Windows 10: Tauri says an undecorated window with a shadow gets a 1px white border there, which would show in dark mode. Only checked on Windows 11
-- [x] macOS: the system title bar repeated the sidebar's "Unified Mail". The window buttons now float over the sidebar above the brand (`TitleBarStyle::Overlay`, hidden title)
 - [ ] macOS full screen: the system hides the window buttons, leaving the room above the sidebar's brand empty. A class set from `isFullscreen` on resize could drop it
 
 ## New features
 
-- [x] Desktop **notifications** for new mail (`tauri-plugin-notification`)
-- [x] Unread **badge** on the taskbar / Dock icon
 - [ ] A setting to turn notifications off inside the app (Windows and macOS can already turn them off per app)
 - [ ] Clicking an old notification in the Windows Action Center only brings the window forward, without opening the message. That needs a COM activator, which the notification plugin doesn't have
 - [ ] The badge, like the sidebar, counts unread mail only among loaded messages (each account's newest 50 in the Inbox, plus older pages scrolled to). Gmail's `labels.get` for `INBOX` would give the exact count
-- [x] macOS: notifications and the Dock badge work in a release built and installed locally (ad-hoc signed, not notarized)
-- [x] macOS notifications play the system's default notification sound, as Windows ones play its Mail sound
 - [ ] **Tray icon** on Windows: keep running in the background when the window is closed, as the app already does in the Dock on macOS
 - [ ] macOS: once the window is closed, only the Dock icon or a notification brings it back. A Window menu item for it, like Mail's Window → Message Viewer, would add a keyboard way
-- [x] Mark as unread / read (button, `Shift+U` / `Shift+I`, right-click menu)
-- [x] Archive / Delete / Mark as unread buttons on the row under the mouse
 - [ ] Star, move to label
 - [ ] **App language** setting (e.g. Russian). The UI is English only. Dates are English too ("Nov 4"), with the system's clock style (24-hour or AM/PM); with a language setting they'd follow the chosen language. Text fields keep the system's own right-click menu, so on a Russian system that shows in Russian
 - [ ] Search (Gmail `q=` query)
@@ -80,10 +62,7 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 
 ## Distribution
 
-- [x] GitHub Actions release workflow for Windows and macOS installers (see [development.md](development.md#releases-github-actions))
-- [x] Open source: MIT license, public repo, so releases are public downloads
 - [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper). On macOS a stable signature would also stop the keychain asking for the password after every update (see [auth.md](auth.md#tokens)); a self-signed certificate used by the Release workflow would do that part for free
-- [x] Auto-update (`tauri-plugin-updater`): Settings offers an Update button
 - [ ] The first real update: installed apps get the updater only from the first release that has it, so the update after that one is the first end-to-end check (Windows NSIS and MSI, and macOS, which is untested). Locally checked so far: finding an update, downloading it, and refusing bad signatures
 - [ ] Third-party licenses: the MIT/Apache crates built into the app ask for their notices to ship with it. Generate a list (e.g. `cargo about`) and link it from Settings or include it in the installer
 - [ ] **Google verification**, so users don't see the "unverified app" warning and the user cap goes away. Steps from Google's [restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification):
