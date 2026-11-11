@@ -31,12 +31,13 @@ tauri-plugin-single-instance = "2"
 # Default features add rustls (a second TLS stack) and zip (only for old zipped Windows updates): +1.4 MB.
 tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy"] }
 
-# macOS: the webview passes right-clicks and keys in the email on to the page, and the page learns
-# when the window goes full screen (macos.rs). Tauri already builds both crates with these
-# features, so they add no new dependency.
+# macOS: the webview passes right-clicks and keys in the email on to the page, the page learns
+# when the window goes full screen, and saved attachments get macOS's quarantine mark (macos.rs).
+# Tauri already builds these crates with these features, so they add no new dependency.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSUserInterfaceItemIdentification", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
 
 # Size-focused release build: https://v2.tauri.app/concept/size/
 [profile.release]

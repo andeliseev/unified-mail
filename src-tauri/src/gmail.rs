@@ -31,6 +31,21 @@ pub struct FullMessage {
     pub date: i64,
     pub html: Option<Body>,
     pub text: Option<Body>,
+    /// Files attached to the message, in its order.
+    pub attachments: Vec<Attachment>,
+}
+
+/// A file attached to a message, as the reader lists it and `get_attachments` fetches it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    /// Gmail's part ID ("2", "1.3"), the same each time the message is fetched.
+    pub part: String,
+    /// The name it's saved under (`files::safe_file_name`).
+    pub name: String,
+    pub mime_type: String,
+    /// In bytes.
+    pub size: u64,
 }
 
 /// A body part exactly as Gmail returns it: base64url bytes, plus the charset its header
@@ -63,6 +78,8 @@ struct RawMessage {
 #[serde(rename_all = "camelCase")]
 struct Part {
     #[serde(default)]
+    part_id: String,
+    #[serde(default)]
     mime_type: String,
     #[serde(default)]
     filename: String,
@@ -91,6 +108,8 @@ struct PartBody {
     data: Option<String>,
     #[serde(default)]
     attachment_id: Option<String>,
+    #[serde(default)]
+    size: u64,
 }
 
 pub async fn profile_email(http: &Client, token: &str) -> Result<String, String> {
@@ -182,6 +201,8 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
 
     let (mut html_part, mut text_part) = (None, None);
     find_bodies(&payload, &mut html_part, &mut text_part);
+    let mut attachments = Vec::new();
+    find_attachments(&payload, &mut attachments);
     let html = match html_part {
         Some(part) => Some(load_body(http, token, id, part).await?),
         None => None,
@@ -200,6 +221,7 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
         date: parse_date(raw.internal_date.as_ref()),
         html,
         text,
+        attachments,
     };
     Ok(message)
 }
@@ -275,23 +297,82 @@ fn find_bodies<'a>(part: &'a Part, html: &mut Option<&'a Part>, text: &mut Optio
     }
 }
 
+/// Parts with a file name, depth first: the message's attachments. The bodies `find_bodies` picks
+/// have none. A part that is itself a message (a forwarded email) is listed as one file, without
+/// the files inside it.
+fn find_attachments(part: &Part, found: &mut Vec<Attachment>) {
+    if !part.filename.is_empty() {
+        found.push(Attachment {
+            part: part.part_id.clone(),
+            name: crate::files::safe_file_name(&part.filename),
+            mime_type: part.mime_type.to_ascii_lowercase(),
+            size: part.body.as_ref().map_or(0, |b| b.size),
+        });
+        return;
+    }
+    for child in &part.parts {
+        find_attachments(child, found);
+    }
+}
+
+fn find_part<'a>(part: &'a Part, part_id: &str) -> Option<&'a Part> {
+    if part.part_id == part_id {
+        return Some(part);
+    }
+    part.parts.iter().find_map(|child| find_part(child, part_id))
+}
+
+/// Attachments `parts` (`Attachment::part`) of message `id`: each one's name and bytes.
+pub async fn get_attachments(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    check_id(id)?;
+    let raw: RawMessage = get_json(http, token, &format!("{API}/messages/{id}?format=full")).await?;
+    let payload = raw.payload.unwrap_or_default();
+    let mut found = Vec::new();
+    for part_id in parts {
+        match find_part(&payload, part_id) {
+            Some(part) if !part.filename.is_empty() => found.push(part),
+            _ => return Err("This attachment isn't in the message any more. Open the message again.".to_string()),
+        }
+    }
+    let loads = found.into_iter().map(|part| async move {
+        let bytes = decode_base64url(&part_data(http, token, id, part).await?)?;
+        Ok::<_, String>((crate::files::safe_file_name(&part.filename), bytes))
+    });
+    futures_util::future::try_join_all(loads).await
+}
+
+/// Gmail's base64url, with or without padding.
+fn decode_base64url(data: &str) -> Result<Vec<u8>, String> {
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+    use base64::{alphabet, Engine};
+    const URL_SAFE: GeneralPurpose =
+        GeneralPurpose::new(&alphabet::URL_SAFE, GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent));
+    URL_SAFE.decode(data).map_err(|e| format!("Gmail sent an attachment that couldn't be read: {e}"))
+}
+
 async fn load_body(http: &Client, token: &str, message_id: &str, part: &Part) -> Result<Body, String> {
+    Ok(Body { data: part_data(http, token, message_id, part).await?, charset: charset(part) })
+}
+
+/// A part's base64url data: in the message, or fetched separately when Gmail keeps it out of
+/// line, as it does for attachments and very large bodies.
+async fn part_data(http: &Client, token: &str, message_id: &str, part: &Part) -> Result<String, String> {
     let body = part.body.as_ref();
     let data = match (body.and_then(|b| b.data.clone()), body.and_then(|b| b.attachment_id.as_deref())) {
         (Some(data), _) => data,
         // Gmail moves very large bodies out of line, like attachments.
         (None, Some(attachment_id)) => {
             #[derive(Deserialize)]
-            struct Attachment {
+            struct OutOfLine {
                 #[serde(default)]
                 data: String,
             }
             let url = format!("{API}/messages/{message_id}/attachments/{attachment_id}");
-            get_json::<Attachment>(http, token, &url).await?.data
+            get_json::<OutOfLine>(http, token, &url).await?.data
         }
         _ => String::new(),
     };
-    Ok(Body { data, charset: charset(part) })
+    Ok(data)
 }
 
 async fn get_json<T: DeserializeOwned>(http: &Client, token: &str, url: &str) -> Result<T, String> {
@@ -469,6 +550,53 @@ mod tests {
         assert_eq!(charset(html), "windows-1251");
         assert_eq!(charset(text), "koi8-r");
         assert_eq!(charset(&Part::default()), "utf-8");
+    }
+
+    #[test]
+    fn lists_attachments() {
+        let payload: Part = serde_json::from_value(json!({
+            "partId": "",
+            "mimeType": "multipart/mixed",
+            "parts": [
+                {
+                    "partId": "0",
+                    "mimeType": "multipart/alternative",
+                    "parts": [
+                        { "partId": "0.0", "mimeType": "text/plain", "body": { "data": "cGxhaW4", "size": 5 } },
+                        { "partId": "0.1", "mimeType": "text/html", "body": { "data": "aHRtbA", "size": 4 } }
+                    ]
+                },
+                { "partId": "1", "mimeType": "application/PDF", "filename": "invoice.pdf", "body": { "attachmentId": "a", "size": 253952 } },
+                { "partId": "2", "mimeType": "image/png", "filename": "../logo\u{202E}gnp.exe", "body": { "data": "iVBO", "size": 3 } },
+                {
+                    "partId": "3",
+                    "mimeType": "message/rfc822",
+                    "filename": "Forwarded.eml",
+                    "body": { "attachmentId": "b", "size": 9000 },
+                    "parts": [{ "partId": "3.1", "mimeType": "image/jpeg", "filename": "inside.jpg", "body": { "attachmentId": "c" } }]
+                }
+            ]
+        }))
+        .unwrap();
+        let mut found = Vec::new();
+        find_attachments(&payload, &mut found);
+        let listed: Vec<_> = found.iter().map(|a| (a.part.as_str(), a.name.as_str(), a.mime_type.as_str(), a.size)).collect();
+        assert_eq!(listed, [
+            ("1", "invoice.pdf", "application/pdf", 253952),
+            ("2", "_logognp.exe", "image/png", 3),
+            ("3", "Forwarded.eml", "message/rfc822", 9000),
+        ]);
+        assert_eq!(find_part(&payload, "3.1").unwrap().filename, "inside.jpg");
+        assert_eq!(find_part(&payload, "0.1").unwrap().mime_type, "text/html");
+        assert!(find_part(&payload, "9").is_none());
+    }
+
+    #[test]
+    fn decodes_gmail_base64() {
+        assert_eq!(decode_base64url("aGk-Pz8_").unwrap(), b"hi>???");
+        assert_eq!(decode_base64url("aGk=").unwrap(), b"hi");
+        assert_eq!(decode_base64url("aGk").unwrap(), b"hi");
+        assert!(decode_base64url("a b").is_err());
     }
 
     #[test]

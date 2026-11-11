@@ -344,7 +344,7 @@ function bindEvents() {
     renderActions();
     if (state.full) showBody(state.full);
   });
-  $('#toast-action').addEventListener('click', runUndo);
+  $('#toast-action').addEventListener('click', runToastAction);
   $('#update').addEventListener('click', installUpdate);
   for (const button of document.querySelectorAll('#theme button')) {
     button.addEventListener('click', () => setTheme(button.dataset.theme));
@@ -783,6 +783,7 @@ async function select(key) {
   $('#m-to').textContent = '';
   $('#m-account').textContent = m.account;
   $('#m-account').style.setProperty('--acc', colorOf(m.account));
+  renderAttachments(m, []);
   showBodyMessage('Loading…');
 
   const seq = ++state.openSeq;
@@ -790,6 +791,7 @@ async function select(key) {
     const full = await invoke('get_message', { account: m.account, id: m.id });
     if (seq !== state.openSeq) return;
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
+    renderAttachments(m, full.attachments || []);
     showBody(full);
     // Opening marks it read, as in Gmail.
     if ((byKey(key) || m).unread) setUnread(m, false);
@@ -807,6 +809,94 @@ function clearReader() {
   $('#reader-empty').hidden = false;
   $('#m-body').replaceChildren();
 }
+
+// ---------- Attachments ----------
+
+const FILE_ICON = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>';
+const ATTACHMENT_ICONS = {
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
+  pdf: FILE_ICON + '<path d="M9 13h6M9 17h4"/>',
+  archive: FILE_ICON + '<path d="M10 7h2M10 10h2M10 13h2M10 16h2"/>',
+  document: FILE_ICON + '<path d="M9 13h6M9 17h6"/>',
+  file: FILE_ICON,
+};
+const SAVE_ICON = '<svg class="save" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+
+/** The open message's files, under its header: a chip each, and Save all for two or more. */
+function renderAttachments(m, attachments) {
+  const box = $('#m-attachments');
+  box.replaceChildren(...attachments.map((a) => attachmentChip(m, a)));
+  if (attachments.length > 1) {
+    const all = document.createElement('button');
+    all.className = 'save-all';
+    all.textContent = 'Save all';
+    all.title = 'Save all attachments to Downloads';
+    all.addEventListener('click', () => saveAttachments(m, attachments, all));
+    box.append(all);
+  }
+  box.hidden = !attachments.length;
+}
+
+function attachmentChip(m, a) {
+  const kind = attachmentKind(a);
+  const chip = document.createElement('button');
+  chip.className = `att ${kind}`;
+  chip.title = `Save ${a.name} to Downloads`;
+  chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
+    `<span class="name"></span><span class="size"></span>${SAVE_ICON}`;
+  chip.querySelector('.name').textContent = a.name;
+  chip.querySelector('.size').textContent = formatSize(a.size);
+  chip.addEventListener('click', () => saveAttachments(m, [a], chip));
+  return chip;
+}
+
+/** Picks the icon and its color, from the type Gmail gives or, for `octet-stream`, the extension. */
+function attachmentKind(a) {
+  const type = a.mimeType;
+  const extension = a.name.includes('.') ? a.name.split('.').pop().toLowerCase() : '';
+  if (type.startsWith('image/')) return 'image';
+  if (type === 'application/pdf' || extension === 'pdf') return 'pdf';
+  if (/zip|rar|7z|tar|compressed/.test(type) || ['zip', 'rar', '7z', 'gz', 'tgz', 'tar', 'xz', 'bz2'].includes(extension)) return 'archive';
+  if (/^text\/|word|excel|spreadsheet|presentation|powerpoint|opendocument|rtf/.test(type) ||
+    ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pages', 'numbers', 'key'].includes(extension)) return 'document';
+  return 'file';
+}
+
+/** 512 B, 248 KB, 1.2 MB, 24 MB: in units of 1024, as Gmail and Windows count. */
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${unit && value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** Saves files to Downloads (`save_attachments`); the toast can then show them in Finder or Explorer. */
+async function saveAttachments(m, attachments, button) {
+  if (button.classList.contains('saving')) return;
+  button.classList.add('saving');
+  button.setAttribute('aria-busy', 'true');
+  const what = attachments.length === 1 ? attachments[0].name : 'the attachments';
+  try {
+    const paths = await invoke('save_attachments', { account: m.account, id: m.id, parts: attachments.map((a) => a.part) });
+    const saved = paths.length === 1 ? paths[0].split(/[\\/]/).pop() : `${paths.length} files`;
+    toast(`Saved ${saved} to Downloads`, 8000, {
+      label: IS_MAC ? 'Show in Finder' : 'Show in folder',
+      run: () => invoke('show_in_folder', { paths }).catch((e) => toast(`Couldn't show the file: ${e}`, 6000)),
+    });
+  } catch (e) {
+    toast(`Couldn't save ${what}: ${e}`, 8000);
+  } finally {
+    button.classList.remove('saving');
+    button.removeAttribute('aria-busy');
+  }
+}
+
+// ---------- Message body ----------
 
 function showBodyMessage(text) {
   const div = document.createElement('div');
@@ -1049,6 +1139,7 @@ function act(kind, m = openMessage()) {
 
   toast(action.done, UNDO_MS, {
     label: 'Undo',
+    undo: true,
     run: async () => {
       let result;
       try { result = await done; } catch { return; }  // it failed and was already put back
@@ -1134,11 +1225,17 @@ function showUnread(key, unread) {
   renderActions();
 }
 
-function runUndo() {
-  const undo = state.undo;
-  if (!undo) return;
+/** The toast's button: Undo, Show in Finder… */
+function runToastAction() {
+  const run = state.toastAction;
+  if (!run) return;
   hideToast();
-  undo();
+  run();
+}
+
+/** `Z`: the toast's button, only when it's Undo. */
+function runUndo() {
+  if (state.undo) runToastAction();
 }
 
 function move(delta) {
@@ -1482,12 +1579,16 @@ function setStatus(text) {
 }
 
 let toastTimer;
-/** Shows a message at the bottom. With `action` it gets a button (Undo), which `Z` also presses. */
+/**
+ * Shows a message at the bottom. With `action` it gets a button: `{ label, run }`, plus
+ * `undo: true` for Undo, which `Z` also presses.
+ */
 function toast(text, ms = 4000, action = null) {
   $('#toast-text').textContent = text;
   $('#toast-action').hidden = !action;
   $('#toast-action').textContent = action ? action.label : '';
-  state.undo = action ? action.run : null;
+  state.toastAction = action ? action.run : null;
+  state.undo = action?.undo ? action.run : null;
   $('#toast').hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, ms);
@@ -1495,6 +1596,7 @@ function toast(text, ms = 4000, action = null) {
 
 function hideToast() {
   $('#toast').hidden = true;
+  state.toastAction = null;
   state.undo = null;
 }
 

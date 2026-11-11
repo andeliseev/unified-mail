@@ -453,6 +453,12 @@ impl AppState {
         gmail::get_full(&self.http, &token, id).await
     }
 
+    /// Attachments `parts` of a message, each with the name to save it under.
+    pub async fn attachments(&self, account: &str, id: &str, parts: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+        let token = self.access_token(account).await?;
+        gmail::get_attachments(&self.http, &token, id, parts).await
+    }
+
     /// Marks a message read (opening it, "Mark as read") or unread ("Mark as unread").
     pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
         let token = self.access_token(account).await?;

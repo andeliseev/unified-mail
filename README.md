@@ -32,7 +32,7 @@ Get the latest version from the **[Releases page](https://github.com/andeliseev/
 The app isn't code-signed yet, so your system asks once before opening it:
 
 - **Windows:** "Windows protected your PC" → **More info** → **Run anyway**.
-- **macOS:** open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**. The app keeps your sign-ins in the keychain. When macOS asks for your password to let Unified Mail use it, enter it and click **Always Allow**. Until the app is signed, macOS asks this again once per account after each update.
+- **macOS:** open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**. The app keeps your sign-ins in the keychain. When macOS asks for your password to let Unified Mail use it, enter it and click **Always Allow**. Until the app is signed, macOS asks this again once per account after each update. The first time you save an attachment, macOS also asks whether Unified Mail may access your Downloads folder: click **Allow**.
 
 ## Adding your Gmail accounts
 
@@ -58,7 +58,7 @@ Click **Add account**, choose your Google account in the browser window that ope
 Unified Mail runs entirely on your computer and talks only to Google, plus GitHub to check for updates. There are no servers of ours, no analytics and no tracking.
 
 - **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain.
-- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved.
+- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save: they go to your Downloads folder.
 - **Updates:** when it starts, every few hours, and when you open Settings, the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
 - **Notifications** show the sender and subject of new mail. Windows and macOS keep recent notifications in their notification center until you clear them.
 - **Removing an account** in Settings revokes the app's access at Google and deletes its data from your computer.

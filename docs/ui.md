@@ -112,6 +112,21 @@ A theme change (Appearance, or the system with System) redraws the open email.
 
 Known weak spot: a dark logo on a transparent background (a black wordmark PNG) stays dark on the darkened background. Original is the way out.
 
+### Attachments
+
+`get_message` also lists the message's files (`attachments`, each `{ part, name, mimeType, size }`): every part with a file name, depth first. A forwarded email attached as a message counts as one file, without the files inside it. Inline images the email links with `cid:` are listed too, since the reader doesn't show them yet ([todo.md](todo.md)).
+
+`renderAttachments` puts a chip per file under the header (`#m-attachments`): an icon by kind, the name and the size in units of 1024. The kind (image, PDF, archive, document or other) comes from the type Gmail gives, or the extension for `application/octet-stream`. A save icon shows on hover; its room is kept while it's hidden, so the chips don't move under the mouse. With two or more files, **Save all** follows them.
+
+A click calls `save_attachments` with the files' Gmail part IDs. While it runs, the chip is dimmed and further clicks do nothing.
+- Rust fetches the message again and finds each file by its part, so an attachment ID that changed since the message was opened doesn't matter. Each file's data is in the message or comes from `attachments.get`.
+- Names come from `files::safe_file_name`, the same names the chips show. There are no folders in them, no characters Windows refuses, no control characters, no direction marks that could disguise the extension (`invoice\u202Efdp.exe` reads as `invoiceexe.pdf`), no leading dot, no device names Windows reserves (CON, NUL…), and at most 200 bytes, keeping the extension.
+- Files go to the Downloads folder and never replace one there: a taken name becomes `name (1).ext`, `name (2).ext`… (`create_new`).
+- Each file is marked as coming from email: on macOS with LaunchServices' quarantine (type email attachment, agent Unified Mail), so Gatekeeper checks it before it opens and asks first if it's an app; on Windows with the Mark of the Web (`Zone.Identifier`, internet zone), so SmartScreen and Office's Protected View apply.
+- macOS asks once whether Unified Mail may access the Downloads folder. After "Don't Allow", saving fails with a message pointing to System Settings → Privacy & Security → Files & Folders. The app is only ad-hoc signed, so macOS may ask again after an update.
+
+The toast then says what was saved, with **Show in Finder** (**Show in folder** on Windows). That's `show_in_folder`, which only takes files in the Downloads folder: Finder selects all of them, File Explorer the first. The toast's button runs any action, but `Z` presses it only for Undo (`undo: true` in `toast`).
+
 ## Actions
 
 Which actions an open message offers depends on the folder, and in All Mail on whether the message is in the Inbox (`actionsFor`):

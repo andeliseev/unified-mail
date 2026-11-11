@@ -1,6 +1,7 @@
 // Hide the console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod files;
 mod gmail;
 mod idle;
 #[cfg(target_os = "macos")]
@@ -10,6 +11,7 @@ mod state;
 
 use gmail::{FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
@@ -85,6 +87,55 @@ async fn load_older(
 #[tauri::command]
 async fn get_message(state: State<'_, AppState>, account: String, id: String) -> Result<FullMessage, String> {
     state.get_message(&account, &id).await
+}
+
+/// Saves attachments `parts` of message `id` to the Downloads folder, each under a name no file
+/// there has yet, marked as coming from email (`files.rs`). Returns where they went. Errors give
+/// the reason; the page puts "Couldn't save …:" in front.
+#[tauri::command]
+async fn save_attachments(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account: String,
+    id: String,
+    parts: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let downloads = downloads_dir(&app)?;
+    let mut saved = Vec::new();
+    for (name, bytes) in state.attachments(&account, &id, &parts).await? {
+        let path = files::save_new(&downloads, &name, &bytes).map_err(|e| save_error(&e))?;
+        files::mark_from_email(&path);
+        saved.push(path.to_string_lossy().into_owned());
+    }
+    Ok(saved)
+}
+
+/// Shows saved attachments in Finder or File Explorer. Only files in the Downloads folder,
+/// where `save_attachments` puts them. Errors give the reason, as for `save_attachments`.
+#[tauri::command]
+async fn show_in_folder(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let downloads = downloads_dir(&app)?;
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    if paths.is_empty() || paths.iter().any(|p| p.parent() != Some(downloads.as_path()) || !p.is_file()) {
+        return Err("It isn't in your Downloads folder any more.".to_string());
+    }
+    files::reveal(&paths).map_err(|e| e.to_string())
+}
+
+fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().download_dir().map_err(|_| "Your Downloads folder wasn't found.".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Your Downloads folder can't be opened: {e}"))?;
+    Ok(dir)
+}
+
+/// macOS asks once before an app writes to Downloads; after "Don't Allow" writing fails.
+fn save_error(error: &std::io::Error) -> String {
+    if cfg!(target_os = "macos") && error.kind() == std::io::ErrorKind::PermissionDenied {
+        return "macOS didn't allow access to your Downloads folder. Allow Unified Mail in System Settings → \
+                Privacy & Security → Files & Folders, then try again."
+            .to_string();
+    }
+    error.to_string()
 }
 
 /// Opening a message marks it read; "Mark as unread" and "Mark as read" set it either way.
@@ -324,6 +375,8 @@ fn main() {
             refresh_folder,
             load_older,
             get_message,
+            save_attachments,
+            show_in_folder,
             set_unread,
             archive_message,
             trash_message,

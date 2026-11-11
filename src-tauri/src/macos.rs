@@ -8,12 +8,14 @@
 //!   do nothing here;
 //! - keys reach the app's shortcuts (`email-key`).
 //!
-//! It also tells the page when the window enters or leaves full screen (`on_resized`), and starts
-//! the app again after an update (`relaunch_after_exit`).
+//! It also tells the page when the window enters or leaves full screen (`on_resized`), marks saved
+//! attachments as coming from email (`quarantine`), and starts the app again after an update
+//! (`relaunch_after_exit`).
 
 use objc2::runtime::{AnyObject, Imp, Sel};
 use objc2::{ffi, sel};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSMenu, NSUserInterfaceItemIdentification, NSView, NSWindow, NSWindowStyleMask};
+use objc2_foundation::{ns_string, NSDictionary, NSString, NSURLQuarantinePropertiesKey, NSURL};
 use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -153,6 +155,21 @@ pub fn on_resized(window: &WebviewWindow) {
     if FULL_SCREEN.swap(full_screen, Ordering::Relaxed) != full_screen {
         let _ = window.emit("full-screen", full_screen);
     }
+}
+
+/// Marks a saved attachment as an email attachment from Unified Mail, as Mail does: macOS then
+/// checks it before it opens, and asks first if it's an app. Best effort.
+pub fn quarantine(path: &Path) {
+    let Some(path) = path.to_str() else { return };
+    let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+    // The values of LaunchServices' kLSQuarantineAgentNameKey, kLSQuarantineTypeKey and
+    // kLSQuarantineTypeEmailAttachment.
+    let properties = NSDictionary::from_slices(
+        &[ns_string!("LSQuarantineAgentName"), ns_string!("LSQuarantineType")],
+        &[ns_string!("Unified Mail"), ns_string!("LSQuarantineTypeEmailAttachment")],
+    );
+    // A dictionary is what this key takes.
+    let _ = unsafe { url.setResourceValue_forKey_error(Some(&properties), NSURLQuarantinePropertiesKey) };
 }
 
 /// After an update: opens the app again once this copy has quit, as a click on its Dock icon

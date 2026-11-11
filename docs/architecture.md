@@ -32,10 +32,11 @@ flowchart LR
 | --- | --- |
 | `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
-| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
+| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread, attachments), MIME body selection and the list of attachments |
+| `files.rs` | Saving attachments: safe file names, never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
-| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
+| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). Gives saved attachments macOS's quarantine mark (see [ui.md](ui.md#attachments)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
 ## Commands (UI → Rust)
@@ -52,7 +53,9 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `all` or `trash`, for instant first paint |
 | `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
 | `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
-| `get_message` | `account, id` | Headers plus HTML/text body. It doesn't change the message; the UI then calls `set_unread` |
+| `get_message` | `account, id` | Headers, HTML/text body and `attachments` (`{ part, name, mimeType, size }`). It doesn't change the message; the UI then calls `set_unread` |
+| `save_attachments` | `account, id, parts` | Saves those attachments (Gmail part IDs) to the Downloads folder under names no file there has, marked as coming from email; returns their paths (see [ui.md](ui.md#attachments)) |
+| `show_in_folder` | `paths` | Shows saved attachments in Finder or File Explorer; only files in the Downloads folder |
 | `set_unread` | `account, id, unread` | Marks the message read (on opening, Mark as read) or unread (Mark as unread) |
 | `archive_message` | `account, id` | Removes the `INBOX` label |
 | `trash_message` | `account, id` | Moves the message to Trash; returns `{ wasInInbox }` for Undo |

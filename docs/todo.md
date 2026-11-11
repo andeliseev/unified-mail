@@ -6,6 +6,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 
 - [ ] macOS: links, the right-click menu and keyboard shortcuts inside an email, now passed on by `macos.rs` because WebKit doesn't run the page's handlers in the sandboxed frame. Clicking a link did nothing there, and the right-click menu was WebKit's, with items that did nothing
 - [ ] macOS: after an update, the app comes back under its kept-in-Dock icon (`macos::relaunch_after_exit`). Checked with a throwaway app kept in the Dock, which updated itself as the updater does (a new copy of its bundle swapped in) and then restarted: Tauri's `open -n` gave it a second Dock icon, and the wait-then-`open` brought it back under the kept one. A real update shows it first when updating from a version newer than 0.2.0
+- [ ] Saving attachments from real mail: so far unit tests and a fake backend only. On macOS also the Downloads prompt, and whether it comes back after an update
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. Ad-hoc signing works (a release built locally runs), but a local build isn't quarantined, so it never shows that prompt
@@ -23,7 +24,9 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
 - [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
-- [ ] Inline `cid:` images and attachments aren't shown
+- [ ] Inline `cid:` images aren't shown in the email; they're listed with the attachments for now. Once they show, leave the ones the email shows out of the list, as Gmail does
+- [ ] Attachments: a paperclip in the message list. The list's metadata doesn't say which messages have files; a `has:attachment` search per page, or the top-level `Content-Type`, would
+- [ ] Attachments: open one directly (Quick Look, the default app), not only save it
 - [ ] Dark mode for emails: dark logos on transparent backgrounds stay hard to see; maybe a light backing behind small transparent images. Original could also be remembered per sender instead of per opened message
 - [ ] Optional blocking of remote images (tracking pixels), with a "Load images" button
 - [ ] Remember window size and position

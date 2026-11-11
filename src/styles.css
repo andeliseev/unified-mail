@@ -349,6 +349,22 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   border: 1px solid var(--acc);
   color: var(--text);
 }
+/* Attachments (renderAttachments): a chip per file; a click saves it. The save icon keeps its room
+   while hidden, so chips don't move under the mouse. */
+.attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.att { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 5px 8px 5px 10px; }
+.att .kind { width: 18px; height: 18px; }
+.att .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att .size { flex: none; color: var(--muted); font-size: 12px; }
+.att .save { visibility: hidden; color: var(--accent); }
+.att:hover .save, .att:focus-visible .save, .att.saving .save { visibility: visible; }
+.att.saving, .save-all.saving { cursor: progress; opacity: 0.6; }
+.att.image .kind { color: #1d9e75; }
+.att.pdf .kind { color: #e24b4a; }
+.att.archive .kind { color: #ba7517; }
+.att.document .kind { color: var(--accent); }
+.att.file .kind { color: var(--muted); }
+.save-all { padding: 5px 12px; }
 #m-body { flex: 1; min-height: 0; display: flex; }
 #m-body iframe { flex: 1; width: 100%; border: 0; background: #fff; }
 #m-body .empty { background: var(--panel); }
