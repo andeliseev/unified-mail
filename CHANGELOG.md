@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.0 (2026-11-11)
+
 - Drag the line between the message list and the message to make the list narrower or wider. The app remembers the width; double-click the line to reset it.
 - A narrow window no longer squeezes the message: it stays at least 400 px wide, so a typical newsletter still fits, and the list narrows instead. The smallest window is a little wider than before (880 px).
 
