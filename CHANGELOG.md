@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.3 (2026-11-11)
+
 - Pictures carried inside an email, such as logos in signatures and screenshots pasted into the text, now show in place instead of as empty spaces, and no longer appear among its attachments.
 - While an attachment is saving, click it again to cancel. A large attachment on a slow connection no longer fails to save after 30 seconds.
 - The app's icon and name at the top of the sidebar are larger.
