@@ -15,6 +15,10 @@ backup="${1:-$HOME/Unified Mail signing}"
 # macOS's own openssl (LibreSSL) writes a .p12 that `security import` reads on every macOS version.
 ssl=/usr/bin/openssl
 
+if ! command -v gh >/dev/null; then
+  echo "Install the GitHub CLI first (brew install gh), then sign in: gh auth login" >&2
+  exit 1
+fi
 if ! gh auth status >/dev/null 2>&1; then
   echo "Sign in to the GitHub CLI first: gh auth login" >&2
   exit 1
