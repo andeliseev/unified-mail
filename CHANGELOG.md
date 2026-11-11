@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.5 (2026-11-11)
+
 - Messages without attachments, such as Steam's emails, no longer show a paperclip in the message list.
 - While an attachment saves, a cross shows where its download arrow was, so you can see how much has arrived and cancel at the same time. Under the mouse the attachment turns red, and a click cancels. Save all works the same way.
 
