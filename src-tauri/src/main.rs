@@ -171,7 +171,9 @@ async fn check_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Resu
 }
 
 /// Downloads the update `check_update` found, checks its signature and installs it. On Windows
-/// the app exits here and the installer starts it again; elsewhere the app restarts itself.
+/// the app exits here and the installer starts it again. On macOS the app quits and is opened
+/// again once it's gone, so it comes back under its own Dock icon (`macos::relaunch_after_exit`);
+/// elsewhere it restarts itself.
 #[tauri::command]
 async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
     let update = pending.0.lock().unwrap().take();
@@ -180,6 +182,11 @@ async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Re
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|e| format!("Couldn't install the update: {e}"))?;
+    #[cfg(target_os = "macos")]
+    if macos::relaunch_after_exit() {
+        app.exit(0);
+        return Ok(());
+    }
     app.restart()
 }
 

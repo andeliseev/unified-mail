@@ -150,7 +150,7 @@ Installed apps update themselves with `tauri-plugin-updater`:
 2. If that version is newer, Settings shows **Update to X**.
 3. Clicking it downloads that platform's installer and checks its signature against `plugins.updater.pubkey`. Then:
    - **Windows:** runs the installer passively (`/P /UPDATE /R`). There are no installer pages, so no "uninstall first" question, and it starts the app again when done.
-   - **macOS:** replaces the app and restarts it.
+   - **macOS:** replaces the app and quits. A small shell command (`macos::relaunch_after_exit`) waits until it's gone, also from LaunchServices' list of running apps (`lsappinfo`), then opens it again with `open`, as a click on its Dock icon would. Tauri's own restart runs `open -n` while the old copy still runs, and the Dock shows that second copy as a second icon, next to a kept-in-Dock one that then looks closed. The restart is done by the version being replaced, so updating from 0.2.0 or older still shows the second icon once.
 
 The installer is picked to match the install: `windows-x86_64-nsis` or `windows-x86_64-msi`. The plain `windows-x86_64` entry is the NSIS one.
 
@@ -257,6 +257,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, level with the list header. The window drags by the sidebar's top, the list header and the strip above the message, also on the first click while another app is in front; a double-click there zooms
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
+- [ ] macOS, with the app kept in the Dock: after an update it comes back under that icon, with no second Unified Mail icon next to it. Only an update from a version newer than 0.2.0 shows this
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)

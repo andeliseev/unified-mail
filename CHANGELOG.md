@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: after an update, Unified Mail comes back under its own Dock icon. Before, it opened with a second icon next to it, and the icon you keep in the Dock looked closed. This starts with your next update after this one: updating to this version still shows the second icon one last time.
+
 ## 0.2.0 (2026-11-11)
 
 - Drag the line between the message list and the message to make the list narrower or wider. The app remembers the width; double-click the line to reset it.

@@ -7,6 +7,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [x] End-to-end with a real Google account: sign-in, sync, push, archive, trash
 - [x] macOS build: keychain prompts for unsigned builds. Checked in a release built and installed locally
 - [ ] macOS: links, the right-click menu and keyboard shortcuts inside an email, now passed on by `macos.rs` because WebKit doesn't run the page's handlers in the sandboxed frame. Clicking a link did nothing there, and the right-click menu was WebKit's, with items that did nothing
+- [ ] macOS: after an update, the app comes back under its kept-in-Dock icon (`macos::relaunch_after_exit`). Checked with a throwaway app kept in the Dock, which updated itself as the updater does (a new copy of its bundle swapped in) and then restarted: Tauri's `open -n` gave it a second Dock icon, and the wait-then-`open` brought it back under the kept one. A real update shows it first when updating from a version newer than 0.2.0
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [x] Mark as unread, the right-click menu and the row buttons in the real app with a real Gmail account
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
@@ -99,3 +100,4 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 - [ ] Integration tests for `gmail.rs` against a mock HTTP server
 - [ ] Typed errors in Rust if the UI ever needs to react to specific errors (e.g. show Reconnect only for expired sign-ins)
 - [ ] Accessibility: list keyboard focus, ARIA roles for the message list and dialogs, arrow keys in the right-click menu
+- [ ] Report to Tauri that its macOS restart (`open -n` before the old copy quits) leaves a second Dock icon. `macos::relaunch_after_exit` can go once Tauri waits for the old copy

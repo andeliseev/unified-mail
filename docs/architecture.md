@@ -35,7 +35,7 @@ flowchart LR
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread) and MIME body selection |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
-| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)) |
+| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
 ## Commands (UI → Rust)
@@ -78,7 +78,7 @@ And two for [updates](development.md#updates):
 | Command | Args | Returns |
 | --- | --- | --- |
 | `check_update` | | The newer version on GitHub, or null. The found update is kept in `PendingUpdate` |
-| `install_update` | | Downloads it, checks its signature against `plugins.updater.pubkey`, installs it and restarts. On Windows the app exits and the installer starts it again |
+| `install_update` | | Downloads it, checks its signature against `plugins.updater.pubkey`, installs it and restarts. On Windows the app exits and the installer starts it again; on macOS the app quits and `macos.rs` opens it again once it's gone |
 
 Plugins:
 - `tauri-plugin-notification`: Windows toasts and macOS notifications.

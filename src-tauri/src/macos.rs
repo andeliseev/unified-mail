@@ -7,10 +7,16 @@
 //! - a right-click gets the app's menu (`email-context-menu`) instead of WebKit's, whose items
 //!   do nothing here;
 //! - keys reach the app's shortcuts (`email-key`).
+//!
+//! It also starts the app again after an update (`relaunch_after_exit`).
 
 use objc2::runtime::{AnyObject, Imp, Sel};
 use objc2::{ffi, sel};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSMenu, NSUserInterfaceItemIdentification, NSView};
+use std::ffi::OsStr;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, Url, WebviewWindow};
 
@@ -130,9 +136,77 @@ unsafe extern "C-unwind" fn key_down(view: &NSView, cmd: Sel, event: &NSEvent) {
     }
 }
 
+/// After an update: opens the app again once this copy has quit, as a click on its Dock icon
+/// would. Tauri's restart runs `open -n` while this copy still runs, and the Dock gives that
+/// second copy a second icon; a kept-in-Dock icon then looks closed. False when not running from
+/// an app bundle (`npm run dev`).
+pub fn relaunch_after_exit() -> bool {
+    let Ok(exe) = tauri::utils::platform::current_exe() else { return false };
+    let Some(bundle) = app_bundle(&exe) else { return false };
+    run_after_exit(std::process::id(), &["/usr/bin/open".as_ref(), bundle.as_os_str()]).is_ok()
+}
+
+/// `X.app` for `X.app/Contents/MacOS/binary`.
+fn app_bundle(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let named = |dir: &Path, name: &str| dir.file_name().is_some_and(|n| n == name);
+    let is_app = bundle.extension().is_some_and(|e| e == "app");
+    (named(macos, "MacOS") && named(contents, "Contents") && is_app).then_some(bundle)
+}
+
+/// Waits for process `$1` to end, checking every 0.1 s, then runs the other arguments. LaunchServices
+/// lists an app a few ms longer than it runs, and an `open` in between only tries to bring the
+/// gone copy forward, so it also waits until `lsappinfo` no longer finds it. Gives up after a
+/// minute: a copy that hasn't quit by then shouldn't get a second one next to it.
+const AFTER_EXIT: &str = r#"pid=$1; shift; i=0
+while kill -0 "$pid" 2>/dev/null || /usr/bin/lsappinfo find pid="$pid" | grep -q ASN; do
+  [ "$i" -lt 600 ] || exit 1
+  sleep 0.1; i=$((i + 1))
+done
+exec "$@""#;
+
+/// Runs `command` once process `pid` has ended. The shell gets its own process group and no
+/// stdio, so it outlives the app.
+fn run_after_exit(pid: u32, command: &[&OsStr]) -> std::io::Result<Child> {
+    Command::new("/bin/sh")
+        .args(["-c", AFTER_EXIT, "sh"])
+        .arg(pid.to_string())
+        .args(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_app_bundle() {
+        let exe = Path::new("/Applications/Unified Mail.app/Contents/MacOS/unified-mail");
+        assert_eq!(app_bundle(exe), Some(Path::new("/Applications/Unified Mail.app")));
+        assert_eq!(app_bundle(Path::new("/Users/me/unified-mail/src-tauri/target/debug/unified-mail")), None);
+        assert_eq!(app_bundle(Path::new("/unified-mail")), None);
+    }
+
+    #[test]
+    fn runs_the_command_once_the_process_has_ended() {
+        let dir = std::env::temp_dir().join(format!("unified-mail-relaunch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("ran");
+        let mut process = Command::new("/bin/sleep").arg("1").spawn().unwrap();
+        let mut waiting = run_after_exit(process.id(), &["/usr/bin/touch".as_ref(), marker.as_os_str()]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!marker.exists(), "ran while the process was still running");
+        process.wait().unwrap(); // reaped: until then it's a zombie, which still counts as running
+        assert!(waiting.wait().unwrap().success());
+        assert!(marker.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn nav(url: &str) -> Navigation {
         navigation(&Url::parse(url).unwrap())
