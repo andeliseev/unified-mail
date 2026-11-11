@@ -669,7 +669,7 @@ function setFilter(account) {
   render();
 }
 
-// Next to the time of a message with files (`hasAttachments`, which Rust reads from its type).
+// Next to the time of a message with files (`hasFiles`, which Rust tells from its parts).
 const CLIP_ICON = '<svg class="clip" viewBox="0 0 24 24" role="img" aria-label="Has attachments">' +
   '<path transform="rotate(45 12 12)" d="M16.5 7v8.5a4.5 4.5 0 0 1-9 0V7a3 3 0 0 1 6 0v8.5a1.5 1.5 0 0 1-3 0V9"/></svg>';
 
@@ -685,7 +685,7 @@ function renderList() {
     li.className = 'msg' + (m.unread ? ' unread' : '') + (keyOf(m) === state.selected ? ' selected' : '');
     li.dataset.key = keyOf(m);
     li.style.setProperty('--acc', colorOf(m.account));
-    li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasAttachments ? CLIP_ICON : ''}<time></time></div>` +
+    li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasFiles ? CLIP_ICON : ''}<time></time></div>` +
       '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
     li.querySelector('.from').textContent = senderName(m.from);
     li.querySelector('time').textContent = shortDate(m.date);
@@ -834,10 +834,12 @@ const ATTACHMENT_ICONS = {
   file: FILE_ICON,
 };
 const SAVE_ICON = '<svg class="save" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+// While a save button saves, in place of the save icon: a click there cancels.
+const CANCEL_ICON = '<svg class="cancel" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>';
 // What a save button says while it saves, in one grid cell (`save-label`) with its usual label
-// (`idle`): how much has arrived, Cancel under the mouse, and, unseen, the finished progress text
-// (`sizer`), which keeps the cell one width throughout. The CSS picks what shows.
-const SAVING_LABELS = '<span class="progress"></span><span class="cancel">Cancel</span><span class="sizer" aria-hidden="true"></span>';
+// (`idle`): how much has arrived and, unseen, the finished progress text (`sizer`), which keeps
+// the cell one width throughout. The CSS picks what shows.
+const SAVING_LABELS = '<span class="progress"></span><span class="sizer" aria-hidden="true"></span>';
 let lastSaveJob = 0;
 
 /** The open message's files, under its header: a chip each, and Save all for two or more. */
@@ -847,7 +849,7 @@ function renderAttachments(m, attachments) {
   if (attachments.length > 1) {
     const all = document.createElement('button');
     all.className = 'save-all';
-    all.innerHTML = `<span class="save-label"><span class="idle">Save all</span>${SAVING_LABELS}</span>`;
+    all.innerHTML = `<span class="save-label"><span class="idle">Save all</span>${SAVING_LABELS}</span>${CANCEL_ICON}`;
     all.title = 'Save all attachments to Downloads';
     all.addEventListener('click', () => saveAttachments(m, attachments, all));
     box.append(all);
@@ -861,7 +863,7 @@ function attachmentChip(m, a) {
   chip.className = `att ${kind}`;
   chip.title = `Save ${a.name} to Downloads`;
   chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
-    `<span class="name"></span><span class="save-label"><span class="size idle"></span>${SAVING_LABELS}</span>${SAVE_ICON}`;
+    `<span class="name"></span><span class="save-label"><span class="size idle"></span>${SAVING_LABELS}</span>${SAVE_ICON}${CANCEL_ICON}`;
   chip.querySelector('.name').textContent = a.name;
   chip.querySelector('.size').textContent = formatSize(a.size);
   chip.addEventListener('click', () => saveAttachments(m, [a], chip));
@@ -895,8 +897,8 @@ function formatSize(bytes) {
 
 /**
  * Saves files to Downloads (`save_attachments`); the toast can then show them in Finder or
- * Explorer. Meanwhile the button shows how much has arrived, or Cancel under the mouse, and
- * another click cancels (`cancel_save`).
+ * Explorer. Meanwhile the button shows how much has arrived, with a cross in place of its save
+ * icon, and another click cancels (`cancel_save`).
  */
 async function saveAttachments(m, attachments, button) {
   if (button.classList.contains('saving')) {

@@ -402,8 +402,8 @@ impl AppState {
                     caches[&folder]
                         .get(&key)
                         .or_else(|| caches.values().find_map(|cache| cache.get(&key)))
-                        // Saved by a version that didn't note attachments: fetched again, once.
-                        .filter(|m| m.has_attachments.is_some())
+                        // Not known yet whether it has files (`has_files`): fetched again.
+                        .filter(|m| m.has_files.is_some())
                         .map(|m| (id.clone(), m.clone()))
                 })
                 .collect()

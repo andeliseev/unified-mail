@@ -23,10 +23,12 @@ pub struct MessageSummary {
     /// Milliseconds since the Unix epoch.
     pub date: i64,
     pub unread: bool,
-    /// Whether the email carries files (`carries_files`), for the list's paperclip. `None` in
-    /// lists saved by versions that didn't note it; `sync_account` fetches those rows again.
+    /// Whether the reader will list files for it (`carries_files`), for the list's paperclip.
+    /// `None` until that's known: in lists saved by versions that didn't note it, or by 0.2.4,
+    /// which told from the email's type alone (and wrote `hasAttachments`), and when its parts
+    /// couldn't be checked. `sync_account` fetches those rows again.
     #[serde(default)]
-    pub has_attachments: Option<bool>,
+    pub has_files: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -202,6 +204,12 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
     );
     let raw: RawMessage = get_json(http, token, &url).await?;
     let headers = raw.payload.map(|p| p.headers).unwrap_or_default();
+    // If its parts can't be checked, the paperclip waits for the next sync; the message still shows.
+    let has_files = if may_carry_files(&header(&headers, "Content-Type")) {
+        get_outline(http, token, id).await.map(|outline| carries_files(&outline)).ok()
+    } else {
+        Some(false)
+    };
     Ok(MessageSummary {
         account: account.to_string(),
         id: raw.id,
@@ -211,16 +219,52 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
         snippet: unescape_html(&raw.snippet),
         date: parse_date(raw.internal_date.as_ref()),
         unread: raw.label_ids.iter().any(|l| l == "UNREAD"),
-        has_attachments: Some(carries_files(&header(&headers, "Content-Type"))),
+        has_files,
     })
 }
 
-/// Whether an email of this `Content-Type` carries files, as far as its type tells without
-/// fetching its parts: mail attaches files in `multipart/mixed`, while pictures shown in the text
-/// come in `multipart/related`, which the reader doesn't list either. A mailing list that adds
-/// its footer as a part of its own makes `multipart/mixed` too, with no files.
-fn carries_files(content_type: &str) -> bool {
+/// Whether an email of this `Content-Type` may carry files: mail attaches files in
+/// `multipart/mixed`, while pictures shown in the text come in `multipart/related`, which the
+/// reader doesn't list either. Not every `multipart/mixed` email has files, though: some senders
+/// wrap every email in it, and a mailing list adds its footer as a part of its own. Its parts
+/// tell (`carries_files`).
+fn may_carry_files(content_type: &str) -> bool {
     content_type.split(';').next().unwrap_or_default().trim().eq_ignore_ascii_case("multipart/mixed")
+}
+
+/// What `get_outline` asks for: each part's type, name and headers, five levels deep.
+const OUTLINE_FIELDS: &str = "payload/parts(mimeType,filename,headers,parts(mimeType,filename,headers,\
+    parts(mimeType,filename,headers,parts(mimeType,filename,headers,parts(mimeType,filename,headers)))))";
+
+/// Message `id`'s parts without their content (`OUTLINE_FIELDS`): what `carries_files` needs,
+/// without downloading the email.
+async fn get_outline(http: &Client, token: &str, id: &str) -> Result<Part, String> {
+    #[derive(Deserialize)]
+    struct Outline {
+        #[serde(default)]
+        payload: Option<Part>,
+    }
+    let outline: Outline = get_json(http, token, &format!("{API}/messages/{id}?format=full&fields={OUTLINE_FIELDS}")).await?;
+    Ok(outline.payload.unwrap_or_default())
+}
+
+/// Whether the reader will list files for an email of these parts (`get_full`), as far as they
+/// tell without its text. The reader leaves out the pictures that its HTML shows in place
+/// (`cid:` links); those have a Content-ID and aren't marked as attachments, while pictures sent
+/// as files are, Gmail's own included, though Gmail gives them a Content-ID too. Without an HTML
+/// body, nothing shows in place.
+fn carries_files(payload: &Part) -> bool {
+    let (mut html, mut text) = (None, None);
+    find_bodies(payload, &mut html, &mut text);
+    let mut found = Vec::new();
+    find_attachments(payload, &mut found);
+    found.into_iter().any(|part| html.is_none() || !is_picture(part) || disposition(part) == "attachment")
+}
+
+/// A part's `Content-Disposition` without its parameters, in lower case: `inline`, `attachment`,
+/// or empty when it has none.
+fn disposition(part: &Part) -> String {
+    header(&part.headers, "Content-Disposition").split(';').next().unwrap_or_default().trim().to_ascii_lowercase()
 }
 
 pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessage, String> {
@@ -230,8 +274,9 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
 
     let (mut html_part, mut text_part) = (None, None);
     find_bodies(&payload, &mut html_part, &mut text_part);
-    let mut attachments = Vec::new();
-    find_attachments(&payload, &mut attachments);
+    let mut files = Vec::new();
+    find_attachments(&payload, &mut files);
+    let attachments = files.into_iter().map(attachment).collect();
     let html = match html_part {
         Some(part) => Some(load_body(http, token, id, part).await?),
         None => None,
@@ -330,21 +375,29 @@ fn find_bodies<'a>(part: &'a Part, html: &mut Option<&'a Part>, text: &mut Optio
 /// the email may show in place (`cid:` links; the reader leaves those out of its list). The bodies
 /// `find_bodies` picks are neither. A part that is itself a message (a forwarded email) is listed
 /// as one file, without the files inside it.
-fn find_attachments(part: &Part, found: &mut Vec<Attachment>) {
-    let content_id = content_id(part);
-    let mime_type = part.mime_type.to_ascii_lowercase();
-    if !part.filename.is_empty() || (content_id.is_some() && mime_type.starts_with("image/")) {
-        found.push(Attachment {
-            part: part.part_id.clone(),
-            name: file_name(part),
-            mime_type,
-            size: part.body.as_ref().map_or(0, |b| b.size),
-            content_id,
-        });
+fn find_attachments<'a>(part: &'a Part, found: &mut Vec<&'a Part>) {
+    if !part.filename.is_empty() || is_picture(part) {
+        found.push(part);
         return;
     }
     for child in &part.parts {
         find_attachments(child, found);
+    }
+}
+
+/// A picture with a Content-ID, which the email may show in place.
+fn is_picture(part: &Part) -> bool {
+    part.mime_type.to_ascii_lowercase().starts_with("image/") && content_id(part).is_some()
+}
+
+/// How the reader lists a part `find_attachments` found.
+fn attachment(part: &Part) -> Attachment {
+    Attachment {
+        part: part.part_id.clone(),
+        name: file_name(part),
+        mime_type: part.mime_type.to_ascii_lowercase(),
+        size: part.body.as_ref().map_or(0, |b| b.size),
+        content_id: content_id(part),
     }
 }
 
@@ -640,14 +693,56 @@ mod tests {
     }
 
     #[test]
+    fn tells_which_types_may_carry_files() {
+        assert!(may_carry_files("multipart/mixed; boundary=\"000000000000a1b2c3\""));
+        assert!(may_carry_files(" Multipart/Mixed;boundary=x"));
+        assert!(may_carry_files("multipart/mixed"));
+        assert!(!may_carry_files("multipart/alternative; boundary=x"));
+        assert!(!may_carry_files("multipart/related; type=\"multipart/alternative\""));
+        assert!(!may_carry_files("text/plain; charset=UTF-8"));
+        assert!(!may_carry_files(""));
+    }
+
+    #[test]
     fn tells_which_emails_carry_files() {
-        assert!(carries_files("multipart/mixed; boundary=\"000000000000a1b2c3\""));
-        assert!(carries_files(" Multipart/Mixed;boundary=x"));
-        assert!(carries_files("multipart/mixed"));
-        assert!(!carries_files("multipart/alternative; boundary=x"));
-        assert!(!carries_files("multipart/related; type=\"multipart/alternative\""));
-        assert!(!carries_files("text/plain; charset=UTF-8"));
-        assert!(!carries_files(""));
+        // `multipart/mixed` emails, as `get_outline` returns them.
+        let carries = |parts: Value| carries_files(&serde_json::from_value(json!({ "parts": parts })).unwrap());
+        let text = json!({ "mimeType": "text/plain" });
+        let alternative = json!({ "mimeType": "multipart/alternative", "parts": [text, { "mimeType": "text/html" }] });
+        let picture = |disposition: &str| {
+            let mut headers = vec![json!({ "name": "Content-ID", "value": "<logo@sender>" })];
+            if !disposition.is_empty() {
+                headers.push(json!({ "name": "Content-Disposition", "value": format!("{disposition}; filename=\"logo.png\"") }));
+            }
+            json!({ "mimeType": "image/png", "filename": "logo.png", "headers": headers })
+        };
+        let pdf = json!({
+            "mimeType": "application/pdf",
+            "filename": "invoice.pdf",
+            "headers": [{ "name": "Content-Disposition", "value": "attachment; filename=\"invoice.pdf\"" }]
+        });
+
+        // A wrapper around the text alone, and a mailing list's footer: no files.
+        assert!(!carries(json!([alternative])));
+        assert!(!carries(json!([alternative, { "mimeType": "text/plain", "headers": [{ "name": "Content-Disposition", "value": "inline" }] }])));
+        // Pictures the HTML shows in place, marked inline or not marked.
+        assert!(!carries(json!([alternative, picture("inline"), picture("")])));
+        assert!(!carries(json!([{ "mimeType": "multipart/related", "parts": [alternative, picture("Inline")] }])));
+        // Files: any attached file, pictures marked as attachments (Gmail gives them a
+        // Content-ID too), and pictures in an email without HTML, which can't show them.
+        assert!(carries(json!([alternative, pdf])));
+        assert!(carries(json!([{ "mimeType": "multipart/related", "parts": [alternative, picture("inline")] }, picture("ATTACHMENT")])));
+        assert!(carries(json!([text, picture("inline")])));
+        assert!(carries(json!([alternative, { "mimeType": "message/rfc822", "filename": "Forwarded.eml" }])));
+        assert!(carries(json!([alternative, { "mimeType": "image/jpeg", "filename": "photo.jpg" }])));
+    }
+
+    #[test]
+    fn asks_gmail_for_the_outline_only() {
+        assert!(!OUTLINE_FIELDS.contains(char::is_whitespace));
+        assert_eq!(OUTLINE_FIELDS.matches('(').count(), OUTLINE_FIELDS.matches(')').count());
+        assert_eq!(OUTLINE_FIELDS.matches("parts(mimeType,filename,headers").count(), 5);
+        assert!(!OUTLINE_FIELDS.contains("body"));
     }
 
     #[test]
@@ -718,6 +813,7 @@ mod tests {
         .unwrap();
         let mut found = Vec::new();
         find_attachments(&payload, &mut found);
+        let found: Vec<Attachment> = found.into_iter().map(attachment).collect();
         let listed: Vec<_> = found.iter().map(|a| (a.part.as_str(), a.name.as_str(), a.mime_type.as_str(), a.size, a.content_id.as_deref())).collect();
         assert_eq!(listed, [
             ("1", "invoice.pdf", "application/pdf", 253952, None),

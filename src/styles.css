@@ -369,20 +369,27 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .att .save { visibility: hidden; color: var(--accent); }
 .att:hover .save, .att:focus-visible .save { visibility: visible; }
 /* While a chip or Save all saves (`saving`, saveAttachments): how much has arrived in place of its
-   label, with a line filling up along its bottom (`--progress`), and Cancel under the mouse, where
-   a click cancels. The labels share one grid cell, as wide as the finished progress text
-   (`sizer`), so the button keeps one width while it saves: a button that narrowed under the mouse
-   could slip out from under it and widen again, over and over. */
+   label, with a line filling up along its bottom (`--progress`), and a cross in place of the save
+   icon (`cancel`). A click cancels, and under the mouse the button turns red to say so. The labels
+   share one grid cell, as wide as the finished progress text (`sizer`), so the button keeps one
+   width while it saves. */
 .att, .save-all { position: relative; overflow: hidden; }
 .save-label { display: inline-grid; }
 .save-label > * { grid-area: 1 / 1; }
 .save-label > :not(.idle), .saving .idle { display: none; }
 .saving .save-label > :not(.idle) { display: block; }
-.save-label .sizer, .save-label .cancel, .saving:is(:hover, :focus-visible) .progress { visibility: hidden; }
-.saving:is(:hover, :focus-visible) .cancel { visibility: visible; }
+.save-label .sizer { visibility: hidden; }
 .save-label .progress, .save-label .sizer { font-variant-numeric: tabular-nums; }
 .save-all .progress { color: var(--muted); }
-.save-label .cancel { color: var(--danger); }
+:is(.att, .save-all) .cancel, .saving .save { display: none; }
+.saving .cancel { display: block; color: var(--muted); }
+.saving:is(:hover, :focus-visible) {
+  border-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: var(--hover);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.saving:is(:hover, :focus-visible) .cancel { color: var(--danger); }
 .att.saving::after, .save-all.saving::after {
   content: "";
   position: absolute;
@@ -393,15 +400,13 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   background: var(--accent);
   transition: width 0.2s linear;
 }
-.att.saving .save { visibility: hidden; }
-.saving { cursor: progress; }
-.saving:is(:hover, :focus-visible) { cursor: default; }
 .att.image .kind { color: #1d9e75; }
 .att.pdf .kind { color: #e24b4a; }
 .att.archive .kind { color: #ba7517; }
 .att.document .kind { color: var(--accent); }
 .att.file .kind { color: var(--muted); }
-.save-all { padding: 5px 12px; }
+.save-all { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
+.save-all.saving { padding-right: 8px; }
 #m-body { flex: 1; min-height: 0; display: flex; }
 #m-body iframe { flex: 1; width: 100%; border: 0; background: #fff; }
 #m-body .empty { background: var(--panel); }
