@@ -15,6 +15,7 @@ use futures_util::future::{AbortHandle, Abortable};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -98,8 +99,10 @@ async fn get_message(state: State<'_, AppState>, account: String, id: String) ->
 /// Saves attachments `parts` of message `id` to the Downloads folder, each under a name no file
 /// there has yet, marked as coming from email (`files.rs`). Returns where they went, or nothing
 /// when `cancel_save(job)` stopped the download; files are only written once all have arrived.
-/// Errors give the reason; the page puts "Couldn't save …:" in front.
+/// Meanwhile `on_progress` gets how many bytes of the files have arrived, up to ten times a
+/// second. Errors give the reason; the page puts "Couldn't save …:" in front.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn save_attachments(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -108,11 +111,21 @@ async fn save_attachments(
     id: String,
     parts: Vec<String>,
     job: u64,
+    on_progress: tauri::ipc::Channel<u64>,
 ) -> Result<Vec<String>, String> {
     let downloads = downloads_dir(&app)?;
+    let last_sent = Mutex::new(None::<Instant>);
+    let arrived = |bytes: u64| {
+        let mut last = last_sent.lock().unwrap();
+        if last.is_some_and(|sent| sent.elapsed() < Duration::from_millis(100)) {
+            return;
+        }
+        *last = Some(Instant::now());
+        let _ = on_progress.send(bytes);
+    };
     let (handle, registration) = AbortHandle::new_pair();
     saving.0.lock().unwrap().insert(job, handle);
-    let download = Abortable::new(state.attachments(&account, &id, &parts), registration).await;
+    let download = Abortable::new(state.attachments(&account, &id, &parts, &arrived), registration).await;
     saving.0.lock().unwrap().remove(&job);
     // Cancelled: dropping the download also ended its request to Gmail.
     let Ok(files) = download else { return Ok(Vec::new()) };

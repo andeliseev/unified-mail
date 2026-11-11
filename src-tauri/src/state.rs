@@ -402,6 +402,8 @@ impl AppState {
                     caches[&folder]
                         .get(&key)
                         .or_else(|| caches.values().find_map(|cache| cache.get(&key)))
+                        // Saved by a version that didn't note attachments: fetched again, once.
+                        .filter(|m| m.has_attachments.is_some())
                         .map(|m| (id.clone(), m.clone()))
                 })
                 .collect()
@@ -453,10 +455,17 @@ impl AppState {
         gmail::get_full(&self.http, &token, id).await
     }
 
-    /// Attachments `parts` of a message, each with the name to save it under.
-    pub async fn attachments(&self, account: &str, id: &str, parts: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    /// Attachments `parts` of a message, each with the name to save it under. `arrived` hears how
+    /// many bytes of them have arrived, as they come.
+    pub async fn attachments(
+        &self,
+        account: &str,
+        id: &str,
+        parts: &[String],
+        arrived: &(dyn Fn(u64) + Sync),
+    ) -> Result<Vec<(String, Vec<u8>)>, String> {
         let token = self.access_token(account).await?;
-        gmail::get_attachments(&self.http, &token, id, parts).await
+        gmail::get_attachments(&self.http, &token, id, parts, arrived).await
     }
 
     /// Pictures `parts` that a message shows in place (`cid:` links), with their data.

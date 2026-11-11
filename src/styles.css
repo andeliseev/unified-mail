@@ -252,6 +252,10 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .msg .row1 { display: flex; gap: 8px; align-items: baseline; }
 .msg .from { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg time { font-size: 12px; color: var(--muted); flex: none; }
+/* A message with files (`hasAttachments`): a paperclip next to the time. Under the mouse the
+   row's buttons take that place, so it hides with the time. */
+.msg .clip { width: 14px; height: 14px; color: var(--muted); align-self: center; margin-right: -3px; }
+.msg:hover .clip { visibility: hidden; }
 .msg .subject, .msg .snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg .snippet { color: var(--muted); font-size: 12.5px; }
 /* The row under the mouse shows its actions in place of the time. Their background is the
@@ -361,17 +365,37 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .att { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 5px 8px 5px 10px; }
 .att .kind { width: 18px; height: 18px; }
 .att .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att .size, .att .busy, .att .cancel { flex: none; color: var(--muted); font-size: 12px; }
+.att .save-label { flex: none; color: var(--muted); font-size: 12px; }
 .att .save { visibility: hidden; color: var(--accent); }
 .att:hover .save, .att:focus-visible .save { visibility: visible; }
-/* While a chip or Save all saves (`saving`): Saving… in place of its label, Cancel under the
-   mouse, where a click cancels. */
-.busy, .cancel, .saving .idle, .saving:is(:hover, :focus-visible) .busy { display: none; }
-.saving .busy, .saving:is(:hover, :focus-visible) .cancel { display: inline; }
-.att .cancel, .save-all .cancel { color: var(--danger); }
+/* While a chip or Save all saves (`saving`, saveAttachments): how much has arrived in place of its
+   label, with a line filling up along its bottom (`--progress`), and Cancel under the mouse, where
+   a click cancels. The labels share one grid cell, as wide as the finished progress text
+   (`sizer`), so the button keeps one width while it saves: a button that narrowed under the mouse
+   could slip out from under it and widen again, over and over. */
+.att, .save-all { position: relative; overflow: hidden; }
+.save-label { display: inline-grid; }
+.save-label > * { grid-area: 1 / 1; }
+.save-label > :not(.idle), .saving .idle { display: none; }
+.saving .save-label > :not(.idle) { display: block; }
+.save-label .sizer, .save-label .cancel, .saving:is(:hover, :focus-visible) .progress { visibility: hidden; }
+.saving:is(:hover, :focus-visible) .cancel { visibility: visible; }
+.save-label .progress, .save-label .sizer { font-variant-numeric: tabular-nums; }
+.save-all .progress { color: var(--muted); }
+.save-label .cancel { color: var(--danger); }
+.att.saving::after, .save-all.saving::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: calc(var(--progress, 0) * 100%);
+  height: 2px;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
 .att.saving .save { visibility: hidden; }
-.saving { cursor: progress; opacity: 0.6; }
-.saving:is(:hover, :focus-visible) { cursor: default; opacity: 1; }
+.saving { cursor: progress; }
+.saving:is(:hover, :focus-visible) { cursor: default; }
 .att.image .kind { color: #1d9e75; }
 .att.pdf .kind { color: #e24b4a; }
 .att.archive .kind { color: #ba7517; }

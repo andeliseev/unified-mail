@@ -1,6 +1,6 @@
 'use strict';
 
-const { invoke } = window.__TAURI__.core;
+const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { getVersion } = window.__TAURI__.app;
 
@@ -669,6 +669,10 @@ function setFilter(account) {
   render();
 }
 
+// Next to the time of a message with files (`hasAttachments`, which Rust reads from its type).
+const CLIP_ICON = '<svg class="clip" viewBox="0 0 24 24" role="img" aria-label="Has attachments">' +
+  '<path transform="rotate(45 12 12)" d="M16.5 7v8.5a4.5 4.5 0 0 1-9 0V7a3 3 0 0 1 6 0v8.5a1.5 1.5 0 0 1-3 0V9"/></svg>';
+
 function renderList() {
   const messages = visible();
   // In All Mail, tag what's still in the Inbox (everything else there is archived or sent).
@@ -681,7 +685,8 @@ function renderList() {
     li.className = 'msg' + (m.unread ? ' unread' : '') + (keyOf(m) === state.selected ? ' selected' : '');
     li.dataset.key = keyOf(m);
     li.style.setProperty('--acc', colorOf(m.account));
-    li.innerHTML = '<div class="row1"><span class="from"></span><time></time></div><div class="subject"><span class="text"></span></div><div class="snippet"></div>';
+    li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasAttachments ? CLIP_ICON : ''}<time></time></div>` +
+      '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
     li.querySelector('.from').textContent = senderName(m.from);
     li.querySelector('time').textContent = shortDate(m.date);
     li.querySelector('.subject .text').textContent = m.subject || '(no subject)';
@@ -829,8 +834,10 @@ const ATTACHMENT_ICONS = {
   file: FILE_ICON,
 };
 const SAVE_ICON = '<svg class="save" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
-// Shown instead of a button's usual label (`idle`) while it saves; the CSS picks one.
-const SAVING_LABELS = '<span class="busy">Saving…</span><span class="cancel">Cancel</span>';
+// What a save button says while it saves, in one grid cell (`save-label`) with its usual label
+// (`idle`): how much has arrived, Cancel under the mouse, and, unseen, the finished progress text
+// (`sizer`), which keeps the cell one width throughout. The CSS picks what shows.
+const SAVING_LABELS = '<span class="progress"></span><span class="cancel">Cancel</span><span class="sizer" aria-hidden="true"></span>';
 let lastSaveJob = 0;
 
 /** The open message's files, under its header: a chip each, and Save all for two or more. */
@@ -840,7 +847,7 @@ function renderAttachments(m, attachments) {
   if (attachments.length > 1) {
     const all = document.createElement('button');
     all.className = 'save-all';
-    all.innerHTML = `<span class="idle">Save all</span>${SAVING_LABELS}`;
+    all.innerHTML = `<span class="save-label"><span class="idle">Save all</span>${SAVING_LABELS}</span>`;
     all.title = 'Save all attachments to Downloads';
     all.addEventListener('click', () => saveAttachments(m, attachments, all));
     box.append(all);
@@ -854,7 +861,7 @@ function attachmentChip(m, a) {
   chip.className = `att ${kind}`;
   chip.title = `Save ${a.name} to Downloads`;
   chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
-    `<span class="name"></span><span class="size idle"></span>${SAVING_LABELS}${SAVE_ICON}`;
+    `<span class="name"></span><span class="save-label"><span class="size idle"></span>${SAVING_LABELS}</span>${SAVE_ICON}`;
   chip.querySelector('.name').textContent = a.name;
   chip.querySelector('.size').textContent = formatSize(a.size);
   chip.addEventListener('click', () => saveAttachments(m, [a], chip));
@@ -888,8 +895,8 @@ function formatSize(bytes) {
 
 /**
  * Saves files to Downloads (`save_attachments`); the toast can then show them in Finder or
- * Explorer. Meanwhile the button says Saving…, or Cancel under the mouse, and another click
- * cancels (`cancel_save`).
+ * Explorer. Meanwhile the button shows how much has arrived, or Cancel under the mouse, and
+ * another click cancels (`cancel_save`).
  */
 async function saveAttachments(m, attachments, button) {
   if (button.classList.contains('saving')) {
@@ -898,13 +905,24 @@ async function saveAttachments(m, attachments, button) {
   }
   const job = ++lastSaveJob;
   button.dataset.job = job;
+  const total = attachments.reduce((sum, a) => sum + a.size, 0);
+  button.querySelector('.sizer').textContent = formatProgress(total, total);
+  showProgress(button, 0, total);
   button.classList.add('saving');
   button.setAttribute('aria-busy', 'true');
   const title = button.title;
   button.title = 'Cancel';
   const what = attachments.length === 1 ? attachments[0].name : 'the attachments';
+  // Rust sends how many bytes have arrived, up to ten times a second. One that comes after the
+  // save is over is dropped.
+  const progress = new Channel();
+  progress.onmessage = (received) => {
+    if (button.dataset.job === String(job) && button.classList.contains('saving')) showProgress(button, received, total);
+  };
   try {
-    const paths = await invoke('save_attachments', { account: m.account, id: m.id, parts: attachments.map((a) => a.part), job });
+    const paths = await invoke('save_attachments', {
+      account: m.account, id: m.id, parts: attachments.map((a) => a.part), job, onProgress: progress,
+    });
     if (!paths.length) return;  // cancelled
     const saved = paths.length === 1 ? paths[0].split(/[\\/]/).pop() : `${paths.length} files`;
     toast(`Saved ${saved} to Downloads`, 8000, {
@@ -917,7 +935,22 @@ async function saveAttachments(m, attachments, button) {
     button.title = title;
     button.classList.remove('saving');
     button.removeAttribute('aria-busy');
+    button.style.removeProperty('--progress');
   }
+}
+
+/** Shows how much of a save has arrived: in words, and as the line along the button's bottom. */
+function showProgress(button, received, total) {
+  button.querySelector('.progress').textContent = formatProgress(received, total);
+  button.style.setProperty('--progress', total ? Math.min(received / total, 1) : 0);
+}
+
+/** "1.2 of 3.4 MB": `received` in the unit and precision formatSize gives `total`. */
+function formatProgress(received, total) {
+  const whole = formatSize(total);
+  const [number, unit] = whole.split(' ');
+  const scale = 1024 ** ['B', 'KB', 'MB', 'GB'].indexOf(unit);
+  return `${(Math.min(received, total) / scale).toFixed(number.includes('.') ? 1 : 0)} of ${whole}`;
 }
 
 // ---------- Pictures in the email (cid: links) ----------

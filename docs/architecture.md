@@ -55,7 +55,7 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
 | `get_message` | `account, id` | Headers, HTML/text body and `attachments` (`{ part, name, mimeType, size, contentId }`). It doesn't change the message; the UI then calls `set_unread` |
 | `inline_images` | `account, id, parts` | The pictures the email shows in place (`cid:` links): `[{ part, mimeType, data }]`, data as base64url (see [ui.md](ui.md#pictures-in-the-email-cid-links)) |
-| `save_attachments` | `account, id, parts, job` | Saves those attachments (Gmail part IDs) to the Downloads folder under names no file there has, marked as coming from email; returns their paths, or none when cancelled (see [ui.md](ui.md#attachments)) |
+| `save_attachments` | `account, id, parts, job, onProgress` | Saves those attachments (Gmail part IDs) to the Downloads folder under names no file there has, marked as coming from email; returns their paths, or none when cancelled. Meanwhile the `onProgress` channel gets the bytes arrived so far, up to ten times a second (see [ui.md](ui.md#attachments)) |
 | `cancel_save` | `job` | Stops that `save_attachments` if it's still downloading |
 | `show_in_folder` | `paths` | Shows saved attachments in Finder or File Explorer; only files in the Downloads folder |
 | `set_unread` | `account, id, unread` | Marks the message read (on opening, Mark as read) or unread (Mark as unread) |

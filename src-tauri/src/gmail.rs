@@ -3,6 +3,7 @@
 use reqwest::{header::CONTENT_LENGTH, Client, RequestBuilder, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 /// For attachments and large bodies, in place of the client's 30 s: Gmail sends them as base64 in
@@ -22,6 +23,10 @@ pub struct MessageSummary {
     /// Milliseconds since the Unix epoch.
     pub date: i64,
     pub unread: bool,
+    /// Whether the email carries files (`carries_files`), for the list's paperclip. `None` in
+    /// lists saved by versions that didn't note it; `sync_account` fetches those rows again.
+    #[serde(default)]
+    pub has_attachments: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -193,7 +198,7 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
     check_id(id)?;
     let url = format!(
         "{API}/messages/{id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject\
-         &fields=id,threadId,labelIds,snippet,internalDate,payload/headers"
+         &metadataHeaders=Content-Type&fields=id,threadId,labelIds,snippet,internalDate,payload/headers"
     );
     let raw: RawMessage = get_json(http, token, &url).await?;
     let headers = raw.payload.map(|p| p.headers).unwrap_or_default();
@@ -206,7 +211,16 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
         snippet: unescape_html(&raw.snippet),
         date: parse_date(raw.internal_date.as_ref()),
         unread: raw.label_ids.iter().any(|l| l == "UNREAD"),
+        has_attachments: Some(carries_files(&header(&headers, "Content-Type"))),
     })
+}
+
+/// Whether an email of this `Content-Type` carries files, as far as its type tells without
+/// fetching its parts: mail attaches files in `multipart/mixed`, while pictures shown in the text
+/// come in `multipart/related`, which the reader doesn't list either. A mailing list that adds
+/// its footer as a part of its own makes `multipart/mixed` too, with no files.
+fn carries_files(content_type: &str) -> bool {
+    content_type.split(';').next().unwrap_or_default().trim().eq_ignore_ascii_case("multipart/mixed")
 }
 
 pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessage, String> {
@@ -364,19 +378,33 @@ fn find_part<'a>(part: &'a Part, part_id: &str) -> Option<&'a Part> {
 }
 
 /// Attachments `parts` (`Attachment::part`) of message `id`: each one's name and bytes.
-pub async fn get_attachments(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let found = get_parts(http, token, id, parts).await?;
+/// `arrived` hears, as the data comes, how many bytes of the files have arrived in all.
+pub async fn get_attachments(
+    http: &Client,
+    token: &str,
+    id: &str,
+    parts: &[String],
+    arrived: &(dyn Fn(u64) + Sync),
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let found = get_parts(http, token, id, parts, arrived).await?;
     found.into_iter().map(|(name, part)| Ok((name, decode_base64url(&part.data)?))).collect()
 }
 
 /// Pictures `parts` that message `id` shows in place (`cid:` links), with their data.
 pub async fn get_inline_images(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<PartData>, String> {
-    Ok(get_parts(http, token, id, parts).await?.into_iter().map(|(_, part)| part).collect())
+    Ok(get_parts(http, token, id, parts, &|_| {}).await?.into_iter().map(|(_, part)| part).collect())
 }
 
 /// Parts `parts` (`Attachment::part`) of message `id`, found in a fresh copy of it, so attachment
-/// IDs that changed since it was opened don't matter: each one's name and data.
-async fn get_parts(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, PartData)>, String> {
+/// IDs that changed since it was opened don't matter: each one's name and data. `arrived` hears
+/// the bytes of them that have arrived in all, as they come.
+async fn get_parts(
+    http: &Client,
+    token: &str,
+    id: &str,
+    parts: &[String],
+    arrived: &(dyn Fn(u64) + Sync),
+) -> Result<Vec<(String, PartData)>, String> {
     check_id(id)?;
     let raw: RawMessage = get_json(http, token, &format!("{API}/messages/{id}?format=full")).await?;
     let payload = raw.payload.unwrap_or_default();
@@ -387,8 +415,11 @@ async fn get_parts(http: &Client, token: &str, id: &str, parts: &[String]) -> Re
             None => return Err("This attachment isn't in the message any more. Open the message again.".to_string()),
         }
     }
+    // The parts load at the same time; each adds what arrives for it to the total.
+    let received = AtomicU64::new(0);
+    let more = &|bytes: u64| arrived(received.fetch_add(bytes, Ordering::Relaxed) + bytes);
     let loads = found.into_iter().map(|part| async move {
-        let data = part_data(http, token, id, part).await?;
+        let data = part_data(http, token, id, part, more).await?;
         let mime_type = part.mime_type.to_ascii_lowercase();
         Ok::<_, String>((file_name(part), PartData { part: part.part_id.clone(), mime_type, data }))
     });
@@ -405,15 +436,26 @@ fn decode_base64url(data: &str) -> Result<Vec<u8>, String> {
 }
 
 async fn load_body(http: &Client, token: &str, message_id: &str, part: &Part) -> Result<Body, String> {
-    Ok(Body { data: part_data(http, token, message_id, part).await?, charset: charset(part) })
+    Ok(Body { data: part_data(http, token, message_id, part, &|_| {}).await?, charset: charset(part) })
 }
 
 /// A part's base64url data: in the message, or fetched separately when Gmail keeps it out of
-/// line, as it does for attachments and very large bodies.
-async fn part_data(http: &Client, token: &str, message_id: &str, part: &Part) -> Result<String, String> {
+/// line, as it does for attachments and very large bodies. `more` hears how many more bytes of the
+/// part have arrived, up to its size.
+async fn part_data(
+    http: &Client,
+    token: &str,
+    message_id: &str,
+    part: &Part,
+    more: &(dyn Fn(u64) + Sync),
+) -> Result<String, String> {
     let body = part.body.as_ref();
+    let size = body.map_or(0, |b| b.size);
     let data = match (body.and_then(|b| b.data.clone()), body.and_then(|b| b.attachment_id.as_deref())) {
-        (Some(data), _) => data,
+        (Some(data), _) => {
+            more(size);
+            data
+        }
         // Gmail moves very large bodies out of line, like attachments.
         (None, Some(attachment_id)) => {
             #[derive(Deserialize)]
@@ -423,11 +465,34 @@ async fn part_data(http: &Client, token: &str, message_id: &str, part: &Part) ->
             }
             let url = format!("{API}/messages/{message_id}/attachments/{attachment_id}");
             let request = http.get(url).bearer_auth(token).timeout(DOWNLOAD_TIMEOUT);
-            parse_json::<OutOfLine>(send(request).await?).await?.data
+            let json = read_counting(send(request).await?, size, more).await?;
+            let out_of_line: OutOfLine =
+                decode(&json).map_err(|e| format!("Unexpected Gmail response ({} bytes): {e}", json.len()))?;
+            out_of_line.data
         }
         _ => String::new(),
     };
     Ok(data)
+}
+
+/// The body of `resp`, which carries a part of `size` bytes, read piece by piece: `more` hears how
+/// many more bytes of the part each piece brings. Gmail sends parts as base64 in JSON, 4
+/// characters for every 3 bytes, so that's three quarters of what came, up to `size`.
+async fn read_counting(mut resp: Response, size: u64, more: &(dyn Fn(u64) + Sync)) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    let mut counted = 0;
+    while let Some(piece) = resp.chunk().await.map_err(|e| format!("Couldn't read Gmail's response: {}", describe(&e)))? {
+        body.extend_from_slice(&piece);
+        let now = (body.len() as u64 / 4 * 3).min(size);
+        if now > counted {
+            more(now - counted);
+            counted = now;
+        }
+    }
+    if size > counted {
+        more(size - counted);
+    }
+    Ok(body)
 }
 
 async fn get_json<T: DeserializeOwned>(http: &Client, token: &str, url: &str) -> Result<T, String> {
@@ -572,6 +637,17 @@ mod tests {
         assert_eq!(unescape_html("Привет &amp; пока"), "Привет & пока");
         assert_eq!(unescape_html("a & b &unknown; c&"), "a & b &unknown; c&");
         assert_eq!(unescape_html("&Привет;"), "&Привет;");
+    }
+
+    #[test]
+    fn tells_which_emails_carry_files() {
+        assert!(carries_files("multipart/mixed; boundary=\"000000000000a1b2c3\""));
+        assert!(carries_files(" Multipart/Mixed;boundary=x"));
+        assert!(carries_files("multipart/mixed"));
+        assert!(!carries_files("multipart/alternative; boundary=x"));
+        assert!(!carries_files("multipart/related; type=\"multipart/alternative\""));
+        assert!(!carries_files("text/plain; charset=UTF-8"));
+        assert!(!carries_files(""));
     }
 
     #[test]

@@ -23,7 +23,9 @@ All accounts sync one folder in parallel (`join_all`). For each account:
    - its unread query, newest 50
 
    Any unread message among the newest 50 of a folder is also among its newest 50 unread messages. So the second call is enough to keep read state accurate for everything shown, without re-fetching metadata.
-2. Ids already in any folder's cache reuse that summary. Only new ids get a `format=metadata` request (From, Subject, snippet, date), `FETCH_CONCURRENCY` (8) at a time.
+2. Ids already in any folder's cache reuse that summary. Only new ids get a `format=metadata` request (From, Subject, Content-Type, snippet, date), `FETCH_CONCURRENCY` (8) at a time.
+
+   The Content-Type gives the list's paperclip (`hasAttachments`, `gmail::carries_files`): mail attaches files in `multipart/mixed`, while pictures shown in the text come in `multipart/related`, which the reader doesn't list as files either. The list's metadata says nothing else about files, and Gmail's `has:attachment` search would cost another call per sync and counts signature logos too. A mailing list that adds its footer as a separate part also makes `multipart/mixed`, so such mail shows a paperclip with no files. Summaries cached by versions without the flag (`None`) are fetched again, once.
 3. The account's entries in that folder's cache are replaced with exactly its current contents. This also drops messages moved elsewhere.
 
 When an account fails (network, expired sign-in), its cached messages stay and the failure comes back in `errors`, so one bad account never empties the unified view. An expired sign-in is flagged (`expired: true`) so the UI can offer Reconnect instead of an error.

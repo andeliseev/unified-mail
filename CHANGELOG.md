@@ -4,6 +4,9 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- The message list shows a paperclip next to the time of messages with attachments.
+- While an attachment is saving, it shows how much has arrived, such as "1.2 of 3.4 MB", with a line filling up along its bottom. Under the mouse it says Cancel as before, and no longer changes width there.
+
 ## 0.2.3 (2026-11-11)
 
 - Pictures carried inside an email, such as logos in signatures and screenshots pasted into the text, now show in place instead of as empty spaces, and no longer appear among its attachments.
