@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.4 (2026-11-11)
+
 - The message list shows a paperclip next to the time of messages with attachments.
 - While an attachment is saving, it shows how much has arrived, such as "1.2 of 3.4 MB", with a line filling up along its bottom. Under the mouse it says Cancel as before, and no longer changes width there.
 
