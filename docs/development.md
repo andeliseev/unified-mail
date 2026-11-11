@@ -97,8 +97,10 @@ The release profile in `Cargo.toml` is tuned for size: `opt-level = "s"`, `lto`,
 | `GOOGLE_CLIENT_SECRET` | `client_secret` from the same file |
 | `TAURI_SIGNING_PRIVATE_KEY` | The whole content of the updater's private key file (see [Updates](#updates)) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | That key's password |
+| `APPLE_CERTIFICATE` | The Mac app's signing certificate. `scripts/mac-signing-certificate.sh` makes it and adds this secret and the next (see [Mac signing](#mac-signing)) |
+| `APPLE_CERTIFICATE_PASSWORD` | Its password |
 
-`build.rs` reads the Google ones and bakes the client into the app, just as it does with the local file. The signing key signs the update files. The workflow refuses to run without the client or the key, so a release can never ship without them.
+`build.rs` reads the Google ones and bakes the client into the app, just as it does with the local file. The signing key signs the update files, and the certificate the Mac app. The workflow refuses to run without the client, the key or, for macOS, the certificate, so a release can never ship without them.
 
 **To release:** **Actions → Release → Run workflow**, choose what to raise, and run it:
 
@@ -139,8 +141,31 @@ The workflow then:
 **Notes:**
 
 - The repo is public, so releases are public downloads. The README's Download section links to the latest one.
-- Builds aren't code-signed. Windows shows a SmartScreen warning. The macOS app is ad-hoc signed (`bundle.macOS.signingIdentity: "-"`) so it can run on Apple Silicon, but it isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
+- The Windows app isn't code-signed, so Windows shows a SmartScreen warning. The macOS app is signed with a self-signed certificate (see [Mac signing](#mac-signing)) but isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
 - Actions minutes are free for public repos. The universal macOS build compiles the app twice, so it's the slowest job; `rust-cache` makes repeat builds faster.
+
+## Mac signing
+
+The keychain and macOS's privacy permissions (such as the Downloads folder) trust an app by its designated requirement. An ad-hoc signature's requirement is the hash of its code, different in every build, so before releases were signed every update was a new app: the keychain asked for the password once per account, and the Downloads question could come back. Releases are signed with a self-signed certificate instead, which makes the requirement `identifier "com.andeliseev.unified-mail" and certificate leaf = H"<the certificate's SHA-1>"`, the same for every release.
+
+**The certificate** (one time), on a Mac, from the repo, with the GitHub CLI signed in:
+
+```bash
+scripts/mac-signing-certificate.sh
+```
+
+It makes the certificate "Unified Mail" (valid for 20 years) and saves it and its password as the `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` repository secrets. It also leaves a copy in `~/Unified Mail signing`: keep that somewhere safe, such as a password manager, and delete the folder. A new certificate changes the requirement, so every Mac would ask once more; the script won't replace the secret.
+
+**In the Release workflow:**
+- **Add the Mac signing certificate** imports it into a temporary keychain and trusts it for code signing on the runner, because `codesign` won't sign with a certificate the Mac it runs on doesn't trust ("no identity found"). Tauri's own `APPLE_CERTIFICATE` import only takes Apple's certificates (it looks for names such as "Developer ID Application:"), so the workflow imports it itself.
+- `tauri.release.conf.json` names it (`bundle.macOS.signingIdentity`). Local builds stay ad-hoc (`"-"` in `tauri.conf.json`), so an app built locally asks for the keychain password as before.
+- **Check the Mac app's signature** keeps the release a draft if the app came out without the certificate.
+
+Macs that run the app don't trust the certificate, and don't need to: the signature still verifies, and the keychain only compares the requirement. The app isn't notarized, so Gatekeeper still asks on the first launch of a downloaded copy (that would take a paid Apple Developer ID). Updates the app installs itself aren't checked by Gatekeeper.
+
+The first signed release asks once more per account, since its requirement isn't on the keychain's list yet. After **Always Allow**, later releases don't ask.
+
+Checked locally with a throwaway keychain: two different builds signed with a certificate from the script had the same requirement and verified on a Mac that doesn't trust it, and the second read a keychain item the first had saved, with no prompt. An ad-hoc build couldn't.
 
 ## Updates
 
@@ -258,6 +283,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] macOS, with the app kept in the Dock: after an update it comes back under that icon, with no second Unified Mail icon next to it. Only an update from a version newer than 0.2.0 shows this
+- [ ] macOS: an update from one signed release to the next doesn't ask for the keychain password (after **Always Allow** once), and saving an attachment doesn't ask about the Downloads folder again
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)

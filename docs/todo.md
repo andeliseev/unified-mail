@@ -9,7 +9,8 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Saving attachments from real mail: so far unit tests and a fake backend only. On macOS also the Downloads prompt, and whether it comes back after an update
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
-- [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. Ad-hoc signing works (a release built locally runs), but a local build isn't quarantined, so it never shows that prompt
+- [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. A local build isn't quarantined, so it never shows that prompt
+- [ ] The Release workflow's Mac signing steps haven't run yet (see [development.md](development.md#mac-signing)). Checked locally: the script's certificate, imported as the workflow does, signs builds (through the signing API, standing in for `codesign`, which wants it trusted) with the certificate's requirement; they verify on a Mac that doesn't trust it, and a second build read the first one's keychain item without a prompt. Not checked: trusting it on the runner, `codesign` itself, and a real update
 
 ## Gaps in current features
 
@@ -63,7 +64,7 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 
 ## Distribution
 
-- [ ] Code signing: Windows (SmartScreen) and macOS signing plus notarization (Gatekeeper). On macOS a stable signature would also stop the keychain asking for the password after every update (see [auth.md](auth.md#tokens)); a self-signed certificate used by the Release workflow would do that part for free
+- [ ] Code signing: Windows (SmartScreen) and macOS notarization (Gatekeeper) need paid certificates, for macOS an Apple Developer ID. The Mac app's self-signed certificate already keeps the keychain and folder permissions across updates (see [development.md](development.md#mac-signing))
 - [ ] The first real update: installed apps get the updater only from the first release that has it, so the update after that one is the first end-to-end check (Windows NSIS and MSI, and macOS, which is untested). Locally checked so far: finding an update, downloading it, and refusing bad signatures
 - [ ] Third-party licenses: the MIT/Apache crates built into the app ask for their notices to ship with it. Generate a list (e.g. `cargo about`) and link it from Settings or include it in the installer
 - [ ] **Google verification**, so users don't see the "unverified app" warning and the user cap goes away. Steps from Google's [restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification):

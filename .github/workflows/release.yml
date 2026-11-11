@@ -1,7 +1,8 @@
 # One-click release: Actions → Release → Run workflow.
 # Builds the Windows and/or macOS installers and publishes them as a GitHub Release.
-# Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets, and the updater's
-# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (see docs/development.md).
+# Needs the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets, the updater's
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, and for macOS the
+# APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD (see docs/development.md).
 name: Release
 run-name: Release (${{ inputs.version || inputs.bump }}, ${{ inputs.platforms }})
 
@@ -44,6 +45,8 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          PLATFORMS: ${{ inputs.platforms }}
         run: |
           if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
             echo "::error::Add the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET repository secrets first (see docs/development.md)."
@@ -51,6 +54,11 @@ jobs:
           fi
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::error::Add the updater's TAURI_SIGNING_PRIVATE_KEY (and _PASSWORD) repository secrets first (see docs/development.md)."
+            exit 1
+          fi
+          # An ad-hoc signed Mac release would make every Mac ask for the keychain password again.
+          if [ "$PLATFORMS" != "Windows" ] && [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::error::Add the Mac signing certificate first: run scripts/mac-signing-certificate.sh (see docs/development.md)."
             exit 1
           fi
 
@@ -140,7 +148,7 @@ jobs:
               ...(windows ? ['- **Windows:** the `.exe` installer (or the `.msi`)'] : []),
               ...(macos ? ['- **macOS** (Apple Silicon and Intel): the `.dmg`'] : []),
               '',
-              'The app isn\'t code-signed yet, so the first launch shows a warning:',
+              'The app isn\'t verified by Microsoft or Apple yet, so the first launch shows a warning:',
               ...(windows ? ['- **Windows:** "Windows protected your PC" → **More info** → **Run anyway**'] : []),
               ...(macos ? ['- **macOS:** open the app once, then **System Settings → Privacy & Security → Open Anyway**'] : []),
             ].join('\n');
@@ -183,6 +191,38 @@ jobs:
 
       - run: npm ci
 
+      # The Mac app is signed with the self-signed certificate from scripts/mac-signing-certificate.sh
+      # (tauri.release.conf.json names it), so every release meets the same designated requirement
+      # and Macs keep their keychain and folder permissions across updates. codesign only signs
+      # with a certificate that the Mac it runs on trusts, so this runner trusts it; Macs running
+      # the app don't need to. Tauri's own APPLE_CERTIFICATE import only takes Apple's certificates.
+      - name: Add the Mac signing certificate
+        if: matrix.name == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 16)"
+          printf %s "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-certificate -c "Unified Mail" -p "$keychain" > "$RUNNER_TEMP/signing.pem"
+          # Without a person at the keyboard, macOS only changes trust settings once this right allows it.
+          sudo security authorizationdb write com.apple.trust-settings.admin allow
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/signing.pem"
+          identities=$(security find-identity -v -p codesigning "$keychain")
+          echo "$identities"
+          if ! grep -q '"Unified Mail"' <<< "$identities"; then
+            echo "::error::codesign can't use the Mac signing certificate on this runner."
+            exit 1
+          fi
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -202,6 +242,19 @@ jobs:
           # The signatures are copied into latest.json, which is all the updater reads, so the
           # separate .sig files would only clutter the downloads.
           uploadUpdaterSignatures: false
+
+      # The release stays a draft if this fails: an ad-hoc signature would mean a new keychain prompt.
+      - name: Check the Mac app's signature
+        if: matrix.name == 'macOS'
+        run: |
+          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Unified Mail.app"
+          codesign --verify --strict "$app"
+          requirement=$(codesign -d -r- "$app" 2>&1)
+          echo "$requirement"
+          if ! grep -q 'certificate leaf = H"' <<< "$requirement"; then
+            echo "::error::The Mac app isn't signed with the certificate, so every Mac would ask for the keychain password again."
+            exit 1
+          fi
 
   # Publish only when every installer built, so a release is never half-empty.
   publish:

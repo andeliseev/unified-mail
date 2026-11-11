@@ -32,7 +32,7 @@ Get the latest version from the **[Releases page](https://github.com/andeliseev/
 The app isn't code-signed yet, so your system asks once before opening it:
 
 - **Windows:** "Windows protected your PC" → **More info** → **Run anyway**.
-- **macOS:** open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**. The app keeps your sign-ins in the keychain. When macOS asks for your password to let Unified Mail use it, enter it and click **Always Allow**. Until the app is signed, macOS asks this again once per account after each update. The first time you save an attachment, macOS also asks whether Unified Mail may access your Downloads folder: click **Allow**.
+- **macOS:** open the app, then go to **System Settings → Privacy & Security** and click **Open Anyway**. The app keeps your sign-ins in the keychain. When macOS asks for your password to let Unified Mail use it, enter it and click **Always Allow**. Updates keep that permission, except the first update to a signed version, which asks once more for each account. The first time you save an attachment, macOS also asks whether Unified Mail may access your Downloads folder: click **Allow**.
 
 ## Adding your Gmail accounts
 
