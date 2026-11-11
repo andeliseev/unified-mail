@@ -8,8 +8,9 @@
 # self-signed certificate that the Mac it runs on doesn't trust, and GitHub's Mac runners can't be
 # made to trust one. Any other call goes to the real codesign.
 #
-# Reads RCODESIGN (the rcodesign program), SIGNING_IDENTITY ("Unified Mail"), SIGNING_P12 and
-# SIGNING_P12_PASSWORD_FILE from the environment.
+# Reads SIGNER (the rcodesign program), SIGNING_IDENTITY ("Unified Mail"), SIGNING_P12 and
+# SIGNING_P12_PASSWORD_FILE from the environment. None of them starts with RCODESIGN_: rcodesign
+# reads such variables as its own settings, and fails on ones it doesn't know.
 set -euo pipefail
 
 identity="" runtime=false paths=()
@@ -31,4 +32,4 @@ if $runtime; then
   args+=(--code-signature-flags runtime)
 fi
 echo "Signing ${paths[0]} with rcodesign"
-exec "$RCODESIGN" "${args[@]}" "${paths[0]}"
+exec "$SIGNER" "${args[@]}" "${paths[0]}"

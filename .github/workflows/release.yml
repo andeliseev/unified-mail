@@ -197,31 +197,32 @@ jobs:
       # a certificate the Mac it runs on doesn't trust, and this runner can't be made to trust one
       # (its authorization database is locked), so Tauri's codesign calls go to rcodesign, which
       # signs with the .p12 itself (scripts/codesign-with-rcodesign.sh). Macs running the app don't
-      # need to trust the certificate either. RUNNER_TEMP is emptied when the job ends.
+      # need to trust the certificate either. RUNNER_TEMP is emptied when the job ends. No variable
+      # here starts with RCODESIGN_: rcodesign reads those as its own settings and stops at unknown ones.
       - name: Set up Mac signing
         if: matrix.name == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          RCODESIGN_URL: https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-macos-universal.tar.gz
-          RCODESIGN_SHA256: d98372d5524226ccf9dc0eda03d4e4f5826182dabb2fc3f2bd303ed9113a748d
+          SIGNER_URL: https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-macos-universal.tar.gz
+          SIGNER_SHA256: d98372d5524226ccf9dc0eda03d4e4f5826182dabb2fc3f2bd303ed9113a748d
         run: |
           dir="$RUNNER_TEMP/mac-signing"
           mkdir -p "$dir/bin"
-          curl -fsSL -o "$dir/rcodesign.tar.gz" "$RCODESIGN_URL"
-          echo "$RCODESIGN_SHA256  $dir/rcodesign.tar.gz" | shasum -a 256 -c -
+          curl -fsSL -o "$dir/rcodesign.tar.gz" "$SIGNER_URL"
+          echo "$SIGNER_SHA256  $dir/rcodesign.tar.gz" | shasum -a 256 -c -
           tar -xzf "$dir/rcodesign.tar.gz" -C "$dir"
-          rcodesign=$(find "$dir" -type f -name rcodesign | head -1)
+          signer=$(find "$dir" -type f -name rcodesign | head -1)
           printf %s "$APPLE_CERTIFICATE" | base64 --decode > "$dir/signing.p12"
           printf %s "$APPLE_CERTIFICATE_PASSWORD" > "$dir/password"
           cp scripts/codesign-with-rcodesign.sh "$dir/bin/codesign"
-          export RCODESIGN="$rcodesign" SIGNING_IDENTITY="Unified Mail" SIGNING_P12="$dir/signing.p12" SIGNING_P12_PASSWORD_FILE="$dir/password"
+          export SIGNER="$signer" SIGNING_IDENTITY="Unified Mail" SIGNING_P12="$dir/signing.p12" SIGNING_P12_PASSWORD_FILE="$dir/password"
           # A quick signature first, so a wrong certificate or password fails here, not after the build.
           cp /usr/bin/true "$dir/check"
           "$dir/bin/codesign" --force -s "Unified Mail" --options runtime "$dir/check"
           /usr/bin/codesign --verify --strict "$dir/check"
           echo "$dir/bin" >> "$GITHUB_PATH"
-          for name in RCODESIGN SIGNING_IDENTITY SIGNING_P12 SIGNING_P12_PASSWORD_FILE; do
+          for name in SIGNER SIGNING_IDENTITY SIGNING_P12 SIGNING_P12_PASSWORD_FILE; do
             echo "$name=${!name}" >> "$GITHUB_ENV"
           done
 
