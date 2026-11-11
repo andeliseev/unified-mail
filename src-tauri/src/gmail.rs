@@ -5,6 +5,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+/// For attachments and large bodies, in place of the client's 30 s: Gmail sends them as base64 in
+/// JSON, so a 25 MB attachment is 33 MB, more than a slow connection loads in 30 s.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// One row of the inbox list. Cached on disk so the app can paint before the first sync.
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +49,18 @@ pub struct Attachment {
     pub mime_type: String,
     /// In bytes.
     pub size: u64,
+    /// Its Content-ID, without the angle brackets: a `cid:` link in the email can show it in place.
+    pub content_id: Option<String>,
+}
+
+/// A part's data, for the reader to show in place (`get_inline_images`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartData {
+    pub part: String,
+    pub mime_type: String,
+    /// base64url, as Gmail sends it.
+    pub data: String,
 }
 
 /// A body part exactly as Gmail returns it: base64url bytes, plus the charset its header
@@ -297,22 +312,48 @@ fn find_bodies<'a>(part: &'a Part, html: &mut Option<&'a Part>, text: &mut Optio
     }
 }
 
-/// Parts with a file name, depth first: the message's attachments. The bodies `find_bodies` picks
-/// have none. A part that is itself a message (a forwarded email) is listed as one file, without
-/// the files inside it.
+/// The message's files, depth first: parts with a file name, and pictures with a Content-ID, which
+/// the email may show in place (`cid:` links; the reader leaves those out of its list). The bodies
+/// `find_bodies` picks are neither. A part that is itself a message (a forwarded email) is listed
+/// as one file, without the files inside it.
 fn find_attachments(part: &Part, found: &mut Vec<Attachment>) {
-    if !part.filename.is_empty() {
+    let content_id = content_id(part);
+    let mime_type = part.mime_type.to_ascii_lowercase();
+    if !part.filename.is_empty() || (content_id.is_some() && mime_type.starts_with("image/")) {
         found.push(Attachment {
             part: part.part_id.clone(),
-            name: crate::files::safe_file_name(&part.filename),
-            mime_type: part.mime_type.to_ascii_lowercase(),
+            name: file_name(part),
+            mime_type,
             size: part.body.as_ref().map_or(0, |b| b.size),
+            content_id,
         });
         return;
     }
     for child in &part.parts {
         find_attachments(child, found);
     }
+}
+
+/// A part's Content-ID without its angle brackets, the way `cid:` links name it.
+fn content_id(part: &Part) -> Option<String> {
+    let id = header(&part.headers, "Content-ID");
+    let id = id.trim().trim_start_matches('<').trim_end_matches('>').trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The name a part is listed and saved under: its own, or `image.png` and the like for a picture
+/// without one.
+fn file_name(part: &Part) -> String {
+    if !part.filename.is_empty() {
+        return crate::files::safe_file_name(&part.filename);
+    }
+    let kind = part.mime_type.to_ascii_lowercase();
+    let extension = match kind.trim_start_matches("image/") {
+        "jpeg" => "jpg",
+        "svg+xml" => "svg",
+        other => other,
+    };
+    crate::files::safe_file_name(&format!("image.{extension}"))
 }
 
 fn find_part<'a>(part: &'a Part, part_id: &str) -> Option<&'a Part> {
@@ -324,19 +365,32 @@ fn find_part<'a>(part: &'a Part, part_id: &str) -> Option<&'a Part> {
 
 /// Attachments `parts` (`Attachment::part`) of message `id`: each one's name and bytes.
 pub async fn get_attachments(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let found = get_parts(http, token, id, parts).await?;
+    found.into_iter().map(|(name, part)| Ok((name, decode_base64url(&part.data)?))).collect()
+}
+
+/// Pictures `parts` that message `id` shows in place (`cid:` links), with their data.
+pub async fn get_inline_images(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<PartData>, String> {
+    Ok(get_parts(http, token, id, parts).await?.into_iter().map(|(_, part)| part).collect())
+}
+
+/// Parts `parts` (`Attachment::part`) of message `id`, found in a fresh copy of it, so attachment
+/// IDs that changed since it was opened don't matter: each one's name and data.
+async fn get_parts(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, PartData)>, String> {
     check_id(id)?;
     let raw: RawMessage = get_json(http, token, &format!("{API}/messages/{id}?format=full")).await?;
     let payload = raw.payload.unwrap_or_default();
     let mut found = Vec::new();
     for part_id in parts {
         match find_part(&payload, part_id) {
-            Some(part) if !part.filename.is_empty() => found.push(part),
-            _ => return Err("This attachment isn't in the message any more. Open the message again.".to_string()),
+            Some(part) => found.push(part),
+            None => return Err("This attachment isn't in the message any more. Open the message again.".to_string()),
         }
     }
     let loads = found.into_iter().map(|part| async move {
-        let bytes = decode_base64url(&part_data(http, token, id, part).await?)?;
-        Ok::<_, String>((crate::files::safe_file_name(&part.filename), bytes))
+        let data = part_data(http, token, id, part).await?;
+        let mime_type = part.mime_type.to_ascii_lowercase();
+        Ok::<_, String>((file_name(part), PartData { part: part.part_id.clone(), mime_type, data }))
     });
     futures_util::future::try_join_all(loads).await
 }
@@ -368,7 +422,8 @@ async fn part_data(http: &Client, token: &str, message_id: &str, part: &Part) ->
                 data: String,
             }
             let url = format!("{API}/messages/{message_id}/attachments/{attachment_id}");
-            get_json::<OutOfLine>(http, token, &url).await?.data
+            let request = http.get(url).bearer_auth(token).timeout(DOWNLOAD_TIMEOUT);
+            parse_json::<OutOfLine>(send(request).await?).await?.data
         }
         _ => String::new(),
     };
@@ -569,6 +624,13 @@ mod tests {
                 { "partId": "1", "mimeType": "application/PDF", "filename": "invoice.pdf", "body": { "attachmentId": "a", "size": 253952 } },
                 { "partId": "2", "mimeType": "image/png", "filename": "../logo\u{202E}gnp.exe", "body": { "data": "iVBO", "size": 3 } },
                 {
+                    "partId": "4",
+                    "mimeType": "image/JPEG",
+                    "headers": [{ "name": "Content-Id", "value": " <photo@corp.example> " }],
+                    "body": { "attachmentId": "d", "size": 5000 }
+                },
+                { "partId": "5", "mimeType": "text/plain", "headers": [{ "name": "Content-ID", "value": "<note>" }], "body": { "data": "eA" } },
+                {
                     "partId": "3",
                     "mimeType": "message/rfc822",
                     "filename": "Forwarded.eml",
@@ -580,11 +642,12 @@ mod tests {
         .unwrap();
         let mut found = Vec::new();
         find_attachments(&payload, &mut found);
-        let listed: Vec<_> = found.iter().map(|a| (a.part.as_str(), a.name.as_str(), a.mime_type.as_str(), a.size)).collect();
+        let listed: Vec<_> = found.iter().map(|a| (a.part.as_str(), a.name.as_str(), a.mime_type.as_str(), a.size, a.content_id.as_deref())).collect();
         assert_eq!(listed, [
-            ("1", "invoice.pdf", "application/pdf", 253952),
-            ("2", "_logognp.exe", "image/png", 3),
-            ("3", "Forwarded.eml", "message/rfc822", 9000),
+            ("1", "invoice.pdf", "application/pdf", 253952, None),
+            ("2", "_logognp.exe", "image/png", 3, None),
+            ("4", "image.jpg", "image/jpeg", 5000, Some("photo@corp.example")),
+            ("3", "Forwarded.eml", "message/rfc822", 9000, None),
         ]);
         assert_eq!(find_part(&payload, "3.1").unwrap().filename, "inside.jpg");
         assert_eq!(find_part(&payload, "0.1").unwrap().mime_type, "text/html");

@@ -11,6 +11,8 @@ mod state;
 
 use gmail::{FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
+use futures_util::future::{AbortHandle, Abortable};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -20,6 +22,10 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 /// The newer release `check_update` found, kept for `install_update`.
 #[derive(Default)]
 struct PendingUpdate(Mutex<Option<Update>>);
+
+/// Attachment downloads still running, by the page's job number, so `cancel_save` can stop one.
+#[derive(Default)]
+struct Saving(Mutex<HashMap<u64, AbortHandle>>);
 
 #[tauri::command]
 fn get_setup(state: State<'_, AppState>) -> Setup {
@@ -90,24 +96,48 @@ async fn get_message(state: State<'_, AppState>, account: String, id: String) ->
 }
 
 /// Saves attachments `parts` of message `id` to the Downloads folder, each under a name no file
-/// there has yet, marked as coming from email (`files.rs`). Returns where they went. Errors give
-/// the reason; the page puts "Couldn't save …:" in front.
+/// there has yet, marked as coming from email (`files.rs`). Returns where they went, or nothing
+/// when `cancel_save(job)` stopped the download; files are only written once all have arrived.
+/// Errors give the reason; the page puts "Couldn't save …:" in front.
 #[tauri::command]
 async fn save_attachments(
     app: AppHandle,
     state: State<'_, AppState>,
+    saving: State<'_, Saving>,
     account: String,
     id: String,
     parts: Vec<String>,
+    job: u64,
 ) -> Result<Vec<String>, String> {
     let downloads = downloads_dir(&app)?;
+    let (handle, registration) = AbortHandle::new_pair();
+    saving.0.lock().unwrap().insert(job, handle);
+    let download = Abortable::new(state.attachments(&account, &id, &parts), registration).await;
+    saving.0.lock().unwrap().remove(&job);
+    // Cancelled: dropping the download also ended its request to Gmail.
+    let Ok(files) = download else { return Ok(Vec::new()) };
     let mut saved = Vec::new();
-    for (name, bytes) in state.attachments(&account, &id, &parts).await? {
+    for (name, bytes) in files? {
         let path = files::save_new(&downloads, &name, &bytes).map_err(|e| save_error(&e))?;
         files::mark_from_email(&path);
         saved.push(path.to_string_lossy().into_owned());
     }
     Ok(saved)
+}
+
+/// The pictures `parts` that message `id` shows in place (`cid:` links), with their data
+/// (base64url), for the reader to put in the email.
+#[tauri::command]
+async fn inline_images(state: State<'_, AppState>, account: String, id: String, parts: Vec<String>) -> Result<Vec<gmail::PartData>, String> {
+    state.inline_images(&account, &id, &parts).await
+}
+
+/// Stops `save_attachments(job)` if it's still downloading.
+#[tauri::command]
+fn cancel_save(saving: State<'_, Saving>, job: u64) {
+    if let Some(handle) = saving.0.lock().unwrap().remove(&job) {
+        handle.abort();
+    }
 }
 
 /// Shows saved attachments in Finder or File Explorer. Only files in the Downloads folder,
@@ -311,6 +341,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
+        .manage(Saving::default())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             // Up to 0.1.11 the app was io.unifiedmail.desktop. Before anything reads the data folder
@@ -328,15 +359,18 @@ fn main() {
             // also draws the window buttons. Tauri keeps resizing at the edges.
             #[cfg(windows)]
             let window = window.decorations(false);
-            // On macOS the system's buttons stay, over the sidebar above its brand, centered on
-            // the list header's row; the title bar itself is see-through, with its title hidden.
+            // On macOS the system's buttons stay, over the sidebar above its brand, centered 26 px
+            // down on the row of the list header and the message's buttons. AppKit puts them 9 px
+            // above the bottom of a title bar as tall as they are (14 px) plus the inset, so their
+            // center is the inset minus 2. The title bar itself is see-through, with its title
+            // hidden, and clicks under it reach the page.
             // The page's drag areas need the first click on an inactive window to reach the page,
             // as a system title bar would.
             #[cfg(target_os = "macos")]
             let window = window
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
-                .traffic_light_position(tauri::LogicalPosition::new(18.0, 18.0))
+                .traffic_light_position(tauri::LogicalPosition::new(18.0, 28.0))
                 .accept_first_mouse(true);
             // macOS: a link clicked in the email asks for a new window; it opens in the browser
             // instead (macos.rs).
@@ -376,6 +410,8 @@ fn main() {
             load_older,
             get_message,
             save_attachments,
+            inline_images,
+            cancel_save,
             show_in_folder,
             set_unread,
             archive_message,

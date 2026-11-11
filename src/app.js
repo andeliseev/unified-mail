@@ -37,10 +37,14 @@ const FRAME_CSS = `
   :root { overflow: auto !important; }
   :root > body { overflow: visible !important; }
 `;
-// Added in dark mode: the defaults behind an email that doesn't set its own colors. The
-// background is the color darkenEmail turns white into, so darkened white areas blend in.
+// The color darkenEmail turns white into: a darkened email's background.
+const EMAIL_DARK_BACKGROUND = '#1f1f1f';
+// Added in dark mode: the defaults behind an email that doesn't set its own colors, with the
+// background darkened white areas blend into. A dark color scheme makes the scroll bar's thumb
+// light (see showBody).
 const FRAME_DARK_CSS = `
-  html { background: #1f1f1f; color: #e3e3e3; }
+  :root { color-scheme: dark !important; }
+  html { background: ${EMAIL_DARK_BACKGROUND}; color: #e3e3e3; }
   a { color: #8ab4f8; }
 `;
 
@@ -289,11 +293,12 @@ function initTitleBar() {
   const root = document.documentElement;
   root.classList.add('own-title-bar');
   root.classList.toggle('mac', IS_MAC);
-  $('#window-bar').hidden = false;
+  // The strip above the message: on Windows #window-bar, which holds the window buttons; on
+  // macOS the message's own button row, level with the list header and the window buttons.
+  const strip = IS_MAC ? $('.msg-actions') : $('#window-bar');
   // "deep": anywhere inside drags, except on buttons.
-  for (const el of [$('.brand'), $('.list-head'), $('#window-bar')]) el.dataset.tauriDragRegion = 'deep';
+  for (const el of [$('.brand'), $('.list-head'), strip]) el.dataset.tauriDragRegion = 'deep';
   if (IS_MAC) {
-    $('#window-buttons').hidden = true;
     // In full screen the system hides its window buttons, so the brand moves up into their room.
     // macos.rs says when that changes; a page that loads in full screen asks once.
     const fullScreen = (on) => root.classList.toggle('full-screen', on);
@@ -301,6 +306,7 @@ function initTitleBar() {
     listen('full-screen', (e) => fullScreen(e.payload));
     return;
   }
+  $('#window-bar').hidden = false;
   const win = window.__TAURI__.window.getCurrentWindow();
   $('#win-min').addEventListener('click', () => win.minimize());
   $('#win-max').addEventListener('click', () => win.toggleMaximize());
@@ -791,8 +797,10 @@ async function select(key) {
     const full = await invoke('get_message', { account: m.account, id: m.id });
     if (seq !== state.openSeq) return;
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
-    renderAttachments(m, full.attachments || []);
+    full.inline = inlinePictures(full);
+    renderAttachments(m, (full.attachments || []).filter((a) => !full.inline.includes(a)));
     showBody(full);
+    if (full.inline.length) loadInlinePictures(m, full, seq);
     // Opening marks it read, as in Gmail.
     if ((byKey(key) || m).unread) setUnread(m, false);
   } catch (e) {
@@ -821,6 +829,9 @@ const ATTACHMENT_ICONS = {
   file: FILE_ICON,
 };
 const SAVE_ICON = '<svg class="save" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+// Shown instead of a button's usual label (`idle`) while it saves; the CSS picks one.
+const SAVING_LABELS = '<span class="busy">Saving…</span><span class="cancel">Cancel</span>';
+let lastSaveJob = 0;
 
 /** The open message's files, under its header: a chip each, and Save all for two or more. */
 function renderAttachments(m, attachments) {
@@ -829,7 +840,7 @@ function renderAttachments(m, attachments) {
   if (attachments.length > 1) {
     const all = document.createElement('button');
     all.className = 'save-all';
-    all.textContent = 'Save all';
+    all.innerHTML = `<span class="idle">Save all</span>${SAVING_LABELS}`;
     all.title = 'Save all attachments to Downloads';
     all.addEventListener('click', () => saveAttachments(m, attachments, all));
     box.append(all);
@@ -843,7 +854,7 @@ function attachmentChip(m, a) {
   chip.className = `att ${kind}`;
   chip.title = `Save ${a.name} to Downloads`;
   chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
-    `<span class="name"></span><span class="size"></span>${SAVE_ICON}`;
+    `<span class="name"></span><span class="size idle"></span>${SAVING_LABELS}${SAVE_ICON}`;
   chip.querySelector('.name').textContent = a.name;
   chip.querySelector('.size').textContent = formatSize(a.size);
   chip.addEventListener('click', () => saveAttachments(m, [a], chip));
@@ -875,14 +886,26 @@ function formatSize(bytes) {
   return `${unit && value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-/** Saves files to Downloads (`save_attachments`); the toast can then show them in Finder or Explorer. */
+/**
+ * Saves files to Downloads (`save_attachments`); the toast can then show them in Finder or
+ * Explorer. Meanwhile the button says Saving…, or Cancel under the mouse, and another click
+ * cancels (`cancel_save`).
+ */
 async function saveAttachments(m, attachments, button) {
-  if (button.classList.contains('saving')) return;
+  if (button.classList.contains('saving')) {
+    invoke('cancel_save', { job: Number(button.dataset.job) }).catch(() => {});
+    return;
+  }
+  const job = ++lastSaveJob;
+  button.dataset.job = job;
   button.classList.add('saving');
   button.setAttribute('aria-busy', 'true');
+  const title = button.title;
+  button.title = 'Cancel';
   const what = attachments.length === 1 ? attachments[0].name : 'the attachments';
   try {
-    const paths = await invoke('save_attachments', { account: m.account, id: m.id, parts: attachments.map((a) => a.part) });
+    const paths = await invoke('save_attachments', { account: m.account, id: m.id, parts: attachments.map((a) => a.part), job });
+    if (!paths.length) return;  // cancelled
     const saved = paths.length === 1 ? paths[0].split(/[\\/]/).pop() : `${paths.length} files`;
     toast(`Saved ${saved} to Downloads`, 8000, {
       label: IS_MAC ? 'Show in Finder' : 'Show in folder',
@@ -891,8 +914,70 @@ async function saveAttachments(m, attachments, button) {
   } catch (e) {
     toast(`Couldn't save ${what}: ${e}`, 8000);
   } finally {
+    button.title = title;
     button.classList.remove('saving');
     button.removeAttribute('aria-busy');
+  }
+}
+
+// ---------- Pictures in the email (cid: links) ----------
+
+/**
+ * The pictures the email shows in place: attachments with a Content-ID that one of its `cid:`
+ * links names. They leave the list of files, as in Gmail.
+ */
+function inlinePictures(full) {
+  if (!full.html) return [];
+  const named = new Set([...decodeBody(full.html).matchAll(/cid:([^"'\s)>]+)/gi)].map((m) => cidKey(m[1])));
+  return (full.attachments || []).filter((a) =>
+    a.contentId && a.mimeType.startsWith('image/') && named.has(cidKey(a.contentId)));
+}
+
+/** How `cid:` links and Content-IDs are compared: URL-decoded, ignoring case. */
+function cidKey(id) {
+  try { id = decodeURIComponent(id); } catch { /* keep it as written */ }
+  return id.trim().toLowerCase();
+}
+
+/**
+ * Fetches the pictures the email shows in place (`inline_images`) once its text is on screen,
+ * and points its `cid:` links at them: in the open email, and in later redraws (`full.pictures`,
+ * which showBody uses).
+ */
+async function loadInlinePictures(m, full, seq) {
+  try {
+    const parts = await invoke('inline_images', { account: m.account, id: m.id, parts: full.inline.map((a) => a.part) });
+    if (seq !== state.openSeq) return;
+    const pictures = new Map();
+    for (const p of parts) {
+      const a = full.inline.find((x) => x.part === p.part);
+      let data = p.data.replace(/-/g, '+').replace(/_/g, '/');
+      while (data.length % 4) data += '=';
+      if (a) pictures.set(cidKey(a.contentId), `data:${p.mimeType};base64,${data}`);
+    }
+    full.pictures = pictures;
+    const doc = $('#m-body iframe')?.contentDocument;
+    if (doc && doc.URL === 'about:srcdoc') showInlinePictures(doc, pictures);
+  } catch (e) {
+    if (seq === state.openSeq) toast(`Couldn't load the pictures in this email: ${e}`, 6000);
+  }
+}
+
+/** Points the email's `cid:` links (`src`, `background`, `url()` in a style) at the pictures' data. */
+function showInlinePictures(doc, pictures) {
+  const picture = (link) => {
+    const match = /^\s*cid:(.+?)\s*$/i.exec(link || '');
+    return match ? pictures.get(cidKey(match[1])) : undefined;
+  };
+  for (const el of doc.querySelectorAll('[src], [background]')) {
+    for (const name of ['src', 'background']) {
+      const data = picture(el.getAttribute(name));
+      if (data) el.setAttribute(name, data);
+    }
+  }
+  for (const el of doc.querySelectorAll('[style*="cid:" i]')) {
+    el.setAttribute('style', el.getAttribute('style').replace(/url\(\s*(['"]?)(cid:[^'")]+)\1\s*\)/gi,
+      (all, quote, link) => { const data = picture(link); return data ? `url("${data}")` : all; }));
   }
 }
 
@@ -922,16 +1007,22 @@ function showBody(full) {
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">` +
     `<style>${FRAME_CSS}${dark ? FRAME_DARK_CSS : ''}</style></head><body>${html}</body></html>`;
-  // In dark mode the email stays hidden until its colors are set, so it doesn't flash white.
+  // On macOS the frame's scroll bar is only a see-through thumb, over the frame's own background.
+  // A darkened email gets a dark one, as the thumb is then light.
+  if (dark) frame.style.background = EMAIL_DARK_BACKGROUND;
+  // In dark mode the email stays invisible until its colors are set, so it doesn't flash white.
+  // Not `visibility: hidden`: a frame shown after that doesn't scroll by trackpad or mouse wheel
+  // in WebKit (macOS) until something lays it out again, only by dragging its scroll bar.
   if (appIsDark()) {
-    frame.style.visibility = 'hidden';
-    setTimeout(() => { frame.style.visibility = ''; }, 3000);  // in case setting up never happens
+    frame.style.opacity = '0';
+    setTimeout(() => { frame.style.opacity = ''; }, 3000);  // in case setting up never happens
   }
   // Set the email up as soon as it's parsed. Its `load` waits for every image, and one slow
   // tracking pixel can hold that for 20+ s, leaving the email unfitted and unclickable.
   whenParsed(frame, (doc) => {
+    if (full.pictures) showInlinePictures(doc, full.pictures);
     if (appIsDark()) setEmailColors(doc, dark);
-    frame.style.visibility = '';
+    frame.style.opacity = '';
     fitToFrame(frame);
     // Every link opens through <base target="_blank">, which the click handler below (or on
     // macOS, macos.rs) catches. A link's own target, such as _top, would get around that.

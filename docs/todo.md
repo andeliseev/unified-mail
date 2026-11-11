@@ -24,7 +24,6 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
 - [ ] A sync that reads Gmail just before a move or read change lands, but arrives after it's confirmed, can briefly show the old state until the next sync
-- [ ] Inline `cid:` images aren't shown in the email; they're listed with the attachments for now. Once they show, leave the ones the email shows out of the list, as Gmail does
 - [ ] Attachments: a paperclip in the message list. The list's metadata doesn't say which messages have files; a `has:attachment` search per page, or the top-level `Content-Type`, would
 - [ ] Attachments: open one directly (Quick Look, the default app), not only save it
 - [ ] Dark mode for emails: dark logos on transparent backgrounds stay hard to see; maybe a light backing behind small transparent images. Original could also be remembered per sender instead of per opened message

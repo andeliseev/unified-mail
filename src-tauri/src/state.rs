@@ -459,6 +459,12 @@ impl AppState {
         gmail::get_attachments(&self.http, &token, id, parts).await
     }
 
+    /// Pictures `parts` that a message shows in place (`cid:` links), with their data.
+    pub async fn inline_images(&self, account: &str, id: &str, parts: &[String]) -> Result<Vec<gmail::PartData>, String> {
+        let token = self.access_token(account).await?;
+        gmail::get_inline_images(&self.http, &token, id, parts).await
+    }
+
     /// Marks a message read (opening it, "Mark as read") or unread ("Mark as unread").
     pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
         let token = self.access_token(account).await?;

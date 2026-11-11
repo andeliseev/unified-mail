@@ -4,6 +4,13 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Pictures carried inside an email, such as logos in signatures and screenshots pasted into the text, now show in place instead of as empty spaces, and no longer appear among its attachments.
+- While an attachment is saving, click it again to cancel. A large attachment on a slow connection no longer fails to save after 30 seconds.
+- The app's icon and name at the top of the sidebar are larger.
+- macOS: the message's buttons (Archive, Delete, Mark as unread) and the window's red, yellow and green buttons now line up with the Inbox title, and the empty strip above the message is gone. The window still drags by the empty space between the message's buttons.
+- macOS, dark mode: emails scroll with the trackpad and the mouse wheel again. Some, often ones with attachments, only scrolled by dragging the scroll bar.
+- Dark mode: the email's scroll bar is dark like the message list's. On macOS you couldn't see where you were in a long email.
+
 ## 0.2.2 (2026-11-11)
 
 - Messages show their attachments under the header. Click one to save it to your Downloads folder, or Save all for every file, then Show in Finder (Show in folder on Windows) to find it. Saved files are marked as coming from email, so your system checks them before they open. On macOS, the first save asks whether Unified Mail may use your Downloads folder.

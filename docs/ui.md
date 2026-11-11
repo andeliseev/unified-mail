@@ -22,8 +22,8 @@ The columns are `230px minmax(250px, var(--list-width, 400px)) minmax(400px, 1fr
 The window has no grey system title bar, so the icon and name appear once, at the top of the sidebar.
 
 `initTitleBar` (when the user agent says Windows or Macintosh):
-- adds `own-title-bar` to `<html>` and shows `#window-bar`, a 32 px strip at the top of the reader;
-- makes the sidebar's brand, the list header and that strip drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). Dragging is the system's own, so on Windows dragging to a screen edge snaps. A double-click maximizes or restores; on macOS it zooms, on mouse-up, as the system does.
+- adds `own-title-bar` to `<html>`; on Windows it shows `#window-bar`, a 32 px strip at the top of the reader that holds the window buttons;
+- makes the sidebar's brand, the list header and the strip above the message drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). That strip is `#window-bar` on Windows and the message's own button row (`.msg-actions`) on macOS. Dragging is the system's own, so on Windows dragging to a screen edge snaps. A double-click maximizes or restores; on macOS it zooms, on mouse-up, as the system does.
 
 **Windows:**
 - `main.rs` builds the window with `decorations(false)`. Tauri still resizes it from the edges (its undecorated-resize handler), keeps the shadow, and on Windows 11 the rounded corners.
@@ -36,7 +36,8 @@ Not available without the system title bar: the Snap Layouts flyout when hoverin
 
 **macOS:**
 - `main.rs` keeps the system's window buttons but makes the title bar see-through over the page (`TitleBarStyle::Overlay`) and hides its title. The window keeps the title for Mission Control, the Window menu and VoiceOver.
-- `traffic_light_position(18, 18)` puts the buttons over the sidebar, in line with the brand's icon and centered on the list header's row, whose 28 px start 12 px down. `.mac .brand` pads the brand down to leave them room, and `#window-buttons` stays hidden.
+- One line runs 26 px down the top of the window: the window buttons, the list header's row (its 28 px start 12 px down) and the message's buttons (`.mac .msg-head` pads them 10 px down; there's no `#window-bar` above them). `traffic_light_position(18, 28)` puts the window buttons on it, over the sidebar, the close button starting 18 px in: AppKit puts them 9 px above the bottom of a title bar as tall as they are (14 px) plus the inset, so their center is the inset minus 2. Measured in the app; the inset of 18 used before left them centered 16 px down, above the line. `.mac .brand` pads the brand 13 px below them (46 px). Its icon's blue square starts 14 px in, a little left of the close button (`.brand` pads the 28 px icon 2 px in, and the square starts 2/24 into it).
+- The see-through title bar is as tall as that (42 px), over the top of the page, and clicks under it reach the page: the message's buttons and the list's refresh button work in their top half too (checked in a WebKit window set up like the app's).
 - `accept_first_mouse(true)`: the drag areas are in the page, so the first click on an inactive window has to reach the page for the window to drag at once, as with a system title bar. Other first clicks act at once too, as on Windows: clicking a message in an inactive window opens it.
 - In full screen the system hides the buttons, so the brand moves up into their room, as on Windows (`.mac.full-screen .brand`). `on_event` passes every resize to `macos::on_resized`, which reads the window's style mask in AppKit and sends `full-screen` (`true` or `false`) when it changes; `initTitleBar` sets `full-screen` on `<html>` from it. The mask changes as soon as the switch starts, with its first resize. Tauri's `isFullscreen` keeps saying full screen until the animation leaving it ends, about 0.6 s later, so it isn't used on resize; a page that loads in full screen asks it once.
 
@@ -97,7 +98,11 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
 
 ### Dark mode for emails
 
-While the app is dark (`appIsDark()`), emails are shown dark too (`setEmailColors`, run when the email is parsed). The frame stays hidden until its colors are set, so it doesn't flash white:
+While the app is dark (`appIsDark()`), emails are shown dark too (`setEmailColors`, run when the email is parsed). The frame stays invisible (`opacity: 0`) until its colors are set, so it doesn't flash white. Not `visibility: hidden`: in WebKit (macOS) a frame shown after that doesn't scroll by trackpad or mouse wheel, only by dragging its scroll bar, until something lays it out again (an image arriving, a resize).
+
+The frame's scroll bar follows the email. A darkened email has `color-scheme: dark` (`FRAME_DARK_CSS`), so the thumb is light, as in the message list. On macOS the frame's scroll bar is only a see-through thumb over the frame's own background, which is white in the CSS, so a darkened email's frame gets the email's dark background (`EMAIL_DARK_BACKGROUND`, `#1f1f1f`) behind it.
+
+How an email is darkened:
 
 1. **The email's own dark styles win.** `adjustColorSchemeRules` looks for `prefers-color-scheme: dark` in its CSS and in `<picture><source media>`. If it has any, they apply as written: the frame reports the app's dark preference. The frame adds only dark defaults (`FRAME_DARK_CSS`) behind it.
 2. **Otherwise the email is darkened** (`darkenEmail`). For each element:
@@ -112,14 +117,22 @@ A theme change (Appearance, or the system with System) redraws the open email.
 
 Known weak spot: a dark logo on a transparent background (a black wordmark PNG) stays dark on the darkened background. Original is the way out.
 
+### Pictures in the email (`cid:` links)
+
+An email can carry its pictures inside the message, with `<img src="cid:…">` naming a part by its Content-ID: signature logos (Outlook), screenshots pasted into the text, some reports and receipts. The frame can't load `cid:` links (the CSP allows images from `data:`, `https:` and `http:` only), so the reader puts the pictures in itself:
+- `inlinePictures` finds the `cid:` links in the HTML and the attachments whose Content-ID they name (URL-decoded, ignoring case), pictures only. Those leave the attachment chips, as in Gmail; a picture with a Content-ID that the email doesn't link stays a chip.
+- Once the text is on screen, `loadInlinePictures` asks `inline_images` for their data. Like `save_attachments`, Rust finds the parts in a fresh copy of the message. The data becomes `data:` URLs (base64url turned into base64), kept as `full.pictures`.
+- `showInlinePictures` points the links at them: `src` and `background` attributes, and `url(cid:…)` in a `style` attribute. It runs on the open email when the data arrives, and on every redraw (Original / Dark, a theme change) as soon as the email is parsed, with nothing fetched again.
+- If the request fails, a toast says so and the pictures stay empty. An answer for a message that's no longer open is dropped (`openSeq`).
+
 ### Attachments
 
-`get_message` also lists the message's files (`attachments`, each `{ part, name, mimeType, size }`): every part with a file name, depth first. A forwarded email attached as a message counts as one file, without the files inside it. Inline images the email links with `cid:` are listed too, since the reader doesn't show them yet ([todo.md](todo.md)).
+`get_message` also lists the message's files (`attachments`, each `{ part, name, mimeType, size, contentId }`): every part with a file name, and every picture with a Content-ID (named `image.png` and the like when it has no name), depth first. A forwarded email attached as a message counts as one file, without the files inside it. The pictures the email shows in place leave this list (see [Pictures in the email](#pictures-in-the-email-cid-links)).
 
 `renderAttachments` puts a chip per file under the header (`#m-attachments`): an icon by kind, the name and the size in units of 1024. The kind (image, PDF, archive, document or other) comes from the type Gmail gives, or the extension for `application/octet-stream`. A save icon shows on hover; its room is kept while it's hidden, so the chips don't move under the mouse. With two or more files, **Save all** follows them.
 
-A click calls `save_attachments` with the files' Gmail part IDs. While it runs, the chip is dimmed and further clicks do nothing.
-- Rust fetches the message again and finds each file by its part, so an attachment ID that changed since the message was opened doesn't matter. Each file's data is in the message or comes from `attachments.get`.
+A click calls `save_attachments` with the files' Gmail part IDs and a job number. While it runs, the chip is dimmed and its size says Saving… (Save all's label too); under the mouse it says Cancel instead, and a click there calls `cancel_save` with the job number. That drops the download, which also ends its request to Gmail, and `save_attachments` returns no paths, so no toast follows. Files are only written once every one has arrived, so a cancelled save leaves nothing in Downloads.
+- Rust fetches the message again and finds each file by its part, so an attachment ID that changed since the message was opened doesn't matter. Each file's data is in the message or comes from `attachments.get`, which gets 10 minutes (`DOWNLOAD_TIMEOUT`) rather than the 30 s other Gmail requests get: attachments come as base64 in JSON, a third larger than the file.
 - Names come from `files::safe_file_name`, the same names the chips show. There are no folders in them, no characters Windows refuses, no control characters, no direction marks that could disguise the extension (`invoice\u202Efdp.exe` reads as `invoiceexe.pdf`), no leading dot, no device names Windows reserves (CON, NUL…), and at most 200 bytes, keeping the extension.
 - Files go to the Downloads folder and never replace one there: a taken name becomes `name (1).ext`, `name (2).ext`… (`create_new`).
 - Each file is marked as coming from email: on macOS with LaunchServices' quarantine (type email attachment, agent Unified Mail), so Gatekeeper checks it before it opens and asks first if it's an app; on Windows with the Mark of the Web (`Zone.Identifier`, internet zone), so SmartScreen and Office's Protected View apply.

@@ -92,24 +92,28 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   border-right: 1px solid var(--border);
   min-width: 0;
 }
+/* The icon's blue square starts 2/24 into the svg, so 2 px of padding puts it 14 px from the
+   window's edge, a little left of the macOS window buttons (18 px). */
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-weight: 700;
-  font-size: 15px;
-  padding: 4px 8px 14px;
+  font-size: 18px;
+  padding: 4px 8px 10px 2px;
 }
-.brand svg { width: 22px; height: 22px; stroke: none; }
+.brand svg { width: 28px; height: 28px; stroke: none; }
 
 /* The app's own title bar (initTitleBar). The brand reaches the top edge so all of it drags
-   the window. On macOS the system's window buttons sit above it, on the list header's row
-   (main.rs places them); in full screen the system hides them, and the brand moves up as on
-   Windows (`full-screen`, macos.rs). */
+   the window. On macOS the system's window buttons sit above it, centered 26 px down on the
+   row of the list header and the message's buttons (main.rs places them); in full screen the
+   system hides them, and the brand moves up as on Windows (`full-screen`, macos.rs). */
 .own-title-bar #sidebar { padding-top: 0; }
-.own-title-bar .brand { padding-top: 18px; }
+/* On the list header's row (Windows, macOS in full screen) the 28 px brand is centered 26 px
+   down with it; on macOS it sits 13 px below the window buttons. */
+.own-title-bar .brand { padding-top: 12px; }
 .mac .brand { padding-top: 46px; }
-.mac.full-screen .brand { padding-top: 18px; }
+.mac.full-screen .brand { padding-top: 12px; }
 #window-bar { flex: none; height: 32px; }
 /* Fixed, so Settings and the sign-in overlay don't cover them. */
 #window-buttons { position: fixed; top: 0; right: 0; z-index: 40; display: flex; }
@@ -127,8 +131,10 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 #window-buttons button:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
 #window-buttons #win-close:hover { background: #c42b1c; color: #fff; }
 #window-buttons #win-close:active { background: #c83c30; color: #fff; }
-/* The strip above the reader already gives the message's buttons room. */
+/* Windows: the strip above the reader (#window-bar) already gives the message's buttons room.
+   macOS has no strip there: the buttons sit on the list header's row, centered 26 px down. */
 .own-title-bar .msg-head { padding-top: 2px; }
+.mac .msg-head { padding-top: 10px; }
 
 .nav-item, .side-btn {
   display: flex;
@@ -355,10 +361,17 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .att { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 5px 8px 5px 10px; }
 .att .kind { width: 18px; height: 18px; }
 .att .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att .size { flex: none; color: var(--muted); font-size: 12px; }
+.att .size, .att .busy, .att .cancel { flex: none; color: var(--muted); font-size: 12px; }
 .att .save { visibility: hidden; color: var(--accent); }
-.att:hover .save, .att:focus-visible .save, .att.saving .save { visibility: visible; }
-.att.saving, .save-all.saving { cursor: progress; opacity: 0.6; }
+.att:hover .save, .att:focus-visible .save { visibility: visible; }
+/* While a chip or Save all saves (`saving`): Saving… in place of its label, Cancel under the
+   mouse, where a click cancels. */
+.busy, .cancel, .saving .idle, .saving:is(:hover, :focus-visible) .busy { display: none; }
+.saving .busy, .saving:is(:hover, :focus-visible) .cancel { display: inline; }
+.att .cancel, .save-all .cancel { color: var(--danger); }
+.att.saving .save { visibility: hidden; }
+.saving { cursor: progress; opacity: 0.6; }
+.saving:is(:hover, :focus-visible) { cursor: default; opacity: 1; }
 .att.image .kind { color: #1d9e75; }
 .att.pdf .kind { color: #e24b4a; }
 .att.archive .kind { color: #ba7517; }

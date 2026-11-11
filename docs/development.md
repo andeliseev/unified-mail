@@ -254,7 +254,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with a sound (Windows: the Mail sound; macOS: the default notification sound); clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
-- [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, level with the list header. The window drags by the sidebar's top, the list header and the strip above the message, also on the first click while another app is in front; a double-click there zooms
+- [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, on one line with the list header and the message's buttons, with no empty strip above those. The window drags by the sidebar's top, the list header and the empty part of the message's button row, also on the first click while another app is in front; a double-click there zooms. The top half of each button there clicks too
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] macOS, with the app kept in the Dock: after an update it comes back under that icon, with no second Unified Mail icon next to it. Only an update from a version newer than 0.2.0 shows this
@@ -271,6 +271,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] Drag the line between the list and the message: the list follows, from 250 to 600 px, also when the mouse goes over the email; after a restart it's the same width; a double-click resets it. Narrowing the window takes the message down to 400 px first, then the list
 - [ ] Links in an email open in the default browser
 - [ ] A message with attachments lists them under the header. A click saves one to Downloads, and saving it again gives `name (1)`; **Show in Finder** / **Show in folder** selects it; **Save all** saves every file. macOS: the first save asks for access to Downloads; a saved app or script gets the "downloaded from the internet" check when opened. Windows: a saved file's Properties shows "This file came from another computer"
+- [ ] An email with a picture carried inside it (an Outlook signature logo, a screenshot pasted into the text) shows it in place a moment after the text, and it isn't among the attachment chips; switching Original / Dark keeps it
 - [ ] With 50+ messages, the list scrolls, and a long email scrolls to its end (test with a full inbox, not an empty one)
 - [ ] An account with no unread mail still syncs
 - [ ] Scroll to the bottom of each folder: older mail keeps loading, dates stay in order across accounts, "Loading older messages…" disappears at the very end
