@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.2 (2026-11-11)
+
 - Messages show their attachments under the header. Click one to save it to your Downloads folder, or Save all for every file, then Show in Finder (Show in folder on Windows) to find it. Saved files are marked as coming from email, so your system checks them before they open. On macOS, the first save asks whether Unified Mail may use your Downloads folder.
 - macOS: in full screen, the top of the sidebar no longer has an empty gap where the window buttons usually are. The Unified Mail name moves up into their place.
 
