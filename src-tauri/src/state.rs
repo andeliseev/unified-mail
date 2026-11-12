@@ -417,7 +417,9 @@ impl AppState {
     pub fn remove_account(&self, email: &str) -> Result<(), String> {
         let known = self.refresh_tokens.lock().unwrap().remove(email);
         self.unreadable.lock().unwrap().remove(email);
-        if let Some(refresh_token) = known.or_else(|| KEYCHAIN.read(email).ok().flatten()) {
+        // Revoked at Google when this launch has read it. Reading it now could ask for the
+        // keychain password (macOS) while the window waits: this command runs on the main thread.
+        if let Some(refresh_token) = known {
             let http = self.http.clone();
             tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
         }
@@ -619,6 +621,9 @@ impl AppState {
                         }
                         known.insert(m.id.clone(), m);
                     }
+                    // Gone between the list and this call (each save of a draft replaces its
+                    // message, say): it's simply not listed.
+                    Err((_, error)) if error.starts_with("Gmail error 404") => {}
                     Err((id, error)) => {
                         if reported.insert(cache_key(account, &id)) {
                             new_failures.push(error);
@@ -909,8 +914,13 @@ impl AppState {
         if let Some(token) = self.cached_token(account) {
             return Ok(token);
         }
+        // An expired sign-in waits for Reconnect. Reading the keychain again could ask for the
+        // password again and again (macOS), and Google would only turn the token down again.
+        if self.expired.lock().unwrap().contains(account) {
+            return Err(expired_message("The sign-in has expired for", account));
+        }
         let creds = self.creds()?;
-        let refresh_token = self.refresh_token(account)?;
+        let refresh_token = self.refresh_token(account).await?;
         let tokens = match oauth::refresh(&self.http, &creds, &refresh_token).await {
             Ok(tokens) => tokens,
             Err(e) if e == oauth::EXPIRED => {
@@ -924,13 +934,17 @@ impl AppState {
         Ok(tokens.access_token)
     }
 
+    /// The account's access token, unless it has run out or Google turned it down (401).
     fn cached_token(&self, account: &str) -> Option<String> {
         let tokens = self.tokens.lock().unwrap();
-        tokens.get(account).filter(|t| SystemTime::now() < t.expires_at).map(|t| t.value.clone())
+        tokens
+            .get(account)
+            .filter(|t| SystemTime::now() < t.expires_at && !gmail::was_rejected(&t.value))
+            .map(|t| t.value.clone())
     }
 
     /// The account's refresh token: from memory, or else from the keychain, once per launch.
-    fn refresh_token(&self, account: &str) -> Result<String, String> {
+    async fn refresh_token(&self, account: &str) -> Result<String, String> {
         if let Some(token) = self.refresh_tokens.lock().unwrap().get(account) {
             return Ok(token.clone());
         }
@@ -943,7 +957,12 @@ impl AppState {
         if self.unreadable.lock().unwrap().contains(account) {
             return Err(unreadable());
         }
-        match KEYCHAIN.read(account) {
+        // On macOS the read may wait for the user to answer a password prompt: not on an async thread.
+        let owned = account.to_string();
+        let read = tauri::async_runtime::spawn_blocking(move || KEYCHAIN.read(&owned))
+            .await
+            .map_err(|e| format!("System keychain error: {e}"))?;
+        match read {
             Ok(Some(token)) => {
                 self.refresh_tokens.lock().unwrap().insert(account.to_string(), token.clone());
                 Ok(token)
@@ -960,7 +979,7 @@ impl AppState {
     /// Remembers that `account` needs signing in again, and returns the error to show for it.
     fn mark_expired(&self, account: &str, problem: &str) -> String {
         self.expired.lock().unwrap().insert(account.to_string());
-        format!("{problem} {account}. Click Reconnect above the message list to sign in again.")
+        expired_message(problem, account)
     }
 
     fn store_token(&self, account: &str, value: String, expires_in: u64) {
@@ -970,6 +989,11 @@ impl AppState {
             .unwrap()
             .insert(account.to_string(), AccessToken { value, expires_at });
     }
+}
+
+/// What a command for an account that needs signing in again says.
+fn expired_message(problem: &str, account: &str) -> String {
+    format!("{problem} {account}. Click Reconnect above the message list to sign in again.")
 }
 
 fn cache_key(account: &str, id: &str) -> String {
@@ -986,13 +1010,16 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
 
-/// Writes via a temp file so a crash mid-write can't leave a truncated file.
+/// Writes via a temp file so a crash mid-write can't leave a truncated file. Each write has a
+/// temp file of its own: a sync and an action can save the same folder's cache at once.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let tmp = path.with_extension("tmp");
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tmp = path.with_extension(format!("{}.tmp", WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-    fs::write(&tmp, bytes)
-        .and_then(|_| fs::rename(&tmp, path))
-        .map_err(|e| format!("Could not save {}: {e}", path.display()))
+    fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, path)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Could not save {}: {e}", path.display())
+    })
 }
 
 /// Writes `value` as JSON to a file only this user can read, through a new temp file, which a
@@ -1139,6 +1166,29 @@ mod tests {
         state.hand_over_sign_ins();
         let handed: HashMap<String, String> = take_private(&dir.join(HAND_OVER_FILE)).unwrap();
         assert_eq!(handed, HashMap::from([("a@example.com".to_string(), "token-a".to_string())]));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Without reading the keychain, which could ask for the password on every sync (macOS).
+    #[test]
+    fn an_expired_sign_in_waits_for_reconnect() {
+        let dir = scratch("expired");
+        let state = AppState::load(dir.clone());
+        state.expired.lock().unwrap().insert("a@example.com".into());
+        let error = tauri::async_runtime::block_on(state.access_token("a@example.com")).unwrap_err();
+        assert!(error.starts_with("The sign-in has expired for a@example.com"), "{error}");
+        assert!(state.refresh_tokens.lock().unwrap().is_empty(), "the keychain wasn't read");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saving_leaves_no_temp_files() {
+        let dir = scratch("write");
+        let path = dir.join(ACCOUNTS_FILE);
+        write_json(&path, &["a@example.com"]).unwrap();
+        write_json(&path, &["b@example.com"]).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"["b@example.com"]"#);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "only the file itself");
         fs::remove_dir_all(&dir).unwrap();
     }
 

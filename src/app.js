@@ -402,7 +402,10 @@ function bindEvents() {
   $('#m-more').addEventListener('click', (e) => showAnswerMenu(e.currentTarget, (kind) => startReply(kind)));
   $('#c-send').title = `Send (${IS_MAC ? '⌘' : 'Ctrl+'}Enter)`;
   $('#c-send').addEventListener('click', () => state.composing && sendDraft(state.composing, $('#compose')));
-  $('#c-attach').addEventListener('click', () => state.composing && pickFiles(state.composing, () => renderComposeFiles()));
+  $('#c-attach').addEventListener('click', () => state.composing && pickFiles(state.composing, () => {
+    renderComposeFiles();
+    $('#c-body').focus();
+  }));
   $('#c-discard').addEventListener('click', () => state.composing && discardDraft(state.composing));
   $('#c-body').addEventListener('input', () => {
     if (!state.composing) return;
@@ -1228,13 +1231,17 @@ function gmailDrafts() {
 const draftCount = () =>
   localDrafts().filter((d) => (d.gmailId || hasContent(d)) && (!state.filter || d.from === state.filter)).length + gmailDrafts().length;
 
-/** Leaving the open email: a reply to it with nothing written yet is dropped, else it's saved. */
+/**
+ * Leaving the open email: a reply to it with nothing written yet is dropped, else it's saved.
+ * One opened from Gmail's Drafts is never dropped: what was written in it may be where the
+ * editor doesn't show it, or only in its recipients, and dropping it deletes it from Gmail.
+ */
 function leaveMessage(nextKey = null) {
   const m = state.current;
   if (!m || keyOf(m) === nextKey) return;
   const draft = state.replies.get(keyOf(m));
   if (!draft) return;
-  if (isEmptyDraft(draft)) {
+  if (isEmptyDraft(draft) && !draft.fromGmail) {
     dropDraft(draft);
     renderList();
   } else {
@@ -1242,12 +1249,15 @@ function leaveMessage(nextKey = null) {
   }
 }
 
-/** Leaving the new message in the reader: it stays in the list and is saved, unless there's nothing in it. */
+/**
+ * Leaving the new message in the reader: it stays in the list and is saved, unless there's
+ * nothing in it (and it wasn't opened from Gmail's Drafts, as in `leaveMessage`).
+ */
 function leaveCompose() {
   const draft = state.composing;
   if (!draft) return;
   state.composing = null;
-  if (isBlankDraft(draft)) dropDraft(draft);
+  if (isBlankDraft(draft) && !draft.fromGmail) dropDraft(draft);
   else saveDraft(draft);
   renderSidebar();
 }
@@ -1324,9 +1334,11 @@ function saveDraft(draft) {
     setSaveState(draft, 'saving');
     try {
       if (draft.gmailId && draft.gmailAccount !== draft.from) await deleteGmailDraftNow(draft);
-      const saved = await invoke('save_draft', { draft: { ...outgoing(draft), draftId: draft.gmailId } });
+      const payload = { ...outgoing(draft), draftId: draft.gmailId };
+      const saved = await invoke('save_draft', { draft: payload });
       draft.gmailId = saved.id;
-      draft.gmailAccount = draft.from;
+      // The account it was saved in: From may have changed meanwhile, and the next save moves it.
+      draft.gmailAccount = payload.account;
       setSaveState(draft, draft.dirty ? '' : 'saved');
     } catch (e) {
       draft.dirty = true;
@@ -1376,8 +1388,13 @@ function openDraft(draft) {
 /** Shows the email an answer being written belongs to, with the answer under it. */
 async function openReplyDraft(draft) {
   const key = keyOf(draft.message);
-  if (state.current && keyOf(state.current) === key && state.full) renderMessageEnd();
-  else await select(key, byKey(key) || draft.message);
+  if (state.current && keyOf(state.current) === key && state.full) {
+    // Its email is already open, so `select` won't give it the email to quote and thread with.
+    draft.full ||= state.full;
+    renderMessageEnd();
+  } else {
+    await select(key, byKey(key) || draft.message);
+  }
   focusReply(draft);
 }
 
@@ -1393,17 +1410,20 @@ async function openGmailDraft(m) {
     return;
   }
   setStatus('Opening the draft…');
+  const [seq, composing] = [state.openSeq, state.composing];
   try {
     const opened = await invoke('open_draft', { account: m.account, id: m.draft });
+    // Something else was opened meanwhile: the draft doesn't take the reader (and the typing) from it.
+    const still = seq === state.openSeq && state.composing === composing;
     if (here(opened.id)) {
-      openDraft(here(opened.id));
+      if (still) openDraft(here(opened.id));
       return;
     }
     const draft = draftFromGmail(m.account, opened);
     if (draft.message) state.replies.set(keyOf(draft.message), draft);
     else state.drafts.unshift(draft);
     renderList();
-    openDraft(draft);
+    if (still) openDraft(draft);
   } catch (e) {
     toast(`Couldn't open the draft: ${e}`, 6000);
   } finally {
@@ -1425,7 +1445,7 @@ function draftFromGmail(account, o) {
   const draft = newDraft(kind, account, answered);
   Object.assign(draft, {
     to, cc, bcc: parseAddresses(o.bcc), subject: o.subject || '', body: typedText(o),
-    gmailId: o.id, gmailAccount: account, saveState: 'saved',
+    gmailId: o.id, gmailAccount: account, saveState: 'saved', fromGmail: true,
   });
   draft.showCc = Boolean(draft.cc.length || draft.bcc.length);
   const html = o.html ? decodeBody(o.html) : '';
@@ -1438,13 +1458,17 @@ function draftFromGmail(account, o) {
 /**
  * What was written in a Gmail draft: its text without the email it quotes or forwards. Those
  * start at a line like "On …, Anna <a@b.c> wrote:" (which may wrap) or "Forwarded message".
+ * In an answer, lines without ">" after that line were written under the quote or between its
+ * lines, as some mail apps answer: they're kept too, after the text above it.
  */
 function typedText(o) {
   if (o.text) {
     let text = decodeBody(o.text).replace(/\r\n?/g, '\n');
-    if (o.inReplyTo) {
-      const cut = text.search(/^(On .*(\n.*)?wrote:[ \t]*$|-{5,} ?Forwarded message ?-{5,})/m);
-      if (cut >= 0) text = text.slice(0, cut);
+    const quote = o.inReplyTo && text.match(/^(On .*(\n.*)?wrote:[ \t]*$|-{5,} ?Forwarded message ?-{5,})/m);
+    if (quote) {
+      const after = quote[1].startsWith('On ') ? text.slice(quote.index + quote[0].length) : '';
+      const between = after.split('\n').filter((line) => line.trim() && !line.startsWith('>')).join('\n');
+      text = [text.slice(0, quote.index).replace(/\s+$/, ''), between].filter(Boolean).join('\n\n');
     }
     return text.replace(/\s+$/, '');
   }
@@ -1511,7 +1535,11 @@ function renderCompose() {
 }
 
 function composeFiles(draft) {
-  const row = filesRow(draft, () => $('#c-fields .draft-files').replaceWith(composeFiles(draft)));
+  // The ✕ that was clicked is replaced: the text gets the focus back, so typing goes on there.
+  const row = filesRow(draft, () => {
+    $('#c-fields .draft-files').replaceWith(composeFiles(draft));
+    $('#c-body').focus();
+  });
   row.classList.add('field');
   return row;
 }
@@ -1910,7 +1938,9 @@ function replyBox(draft) {
   });
   box.append(recipientRow(draft, 'to', { placeholder: 'Add recipients', lead: kind, tail: draft.showCc ? null : showCc }));
   if (draft.showCc) box.append(recipientRow(draft, 'cc', { label: 'Cc' }), recipientRow(draft, 'bcc', { label: 'Bcc' }));
-  box.append(filesRow(draft, () => redraw()));
+  // Redrawing replaces the button that was clicked, so the text gets the focus back: on the
+  // page, letters typed next would be shortcuts (E archives, R/A/F change the answer).
+  box.append(filesRow(draft, () => redraw('textarea')));
 
   const text = document.createElement('textarea');
   text.setAttribute('aria-label', 'Message');
@@ -1936,10 +1966,10 @@ function replyBox(draft) {
   send.textContent = 'Send';
   send.title = `Send (${IS_MAC ? '⌘' : 'Ctrl+'}Enter)`;
   send.addEventListener('click', () => sendDraft(draft, box));
-  const attach = iconButton(PAPERCLIP, 'Attach files', () => pickFiles(draft, () => redraw()));
+  const attach = iconButton(PAPERCLIP, 'Attach files', () => pickFiles(draft, () => redraw('textarea')));
   const quote = iconButton(DOTS, draft.showQuote ? 'Hide the quoted email' : 'Show the quoted email', () => {
     draft.showQuote = !draft.showQuote;
-    redraw();
+    redraw('textarea');
   });
   quote.classList.toggle('on', draft.showQuote);
   const saved = document.createElement('span');
@@ -2046,7 +2076,10 @@ async function sendDraft(draft, container) {
     await draft.saving;
     if (flow.undone) return;
     // Its From changed since it was saved: that account's draft goes, and this one is new.
-    if (draft.gmailId && draft.gmailAccount !== draft.from) await deleteGmailDraft(draft).catch(() => {});
+    if (draft.gmailId && draft.gmailAccount !== draft.from) {
+      await deleteGmailDraft(draft).catch(() => {});
+      if (flow.undone) return;
+    }
     if (draft.gmailId) {
       gmail = `${draft.gmailAccount}/${draft.gmailId}`;
       state.sending.add(gmail);
@@ -2199,13 +2232,13 @@ function outgoing(draft) {
   payload.text = forward
     ? `${before}${intro.join('\n')}\n\n${text}`
     : `${before}${intro[0]}\n${text.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n')}`;
-  const { head, body } = emailHtml(full);
+  const body = emailHtml(full);
   const typedHtml = typed ? `<div dir="auto">${linkify(escapeHtml(typed)).replace(/\n/g, '<br>')}</div><br>` : '';
   const quoted = forward
     ? `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${intro.map(escapeHtml).join('<br>')}<br></div><br>${body}</div>`
     : `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${escapeHtml(intro[0])}<br></div>` +
       `<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
-  payload.html = `<!doctype html><html><head><meta charset="utf-8">${head}</head><body>${typedHtml}${quoted}</body></html>`;
+  payload.html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${typedHtml}${quoted}</body></html>`;
   payload.parts = [
     ...draft.carried.map((a) => ({ part: a.part })),
     ...(full.inline || []).map((a) => ({ part: a.part, contentId: a.contentId })),
@@ -2214,21 +2247,22 @@ function outgoing(draft) {
 }
 
 /**
- * The answered email's HTML as an answer quotes it: its styles, for the new email's head, and
- * its body. Parsing doesn't load anything or run anything. Plain text is escaped, keeping its
- * line breaks.
+ * The answered email's HTML body as an answer quotes it. Its `<style>` rules are left out: in
+ * the recipient's mail app they'd also style, or hide, what's written above the quote. So is
+ * fixed or absolute positioning, which could cover it. Parsing doesn't load anything or run
+ * anything. Plain text is escaped, keeping its line breaks.
  */
 function emailHtml(full) {
   if (!full.html) {
     const text = full.text ? decodeBody(full.text) : '';
-    return { head: '', body: `<div>${linkify(escapeHtml(text)).replace(/\n/g, '<br>')}</div>` };
+    return `<div>${linkify(escapeHtml(text)).replace(/\n/g, '<br>')}</div>`;
   }
   const doc = new DOMParser().parseFromString(decodeBody(full.html), 'text/html');
-  for (const el of doc.querySelectorAll('script, base, meta, title, link')) el.remove();
-  const styles = [...doc.querySelectorAll('style')];
-  const head = styles.map((style) => style.outerHTML).join('');
-  for (const style of styles) style.remove();
-  return { head, body: doc.body.innerHTML };
+  for (const el of doc.querySelectorAll('script, style, base, meta, title, link')) el.remove();
+  for (const el of doc.body.querySelectorAll('[style]')) {
+    if (/^(fixed|absolute|sticky)$/i.test(el.style.position)) el.style.position = 'static';
+  }
+  return doc.body.innerHTML;
 }
 
 /** An HTML email's text, with a line break wherever a block (paragraph, row...) ends. */
@@ -2771,6 +2805,12 @@ function act(kind, m = openMessage()) {
  */
 async function perform(m, move, run) {
   const key = keyOf(m);
+  // The lists it's in now: a failed move puts it back in these only (Delete leaves the Inbox,
+  // Sent and All Mail, but an archived message was never in the Inbox).
+  const has = (list) => list.some((x) => keyOf(x) === key);
+  const held = move.leave.filter((folder) => has(state.lists[folder])
+    || (folder === 'inbox' && state.inboxExtra.has(key))
+    || (folder === 'all' && has(state.lists.search)));
   const entry = { message: m, leave: move.leave, join: move.join };
   state.pending.set(key, entry);
   shift(m, move.leave, move.join);
@@ -2778,7 +2818,7 @@ async function perform(m, move, run) {
   try {
     return await run();
   } catch (e) {
-    shift(m, move.join, move.leave);
+    shift(m, move.join, held);
     render();
     throw e;
   } finally {
@@ -2908,6 +2948,12 @@ function onKey(e, inMessage = false) {
     hideMenu();
     if (e.key === 'Escape') { e.preventDefault(); return; }
   }
+  // F5 and Ctrl+R reload the page in WebView2 (Windows), which loses Undo and what isn't saved
+  // yet; Ctrl+R is Reply in Outlook. The app has nothing to reload.
+  if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.altKey && shortcutKey(e).toLowerCase() === 'r')) {
+    e.preventDefault();
+    return;
+  }
   // Cmd+F (Ctrl+F on Windows) searches, as Find does in most apps.
   if ((IS_MAC ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && shortcutKey(e).toLowerCase() === 'f') {
     if ($('#settings').hidden && $('#waiting').hidden) {
@@ -2921,8 +2967,12 @@ function onKey(e, inMessage = false) {
     if (e.key === 'Escape' && state.configured && state.accounts.length) closeSettings();
     return;
   }
-  if (e.target.closest && e.target.closest('input, textarea')) return;
+  // Typing goes to the text fields, and a button of the message being written (Send, Attach…)
+  // keeps the focus there too.
+  if (e.target.closest && e.target.closest('input, textarea, .reply-box, #compose')) return;
   const key = shortcutKey(e);
+  // A key held down repeats: fine for moving and scrolling, not for archiving a run of messages.
+  if (e.repeat && !['j', 'k', 'ArrowDown', 'ArrowUp', ' ', 'PageDown', 'PageUp'].includes(key)) return;
   // macOS: a key in the email went to WebKit as well (onEmailKey).
   const native = inMessage && IS_MAC;
   switch (key) {

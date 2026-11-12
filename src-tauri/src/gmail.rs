@@ -1,12 +1,13 @@
 //! Thin client for the Gmail REST API: https://developers.google.com/gmail/api/reference/rest
 
 use reqwest::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client, Method, RequestBuilder, Response,
+    header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE},
+    Client, Method, RequestBuilder, Response, StatusCode,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -905,11 +906,33 @@ fn decode<T: DeserializeOwned>(body: &[u8]) -> serde_json::Result<T> {
     }
 }
 
+/// Access tokens Google turned down (401), such as one whose access was removed in the Google
+/// account: `AppState::cached_token` stops using them, so the next call gets a new token or
+/// finds the sign-in expired, instead of failing until the token would have run out.
+static REJECTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const REJECTED_KEPT: usize = 16;
+
+pub fn was_rejected(token: &str) -> bool {
+    REJECTED.lock().unwrap().iter().any(|t| t == token)
+}
+
 async fn send(request: RequestBuilder) -> Result<Response, String> {
-    let resp = request.send().await.map_err(|e| format!("Network error: {}", describe(&e)))?;
+    let (client, request) = request.build_split();
+    let request = request.map_err(|e| format!("Network error: {}", describe(&e)))?;
+    let token = request.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()?.strip_prefix("Bearer ")).map(str::to_string);
+    let resp = client.execute(request).await.map_err(|e| format!("Network error: {}", describe(&e)))?;
     let status = resp.status();
     if status.is_success() {
         return Ok(resp);
+    }
+    if status == StatusCode::UNAUTHORIZED {
+        if let Some(token) = token {
+            let mut rejected = REJECTED.lock().unwrap();
+            if rejected.len() >= REJECTED_KEPT {
+                rejected.remove(0);
+            }
+            rejected.push(token);
+        }
     }
     let body = resp.text().await.unwrap_or_default();
     let message = serde_json::from_str::<Value>(&body)
@@ -1246,7 +1269,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn gmail_api_rejects_bad_token() {
+        assert!(!was_rejected("not-a-real-token"));
         let error = profile_email(&Client::new(), "not-a-real-token").await.err().unwrap();
         assert!(error.starts_with("Gmail error 401"), "{error}");
+        assert!(was_rejected("not-a-real-token"), "a token Google turned down isn't used again");
     }
 }

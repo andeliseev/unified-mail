@@ -389,11 +389,13 @@ async fn check_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Resu
 async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
     let update = pending.0.lock().unwrap().take();
     let update = update.ok_or("There's no update to install. Open Settings again to check.")?;
-    // Installing ends the app without the `Exit` event that sends what's waiting, so send it first.
-    let handle = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || handle.state::<Outbox>().flush(SEND_ON_QUIT)).await;
     let fail = |e: tauri_plugin_updater::Error| format!("Couldn't install the update: {e}");
     let bytes = update.download(|_, _| {}, || {}).await.map_err(fail)?;
+    // Installing ends the app without the `Exit` event that sends what's waiting (on Windows the
+    // installer ends the process), so send it first: after the download, so an email sent while
+    // it downloaded goes too.
+    let handle = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || handle.state::<Outbox>().flush(SEND_ON_QUIT)).await;
     #[cfg(target_os = "macos")]
     app.state::<AppState>().hand_over_sign_ins();
     if let Err(e) = update.install(&bytes) {

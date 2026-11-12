@@ -4,6 +4,13 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Drafts started on your phone or in Gmail on the web are no longer deleted from Gmail when they look empty here, and what was written under the quote now shows. A reply draft opened while its email is open now saves and stays in its conversation, and changing From while a draft saves no longer leaves it unsaved.
+- Undo after Send now always stops the email, also right after changing From. Replies and forwards no longer carry the original email's style rules, which could change or hide your own text for the recipient.
+- While writing, typing after clicking Attach, a file's ✕ or ··· goes into your text instead of running shortcuts such as E (Archive). Holding E or Delete no longer archives or deletes a run of messages.
+- A Delete that fails no longer puts the message in the Inbox. A sign-in Google stops accepting now shows Reconnect after the next sync, instead of errors for up to an hour. The Drafts folder no longer warns that a message couldn't be loaded while you type.
+- macOS: an expired sign-in no longer asks for your keychain password again and again, and removing an account no longer asks for it.
+- Windows: an email sent while an update downloads is no longer lost, and F5 or Ctrl+R no longer reload the window.
+
 ## 0.2.10 (2026-11-12)
 
 ## 0.2.9 (2026-11-12)

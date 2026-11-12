@@ -24,6 +24,15 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] An account whose sign-in expires mid-session shows Reconnect only after the next sync; opening a message from it before that shows the error as a toast
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
 - [ ] Older pages aren't re-synced: something archived elsewhere stays visible there until the folder is reopened or the app restarts
+- [ ] Undo of a move reopens the message only once Gmail confirms: if another email or a new message was opened meanwhile, the late `select` takes the reader back
+- [ ] Mark as unread right after opening a message, before its body arrives, is undone by the automatic mark-as-read when the body comes
+- [ ] An account whose sign-in expires mid-session keeps `paging.more`, so the merged list stops at its frontier and "Couldn't load older messages" comes back at every scroll to the end
+- [ ] A sync that was running when an account was removed brings its rows and unread mail back until the next sync (`applySync` in the page, `refresh` in Rust)
+- [ ] After a sync removes the open message (archived on the phone, say), `J`/`K` start again at the top of the list
+- [ ] Failures can look like empty results: a search where every account failed says "Nothing matches", and a folder whose first sync failed says "Inbox zero"
+- [ ] Send waits for a save already on its way before `send_message` registers the email: with a slow upload, the Undo toast can run out first, and quitting then leaves the email unsent
+- [ ] The Outbox's Undo: one that arrives before a big `send_message` has crossed IPC says "Too late to undo", and job numbers start again after a page reload. An email still uploading 20 s into quitting (`SEND_ON_QUIT`), or whose sending fails then, is dropped without a word
+- [ ] Removing an account revokes its token, which probably signs the account out of the app on other computers too, since Google revokes the whole grant. To check: one test account in two copies of the app
 - [ ] Search results don't update by themselves: push and syncs don't run the search again, only Enter does
 - [ ] Search leaves out Spam and Trash (`includeSpamTrash` off), so typing `in:trash` or `in:anywhere` probably finds nothing more. Trash results would also need Trash's actions
 - [ ] Search: recent searches, or suggestions of senders while typing
@@ -86,6 +95,19 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
   - Record an unlisted YouTube demo of the sign-in and of every feature that uses the scope
   - Security assessment (CASA): Google requires it for apps that access mail "from or through a third-party server". Unified Mail has no server, but whether that exempts it is decided in review. If required: an approved lab, paid, renewed yearly
 - [ ] Linux: enable the `keyring` Secret Service feature, test on WebKitGTK
+
+## Security hardening
+
+From the review on 2026-11-13; none of it urgent.
+
+- [ ] Release workflow: pin third-party actions by commit SHA (`dtolnay/rust-toolchain@stable` is a branch; `rust-cache@v2`, `tauri-action@v1` and `actions/*` are tags that can move), set `persist-credentials: false`, keep `TAURI_SIGNING_PRIVATE_KEY` away from the build itself (every build script and proc-macro can read it while `tauri build` runs), and delete the `.p12` right after signing. A hijacked action could otherwise sign a malicious update for every install
+- [ ] `requireSignedVersion` in the updater's config, once the release signatures are checked to carry the version: without it, an edited `latest.json` could offer an older signed build as new
+- [ ] Narrower Tauri permissions: the `core:*` permissions the page uses instead of `core:default`, an `AppManifest` command list in `build.rs`, and localhost navigation (`macos.rs`) only in debug builds. This matters only if script ever got into the page
+- [ ] Email images: `img-src` allows `http:`, so an opened email can make requests to `127.0.0.1` or the router. Leaving `http:` out would also break old newsletters' pictures
+- [ ] Sign-in: the loopback listener ends the sign-in on a request whose `state` doesn't match (an `?error=` one included), so anything that hits its port can cancel it. It could answer and skip such requests
+- [ ] The macOS sign-in hand-over file: accept it only when fresh and for this build, and have the relaunch helper delete one the new version didn't pick up
+- [ ] Phishing defenses (they show, so mock them up first): attachment chips by the file's extension, with invisible and blank characters taken out of names and the extension always visible; a link's address before it opens; Reply-To in the reader; addresses on recipient chips
+- [ ] Privacy policy: the webview's cache keeps opened emails' remote images and fonts (`~/Library/Caches/<id>`, `~/Library/WebKit/<id>`, `%LOCALAPPDATA%\<id>`), and removing an account doesn't clear it
 
 ## Code quality
 
