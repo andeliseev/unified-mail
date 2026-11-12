@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Removing an account no longer signs it out of Unified Mail on your other computers. To take back the app's access everywhere, use Third-party apps in your Google Account.
+- When a folder or a search can't load, the list now says why, instead of “Inbox zero” or “Nothing matches”.
 - Drafts started on your phone or in Gmail on the web are no longer deleted from Gmail when they look empty here, and what was written under the quote now shows. A reply draft opened while its email is open now saves and stays in its conversation, and changing From while a draft saves no longer leaves it unsaved.
 - Undo after Send now always stops the email, also right after changing From. Replies and forwards no longer carry the original email's style rules, which could change or hide your own text for the recipient.
 - While writing, typing after clicking Attach, a file's ✕ or ··· goes into your text instead of running shortcuts such as E (Archive). Holding E or Delete no longer archives or deletes a run of messages.

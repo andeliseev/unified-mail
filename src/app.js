@@ -166,6 +166,7 @@ const state = {
   lists: { inbox: [], sent: [], drafts: [], all: [], trash: [], search: [] },
   loaded: { inbox: false, sent: false, drafts: false, all: false, trash: false, search: false },  // list filled from cache or a sync
   synced: { inbox: false, sent: false, drafts: false, all: false, trash: false },  // a sync finished this session
+  listErrors: {},  // per folder, the accounts its last sync couldn't load: [{ account, message }]
   // The search, while its field is open: `query` (what the results are for, '' before the first
   // search), `seq` (counts searches, so a late answer is dropped), `done` (the results are in),
   // `timer` (the search waiting for typing to pause), `scroll` (where the folder's list was).
@@ -487,6 +488,7 @@ async function refresh() {
     folders.forEach((folder, i) => {
       applySync(folder, results[i]);
       state.synced[folder] = true;
+      state.listErrors[folder] = results[i].errors;
     });
     notifyNewMail(results[0]);  // folders[0] is the Inbox
     state.lastSync = Date.now();
@@ -500,6 +502,9 @@ async function refresh() {
     const messages = new Set(errors.filter((e) => !e.expired).map((e) => `${e.account}: ${e.message}`));
     if (messages.size && !state.undo) toast([...messages].join('\n'), 8000);
   } catch (e) {
+    for (const folder of folders) state.listErrors[folder] = [{ account: null, message: String(e) }];
+    state.syncing = false;  // first, so an empty list says why rather than "Loading…"
+    render();
     setStatus('');
     toast(String(e));
   } finally {
@@ -837,11 +842,33 @@ function renderList() {
     const noAccounts = state.accounts.length === 0;
     let text;
     if (noAccounts) text = 'Add your Gmail account to get started.';
-    else if (folder === 'search') text = state.search.done ? `Nothing matches “${state.search.query}”.` : 'Searching…';
-    else text = state.syncing && !state.synced[folder] ? 'Loading…' : FOLDERS[folder].empty;
+    else if (folder === 'search') text = !state.search.done ? 'Searching…' : searchFailure() || `Nothing matches “${state.search.query}”.`;
+    else if (state.syncing && !state.synced[folder]) text = 'Loading…';
+    else text = listFailure(folder) || FOLDERS[folder].empty;
     $('#list-empty-text').textContent = text;
     $('#empty-add').hidden = !noAccounts;
   }
+}
+
+/**
+ * Why a folder with nothing to show may still have mail: its last sync couldn't load it, for the
+ * account chosen in the sidebar or for any. Said in place of "Inbox zero".
+ */
+function listFailure(folder) {
+  const failed = (state.listErrors[folder] || []).filter((e) => !e.account || !state.filter || e.account === state.filter);
+  if (!failed.length) return '';
+  const [first] = failed;
+  const others = failed.length > 1 ? ` and ${failed.length - 1} more` : '';
+  return `Couldn't load ${FOLDERS[folder].name}${first.account ? ` for ${first.account}${others}` : ''}: ${first.message}`;
+}
+
+/** Why a search with nothing to show may have missed mail: an account on screen it couldn't search. */
+function searchFailure() {
+  const failed = [...state.search.failed].filter(([account]) => !state.filter || account === state.filter);
+  if (!failed.length) return '';
+  const [[account, error]] = failed;
+  const others = failed.length > 1 ? ` and ${failed.length - 1} more` : '';
+  return `Couldn't search ${account}${others}: ${error}`;
 }
 
 function tag(text, kind = '') {
@@ -988,7 +1015,7 @@ function renderActions() {
 function openSearch() {
   if (!state.accounts.length) return;
   if (!state.search) {
-    state.search = { query: '', seq: 0, done: false, timer: null, scroll: $('#messages').scrollTop };
+    state.search = { query: '', seq: 0, done: false, failed: new Map(), timer: null, scroll: $('#messages').scrollTop };
     $('#search-input').value = '';
     render();
   }
@@ -1032,6 +1059,7 @@ async function runSearch(again = false) {
   const seq = ++search.seq;
   search.query = query;
   search.done = false;
+  search.failed = new Map();  // account → why it couldn't be searched
   clearSearchResults();
   render();
   // An emptied field shows the folder again, where it was.
@@ -1047,6 +1075,7 @@ async function runSearch(again = false) {
   const problems = [];
   for (const { account, page, error } of answers) {
     if (error) {
+      search.failed.set(account, String(error));
       problems.push(`Couldn't search ${account}: ${error}`);
       continue;
     }
@@ -1091,7 +1120,10 @@ function renderSearch() {
   else {
     const count = visible().length;
     const more = accountsWithMore('search').length > 0;
-    text = count ? `${count}${more ? '+' : ''} ${count === 1 && !more ? 'result' : 'results'} ${where}` : `No results ${where}`;
+    const shown = state.filter ? [state.filter] : state.accounts.filter((account) => !state.expired.has(account));
+    const failed = shown.length > 0 && shown.every((account) => search.failed.has(account));
+    text = count ? `${count}${more ? '+' : ''} ${count === 1 && !more ? 'result' : 'results'} ${where}`
+      : failed ? `Couldn't search ${where}` : `No results ${where}`;
   }
   $('#search-scope').textContent = text;
 }

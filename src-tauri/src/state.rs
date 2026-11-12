@@ -415,14 +415,10 @@ impl AppState {
     }
 
     pub fn remove_account(&self, email: &str) -> Result<(), String> {
-        let known = self.refresh_tokens.lock().unwrap().remove(email);
+        // The sign-in is only deleted here, not revoked at Google: Google revokes the app's whole
+        // grant, which would sign the account out of the app on the person's other computers too.
+        self.refresh_tokens.lock().unwrap().remove(email);
         self.unreadable.lock().unwrap().remove(email);
-        // Revoked at Google when this launch has read it. Reading it now could ask for the
-        // keychain password (macOS) while the window waits: this command runs on the main thread.
-        if let Some(refresh_token) = known {
-            let http = self.http.clone();
-            tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
-        }
         if let Err(e) = KEYCHAIN.delete(email) {
             eprintln!("[keychain] {email}: {e}");
         }

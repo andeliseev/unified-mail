@@ -142,6 +142,7 @@ The workflow then:
 
 - The repo is public, so releases are public downloads. The README's Download section links to the latest one.
 - The Windows app isn't code-signed, so Windows shows a SmartScreen warning. The macOS app is signed with a self-signed certificate (see [Mac signing](#mac-signing)) but isn't notarized, so Gatekeeper asks once (System Settings → Privacy & Security → Open Anyway). The release notes explain both.
+- The workflow's actions are pinned to commits, with the tag or branch in a comment: the build job holds the update-signing key, so a tag moved to other code mustn't change what runs there. To update one, look up the commit with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`. The build job's checkout doesn't keep the write token (`persist-credentials: false`); the Prepare job keeps it, since it pushes the version commit.
 - Actions minutes are free for public repos. The universal macOS build compiles the app twice, so it's the slowest job; `rust-cache` makes repeat builds faster.
 
 ## Mac signing

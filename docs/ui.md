@@ -179,6 +179,8 @@ All actions are **optimistic** (`perform`):
 
 A message only joins lists that are already loaded; other lists pick it up at their next sync.
 
+A list with nothing to show says why when loading failed, rather than its empty text ("Inbox zero"): `state.listErrors` keeps each folder's last sync errors (the accounts that failed, or the whole sync), and `listFailure` names the first for the account on screen. A search does the same with `search.failed` (`searchFailure`), and its line above the results says "Couldn't search" when every account on screen failed.
+
 **Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way. If the message was open and is back in the folder on screen, it opens again. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
 
 Actions from the [right-click menu](#right-click-menu) and the [row buttons](#row-buttons) work on that row's message (`act(kind, m)`), even if another message is open. The open message stays open, and Undo doesn't open the row's message. If the row is the open message, the next one opens, as with the reader's buttons.

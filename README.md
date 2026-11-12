@@ -65,11 +65,11 @@ Click **Add account**, choose your Google account in the browser window that ope
 Unified Mail runs entirely on your computer and talks only to Google, plus GitHub to check for updates. There are no servers of ours, no analytics and no tracking.
 
 - **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain. While an update installs on a Mac, they're passed to the new version in a file only your user account can read, which the new version deletes as it starts.
-- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save: they go to your Downloads folder.
+- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save, which go to your Downloads folder. Pictures an email loads from the internet stay in the system web view's cache, as in a browser.
 - **Emails you write** are saved as drafts in the account's Gmail Drafts as you type, and sent from Gmail when you click Send. They're not saved on your computer.
 - **Updates:** when it starts, every few hours, and when you open Settings, the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
 - **Notifications** show the sender and subject of new mail. Windows and macOS keep recent notifications in their notification center until you clear them.
-- **Removing an account** in Settings revokes the app's access at Google and deletes its data from your computer.
+- **Removing an account** in Settings deletes its sign-in and its data from this computer. It stays signed in on your other computers: to take back the app's access everywhere, use [Third-party apps](https://myaccount.google.com/permissions) in your Google Account.
 - **Email content** is shown with scripts and forms blocked, and links open in your browser.
 
 Read the full [privacy policy](https://andeliseev.github.io/unified-mail/privacy.html).

@@ -36,7 +36,7 @@ flowchart LR
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
 | `mime.rs` | Writes the emails the app sends: headers (encoded words for text outside ASCII, nothing a field can turn into a header of its own), quoted-printable text and HTML, base64 files, and the parts they nest in (see [Sending](#sending)) |
 | `files.rs` | Saving attachments: safe file names, never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
-| `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh, revoke |
+| `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
 | `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). Gives saved attachments macOS's quarantine mark (see [ui.md](ui.md#attachments)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
@@ -51,7 +51,7 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `save_client` | `clientId, clientSecret` | Only used when no client is built in |
 | `add_account` | | Email address; runs the browser sign-in and starts push |
 | `reconnect_account` | `email` | Email address; signs in again to an expired account (preselected in Google's chooser), restarts its push. Fails if another account is chosen |
-| `remove_account` | `email` | Stops push, revokes the token, deletes it from the keychain |
+| `remove_account` | `email` | Stops push and deletes the sign-in from the keychain. It doesn't revoke it at Google, which would sign the account out on other computers too (see [auth.md](auth.md#tokens)) |
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `sent`, `drafts`, `all` or `trash`, for instant first paint |
 | `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
 | `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |

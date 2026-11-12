@@ -17,9 +17,9 @@ use crate::state::ClientCreds;
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 /// Full Gmail access: the only scope Gmail accepts for IMAP, which push (IDLE) needs.
-/// The app itself only reads, archives and moves to Trash.
+/// The app itself reads, sends, keeps drafts, archives and moves to Trash; it never deletes mail
+/// for good, except drafts that are discarded or sent.
 const SCOPE: &str = "https://mail.google.com/";
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -95,11 +95,6 @@ pub async fn refresh(http: &reqwest::Client, creds: &ClientCreds, refresh_token:
         ],
     )
     .await
-}
-
-/// Best effort: tells Google to drop this app's access to the account.
-pub async fn revoke(http: &reqwest::Client, token: &str) {
-    let _ = http.post(REVOKE_URL).form(&[("token", token)]).send().await;
 }
 
 async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<Tokens, String> {
