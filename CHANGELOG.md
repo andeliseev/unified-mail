@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.7 (2026-11-12)
+
 - Search all your mail: click the magnifier above the message list, or press / (⌘F on a Mac, Ctrl+F on Windows). It searches every account at once with Gmail's own search, so words like from: and has:attachment work too, and marks the words you searched for. Click an account in the sidebar to see only its results.
 
 ## 0.2.6 (2026-11-11)
