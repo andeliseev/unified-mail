@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.10 (2026-11-12)
+
 ## 0.2.9 (2026-11-12)
 
 - macOS: updates you install from the app no longer ask for your keychain password. The signing in 0.2.6 was meant to do that but didn't. This update still asks one last time for each account: enter your password and click **Always Allow**.
