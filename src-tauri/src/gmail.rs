@@ -1,13 +1,22 @@
 //! Thin client for the Gmail REST API: https://developers.google.com/gmail/api/reference/rest
 
-use reqwest::{header::CONTENT_LENGTH, Client, RequestBuilder, Response};
+use reqwest::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    Client, Method, RequestBuilder, Response,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+/// Where emails are sent, and drafts saved, with their files (`upload`).
+const UPLOAD: &str = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
+/// Pages of 500 drafts read for the Drafts folder's draft ids (`draft_ids`).
+const DRAFT_LIST_PAGES: usize = 4;
 /// For attachments and large bodies, in place of the client's 30 s: Gmail sends them as base64 in
-/// JSON, so a 25 MB attachment is 33 MB, more than a slow connection loads in 30 s.
+/// JSON, so a 25 MB attachment is 33 MB, more than a slow connection loads in 30 s. Sending an
+/// email with its files gets as long.
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// One row of the inbox list. Cached on disk so the app can paint before the first sync.
@@ -18,11 +27,18 @@ pub struct MessageSummary {
     pub id: String,
     pub thread_id: String,
     pub from: String,
+    /// Whom it went to (its To header), which the Sent and Drafts rows show. `None` in summaries
+    /// saved before it was noted; those folders fetch such rows again.
+    #[serde(default)]
+    pub to: Option<String>,
     pub subject: String,
     pub snippet: String,
     /// Milliseconds since the Unix epoch.
     pub date: i64,
     pub unread: bool,
+    /// In the Drafts folder: which Gmail draft it is, to open, save or delete it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
     /// Whether the reader will list files for it (`carries_files`), for the list's paperclip.
     /// `None` until that's known: in lists saved by versions that didn't note it, or by 0.2.4,
     /// which told from the email's type alone (and wrote `hasAttachments`), and when its parts
@@ -34,10 +50,17 @@ pub struct MessageSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FullMessage {
+    pub thread_id: String,
     pub from: String,
     pub to: String,
     pub cc: String,
+    /// Where replies go, when not to the sender.
+    pub reply_to: String,
     pub subject: String,
+    /// Its Message-ID and References headers, which a reply or forward carries on, so it joins
+    /// the conversation.
+    pub message_id: String,
+    pub references: String,
     pub date: i64,
     pub html: Option<Body>,
     pub text: Option<Body>,
@@ -214,7 +237,7 @@ pub fn search_query(typed: &str, before_ms: Option<i64>) -> String {
 pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) -> Result<MessageSummary, String> {
     check_id(id)?;
     let url = format!(
-        "{API}/messages/{id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject\
+        "{API}/messages/{id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject\
          &metadataHeaders=Content-Type&fields=id,threadId,labelIds,snippet,internalDate,payload/headers"
     );
     let raw: RawMessage = get_json(http, token, &url).await?;
@@ -230,11 +253,13 @@ pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) ->
         id: raw.id,
         thread_id: raw.thread_id,
         from: header(&headers, "From"),
+        to: Some(header(&headers, "To")),
         subject: header(&headers, "Subject"),
         snippet: unescape_html(&raw.snippet),
         date: parse_date(raw.internal_date.as_ref()),
         unread: raw.label_ids.iter().any(|l| l == "UNREAD"),
         has_files,
+        draft: None,
     })
 }
 
@@ -303,10 +328,14 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
 
     let h = &payload.headers;
     let message = FullMessage {
+        thread_id: raw.thread_id,
         from: header(h, "From"),
         to: header(h, "To"),
         cc: header(h, "Cc"),
+        reply_to: header(h, "Reply-To"),
         subject: header(h, "Subject"),
+        message_id: header(h, "Message-ID"),
+        references: header(h, "References"),
         date: parse_date(raw.internal_date.as_ref()),
         html,
         text,
@@ -456,6 +485,295 @@ pub async fn get_attachments(
 ) -> Result<Vec<(String, Vec<u8>)>, String> {
     let found = get_parts(http, token, id, parts, arrived).await?;
     found.into_iter().map(|(name, part)| Ok((name, decode_base64url(&part.data)?))).collect()
+}
+
+/// Parts `parts` of message `id` as files to send on (forwarding it, or quoting the pictures it
+/// shows in place): each one's name, type and bytes.
+pub async fn get_files(http: &Client, token: &str, id: &str, parts: &[String]) -> Result<Vec<(String, String, Vec<u8>)>, String> {
+    let found = get_parts(http, token, id, parts, &|_| {}).await?;
+    found.into_iter().map(|(name, part)| Ok((name, part.mime_type, decode_base64url(&part.data)?))).collect()
+}
+
+/// The name Gmail shows with `account`'s address in what it sends (Settings → Accounts → Send mail
+/// as), or None when none is set there. Without it in From, the email would show the address alone.
+pub async fn display_name(http: &Client, token: &str, account: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SendAsList {
+        #[serde(default)]
+        send_as: Vec<SendAs>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SendAs {
+        #[serde(default)]
+        send_as_email: String,
+        #[serde(default)]
+        display_name: String,
+    }
+    let url = format!("{API}/settings/sendAs?fields=sendAs(sendAsEmail,displayName)");
+    let list: SendAsList = get_json(http, token, &url).await?;
+    let name = list.send_as.into_iter().find(|s| s.send_as_email.eq_ignore_ascii_case(account)).map(|s| s.display_name);
+    Ok(name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()))
+}
+
+/// Sends an email (`raw`, from `mime`), in conversation `thread_id` when it answers one. Returns
+/// the sent message's id.
+pub async fn send_email(http: &Client, token: &str, raw: &[u8], thread_id: Option<&str>) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Sent {
+        id: String,
+    }
+    let response = upload(http, token, Method::POST, &format!("{UPLOAD}/messages/send"), thread(thread_id), raw).await?;
+    Ok(parse_json::<Sent>(response).await?.id)
+}
+
+/// A Gmail draft as a save left it: its id stays, its message (`message_id`) is new each time.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedDraft {
+    pub id: String,
+    pub message_id: String,
+    pub thread_id: String,
+}
+
+/// Saves `raw` as a Gmail draft: draft `id` updated, or a new draft. A draft deleted meanwhile
+/// (in Gmail, or sent from there) is saved as a new one.
+pub async fn save_draft(http: &Client, token: &str, id: Option<&str>, raw: &[u8], thread_id: Option<&str>) -> Result<SavedDraft, String> {
+    #[derive(Deserialize)]
+    struct Draft {
+        id: String,
+        #[serde(default)]
+        message: Option<Message>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Message {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        thread_id: String,
+    }
+    let message = thread(thread_id);
+    let updated = match id {
+        Some(id) => {
+            check_draft_id(id)?;
+            let url = format!("{UPLOAD}/drafts/{id}");
+            match upload(http, token, Method::PUT, &url, json!({ "id": id, "message": message }), raw).await {
+                Ok(response) => Some(response),
+                Err(e) if e.starts_with("Gmail error 404") => None,
+                Err(e) => return Err(e),
+            }
+        }
+        None => None,
+    };
+    let response = match updated {
+        Some(response) => response,
+        None => upload(http, token, Method::POST, &format!("{UPLOAD}/drafts"), json!({ "message": message }), raw).await?,
+    };
+    let draft: Draft = parse_json(response).await?;
+    let message = draft.message.unwrap_or(Message { id: String::new(), thread_id: String::new() });
+    Ok(SavedDraft { id: draft.id, message_id: message.id, thread_id: message.thread_id })
+}
+
+/// Sends draft `id` as Gmail keeps it, which moves it to Sent. Returns the sent message's id.
+pub async fn send_draft(http: &Client, token: &str, id: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Sent {
+        id: String,
+    }
+    check_draft_id(id)?;
+    let request = http.post(format!("{API}/drafts/send")).bearer_auth(token).json(&json!({ "id": id })).timeout(DOWNLOAD_TIMEOUT);
+    Ok(parse_json::<Sent>(send(request).await?).await?.id)
+}
+
+/// Deletes draft `id` for good, as discarding a draft in Gmail does. One already gone is fine.
+pub async fn delete_draft(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    check_draft_id(id)?;
+    match send(http.delete(format!("{API}/drafts/{id}")).bearer_auth(token).header(CONTENT_LENGTH, "0")).await {
+        Err(e) if !e.starts_with("Gmail error 404") => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Which draft each draft message is (message id → draft id), for the Drafts folder's rows.
+pub async fn draft_ids(http: &Client, token: &str) -> Result<HashMap<String, String>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct List {
+        #[serde(default)]
+        drafts: Vec<Entry>,
+        #[serde(default)]
+        next_page_token: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        id: String,
+        #[serde(default)]
+        message: Option<Id>,
+    }
+    #[derive(Deserialize)]
+    struct Id {
+        #[serde(default)]
+        id: String,
+    }
+    let mut ids = HashMap::new();
+    let mut page_token: Option<String> = None;
+    for _ in 0..DRAFT_LIST_PAGES {
+        let mut query = vec![("maxResults", "500".to_string()), ("fields", "drafts(id,message/id),nextPageToken".to_string())];
+        if let Some(token) = &page_token {
+            query.push(("pageToken", token.clone()));
+        }
+        let list: List = parse_json(send(http.get(format!("{API}/drafts")).bearer_auth(token).query(&query)).await?).await?;
+        ids.extend(list.drafts.into_iter().filter_map(|d| Some((d.message?.id, d.id))));
+        match list.next_page_token {
+            Some(next) => page_token = Some(next),
+            None => break,
+        }
+    }
+    Ok(ids)
+}
+
+/// A Gmail draft to go on writing: whom it's to, its subject, its text and HTML, its files with
+/// their data, and the email it answers, if any (`AppState::open_draft` finds that one).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedDraft {
+    pub id: String,
+    pub message_id: String,
+    pub thread_id: String,
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub subject: String,
+    pub in_reply_to: String,
+    pub references: String,
+    pub text: Option<Body>,
+    pub html: Option<Body>,
+    pub files: Vec<DraftFile>,
+    pub answered: Option<MessageSummary>,
+}
+
+/// A file in a draft, with its data as base64 (standard, as the page reads picked files).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftFile {
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub content_id: Option<String>,
+    pub data: String,
+}
+
+/// Draft `id`, with its files' data: each save sends them all again, since Gmail keeps no
+/// draft's files between saves.
+pub async fn get_draft(http: &Client, token: &str, id: &str) -> Result<OpenedDraft, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    #[derive(Deserialize)]
+    struct Draft {
+        id: String,
+        message: RawMessage,
+    }
+    check_draft_id(id)?;
+    let draft: Draft = get_json(http, token, &format!("{API}/drafts/{id}?format=full")).await?;
+    let message = draft.message;
+    let payload = message.payload.unwrap_or_default();
+    let (mut html_part, mut text_part) = (None, None);
+    find_bodies(&payload, &mut html_part, &mut text_part);
+    let html = match html_part {
+        Some(part) => Some(load_body(http, token, &message.id, part).await?),
+        None => None,
+    };
+    let text = match text_part {
+        Some(part) => Some(load_body(http, token, &message.id, part).await?),
+        None => None,
+    };
+    let mut parts = Vec::new();
+    find_attachments(&payload, &mut parts);
+    let mut files = Vec::new();
+    for part in parts {
+        let data = decode_base64url(&part_data(http, token, &message.id, part, &|_| {}).await?)?;
+        files.push(DraftFile {
+            name: file_name(part),
+            mime_type: part.mime_type.to_ascii_lowercase(),
+            size: data.len() as u64,
+            content_id: content_id(part),
+            data: STANDARD.encode(&data),
+        });
+    }
+    let h = &payload.headers;
+    Ok(OpenedDraft {
+        id: draft.id,
+        message_id: message.id,
+        thread_id: message.thread_id,
+        to: header(h, "To"),
+        cc: header(h, "Cc"),
+        bcc: header(h, "Bcc"),
+        subject: header(h, "Subject"),
+        in_reply_to: header(h, "In-Reply-To"),
+        references: header(h, "References"),
+        text,
+        html,
+        files,
+        answered: None,
+    })
+}
+
+/// The message in conversation `thread_id` whose Message-ID is `message_id`: the email a draft
+/// answers. Drafts in it are skipped.
+pub async fn find_in_thread(http: &Client, token: &str, thread_id: &str, message_id: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct Thread {
+        #[serde(default)]
+        messages: Vec<RawMessage>,
+    }
+    check_id(thread_id)?;
+    let url = format!(
+        "{API}/threads/{thread_id}?format=metadata&metadataHeaders=Message-ID&fields=messages(id,labelIds,payload/headers)"
+    );
+    let thread: Thread = get_json(http, token, &url).await?;
+    let wanted = message_id.trim();
+    Ok(thread
+        .messages
+        .into_iter()
+        .filter(|m| !m.label_ids.iter().any(|l| l == "DRAFT"))
+        .find(|m| m.payload.as_ref().is_some_and(|p| header(&p.headers, "Message-ID").trim() == wanted))
+        .map(|m| m.id))
+}
+
+/// The metadata part of an upload naming the conversation the email goes in.
+fn thread(thread_id: Option<&str>) -> Value {
+    match thread_id.filter(|id| check_id(id).is_ok()) {
+        Some(id) => json!({ "threadId": id }),
+        None => json!({}),
+    }
+}
+
+/// Sends an email (`raw`, RFC 5322) to Gmail's upload endpoint `url`, with `metadata` (JSON) in
+/// front of it. Uploads take emails up to 35 MB with their files; `raw` in a JSON body would be
+/// base64 again, a third larger. They get the long timeout of downloads.
+async fn upload(http: &Client, token: &str, method: Method, url: &str, metadata: Value, raw: &[u8]) -> Result<Response, String> {
+    let boundary = loop {
+        let boundary = format!("upload_{}", crate::mime::random_hex());
+        if !raw.windows(boundary.len()).any(|w| w == boundary.as_bytes()) {
+            break boundary;
+        }
+    };
+    let mut body = format!(
+        "--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n\
+         --{boundary}\r\nContent-Type: message/rfc822\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(raw);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let request = http
+        .request(method, url)
+        .query(&[("uploadType", "multipart")])
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, format!("multipart/related; boundary={boundary}"))
+        .timeout(DOWNLOAD_TIMEOUT)
+        .body(body);
+    send(request).await
 }
 
 /// Pictures `parts` that message `id` shows in place (`cid:` links), with their data.
@@ -619,6 +937,15 @@ fn check_id(id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Invalid message id: {id}"))
+    }
+}
+
+/// Draft ids (`r-8211…`) go into URL paths too.
+fn check_draft_id(id: &str) -> Result<(), String> {
+    if !id.is_empty() && id.len() < 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        Ok(())
+    } else {
+        Err(format!("Invalid draft id: {id}"))
     }
 }
 
@@ -902,6 +1229,16 @@ mod tests {
         assert!(check_id("18c2f0a9b3e4d5f6").is_ok());
         assert!(check_id("../profile").is_err());
         assert!(check_id("").is_err());
+        assert!(check_draft_id("r-8211374409212364512").is_ok());
+        assert!(check_draft_id("r-82/../send").is_err());
+        assert!(check_draft_id("").is_err());
+    }
+
+    #[test]
+    fn uploads_name_the_conversation() {
+        assert_eq!(thread(Some("18c2f0a9b3e4d5f6")), json!({ "threadId": "18c2f0a9b3e4d5f6" }));
+        assert_eq!(thread(Some("../x")), json!({}));
+        assert_eq!(thread(None), json!({}));
     }
 
     /// Talks to the real gmail.googleapis.com: run with `cargo test -- --ignored`. Gmail's own

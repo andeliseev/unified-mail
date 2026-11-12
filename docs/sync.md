@@ -4,15 +4,21 @@ Push tells the app *when* something changed. Sync, via the Gmail REST API, fetch
 
 ## Folders
 
-The app shows three folders (`Folder` in `state.rs`), each unified across accounts:
+The app shows five folders (`Folder` in `state.rs`), each unified across accounts:
 
 | Folder | Gmail list query | Unread query |
 | --- | --- | --- |
 | `inbox` | `labelIds=INBOX` | `labelIds=INBOX&labelIds=UNREAD` |
-| `all` (All Mail) | no label: everything outside Spam and Trash | `labelIds=UNREAD` |
+| `sent` | `labelIds=SENT` | `labelIds=SENT&labelIds=UNREAD` |
+| `drafts` | `labelIds=DRAFT`, plus `drafts.list` for the draft ids (below) | none: drafts are never unread |
+| `all` (All Mail) | no label, `q=-in:drafts`: everything outside Spam and Trash, without drafts | `labelIds=UNREAD&q=-in:drafts` |
 | `trash` | `labelIds=TRASH&includeSpamTrash=true` | `labelIds=TRASH&labelIds=UNREAD&includeSpamTrash=true` |
 
 Each folder has its own cache (`<folder>-cache.json`). A message's summary doesn't depend on the folder, so a message already known from another folder isn't fetched again. The UI syncs the Inbox, which drives the unread counts, plus the folder on screen.
+
+- **Sent and Drafts** rows show whom a message went to, so summaries carry its To header (`to`). Summaries saved before that was noted have none, and those two folders fetch such rows again (`Folder::shows_recipients`); other folders keep using them.
+- **Drafts:** a Gmail draft keeps its id while every save gives it a new message, so the Drafts folder's rows also carry their draft id (`draft`), from `drafts.list` (`gmail::draft_ids`: message id → draft id, 500 per page, four pages at most). Opening, saving and deleting go by that id (see [ui.md](ui.md#writing)).
+- **All Mail leaves drafts out**, as Gmail's own All Mail does: a draft is a message, and one being written is saved again and again. Searches are of All Mail, so they leave drafts out too. Gmail's `-in:drafts` does this (`Folder::query`); were Gmail not to know the word, it would leave nothing out instead of failing.
 
 ## Sync (`AppState::refresh`)
 
@@ -23,7 +29,7 @@ All accounts sync one folder in parallel (`join_all`). For each account:
    - its unread query, newest 50
 
    Any unread message among the newest 50 of a folder is also among its newest 50 unread messages. So the second call is enough to keep read state accurate for everything shown, without re-fetching metadata.
-2. Ids already in any folder's cache reuse that summary. Only new ids get a `format=metadata` request (From, Subject, Content-Type, snippet, date), `FETCH_CONCURRENCY` (8) at a time.
+2. Ids already in any folder's cache reuse that summary. Only new ids get a `format=metadata` request (From, To, Subject, Content-Type, snippet, date), `FETCH_CONCURRENCY` (8) at a time.
 
    The list's paperclip (`hasFiles`) says whether the reader will list files for the message. Only `multipart/mixed` email can have them (`gmail::may_carry_files`): mail attaches files there, while pictures shown in the text come in `multipart/related`, which the reader doesn't list as files either. Not all of it has files, though: Steam's emails are `multipart/mixed` with none, and a mailing list adds its footer as a part of its own. So a `multipart/mixed` message gets a second request, for its parts' types, names and headers without their content (`get_outline`, `OUTLINE_FIELDS`, five levels deep), and `carries_files` looks for a part the reader would list: one with a file name, or a picture with a Content-ID, unless the text shows that picture in place. Without the text, its headers tell: pictures shown in place aren't marked `Content-Disposition: attachment`, while pictures sent as files are (Gmail gives those a Content-ID too), and an email without an HTML body shows nothing in place. Gmail's `has:attachment` search would count signature logos too, and might not have indexed mail that just arrived. If the second request fails, the flag stays `None`: the message still shows, and is fetched again at the next sync. Summaries saved before the flag, or by 0.2.4, which went by the type alone and wrote it as `hasAttachments`, are fetched again once.
 3. The account's entries in that folder's cache are replaced with exactly its current contents. This also drops messages moved elsewhere.
@@ -59,7 +65,7 @@ Read state changes through `set_unread`, which removes or adds the `UNREAD` labe
 | Action | Gmail calls | Undo |
 | --- | --- | --- |
 | Archive | `modify` remove `INBOX` | `restore_message(fromTrash: false, toInbox: true)`: add `INBOX` |
-| Delete | `minimal` get of `labelIds`, then `trash` | `restore_message(fromTrash: true, toInbox: wasInInbox)` |
+| Delete | `minimal` get of `labelIds`, then `trash` | `restore_message(fromTrash: true, toInbox: wasInInbox)`; back in Sent too when `wasSent` |
 | Move to Inbox (in Trash) | `untrash`, then `modify` add `INBOX` | `trash` |
 | Move to Inbox (archived, in All Mail) | `modify` add `INBOX` | Archive |
 
@@ -92,7 +98,7 @@ The app's own actions (archive, delete, mark read or unread) also produce IDLE l
 - Safety net: sync every `AUTO_REFRESH_MS` (5 min) while the window is visible, and on window focus if the last sync was more than 30 s ago.
 - A sync requested while another is running is queued, never dropped. This matters right after adding an account.
 - Moves Gmail hasn't confirmed yet are kept in `state.pending` and re-applied to sync results (`setList`), so a message can't flash back into the folder it just left. Read/unread changes do the same through `state.pendingRead`.
-- Push only watches the Inbox. All Mail and Trash also update on every push (the folder on screen syncs with the Inbox), on the 5-minute timer, and when you open them.
+- Push only watches the Inbox. Sent, Drafts, All Mail and Trash also update on every push (the folder on screen syncs with the Inbox), on the 5-minute timer, and when you open them. Sending syncs too, and the Drafts folder's rows follow what's saved, sent and discarded here at once. The Drafts count comes from the folder's cache until it's opened, so a draft started on a phone counts once Drafts has synced.
 
 ## Tunables
 

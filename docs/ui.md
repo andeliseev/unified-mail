@@ -10,7 +10,7 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 ## Layout
 
-`#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, the email iframe for the message.
+`#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, and for the message `#m-scroll`, which holds its header, the email and the reply under it (see [One scroll](#one-scroll)).
 
 The columns are `230px minmax(250px, var(--list-width, 400px)) minmax(400px, 1fr)`:
 - **The list is as wide as it was dragged.** `#list-resize`, an 8px strip over its right border, drags it between `LIST_MIN` (250) and `LIST_MAX` (600) px (`initListResize`), never squeezing the reader below `READER_MIN`, so the saved width is the one seen. It's saved with `set_list_width` in `settings.json` and applied at launch. A double-click goes back to the default, 400px.
@@ -23,7 +23,7 @@ The window has no grey system title bar, so the icon and name appear once, at th
 
 `initTitleBar` (when the user agent says Windows or Macintosh):
 - adds `own-title-bar` to `<html>`; on Windows it shows `#window-bar`, a 32 px strip at the top of the reader that holds the window buttons;
-- makes the sidebar's brand, the list header and the strip above the message drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). That strip is `#window-bar` on Windows and the message's own button row (`.msg-actions`) on macOS. Dragging is the system's own, so on Windows dragging to a screen edge snaps. A double-click maximizes or restores; on macOS it zooms, on mouse-up, as the system does.
+- makes the sidebar's brand, the list header and the strip above the message drag areas (`data-tauri-drag-region="deep"`: anywhere inside drags, except on buttons). That strip is `#window-bar` on Windows and the message's own button row (`.msg-actions`, a new message's too) on macOS. Dragging is the system's own, so on Windows dragging to a screen edge snaps. A double-click maximizes or restores; on macOS it zooms, on mouse-up, as the system does.
 
 **Windows:**
 - `main.rs` builds the window with `decorations(false)`. Tauri still resizes it from the edges (its undecorated-resize handler), keeps the shadow, and on Windows 11 the rounded corners.
@@ -36,7 +36,7 @@ Not available without the system title bar: the Snap Layouts flyout when hoverin
 
 **macOS:**
 - `main.rs` keeps the system's window buttons but makes the title bar see-through over the page (`TitleBarStyle::Overlay`) and hides its title. The window keeps the title for Mission Control, the Window menu and VoiceOver.
-- One line runs 26 px down the top of the window: the window buttons, the list header's row (its 28 px start 12 px down) and the message's buttons (`.mac .msg-head` pads them 10 px down; there's no `#window-bar` above them). `traffic_light_position(18, 28)` puts the window buttons on it, over the sidebar, the close button starting 18 px in: AppKit puts them 9 px above the bottom of a title bar as tall as they are (14 px) plus the inset, so their center is the inset minus 2. Measured in the app; the inset of 18 used before left them centered 16 px down, above the line. `.mac .brand` pads the brand 13 px below them (46 px). Its icon's blue square starts 14 px in, a little left of the close button (`.brand` pads the 28 px icon 2 px in, and the square starts 2/24 into it).
+- One line runs 26 px down the top of the window: the window buttons, the list header's row (its 28 px start 12 px down) and the message's buttons (`.mac .msg-actions` pads them 10 px down; there's no `#window-bar` above them). `traffic_light_position(18, 28)` puts the window buttons on it, over the sidebar, the close button starting 18 px in: AppKit puts them 9 px above the bottom of a title bar as tall as they are (14 px) plus the inset, so their center is the inset minus 2. Measured in the app; the inset of 18 used before left them centered 16 px down, above the line. `.mac .brand` pads the brand 13 px below them (46 px). Its icon's blue square starts 14 px in, a little left of the close button (`.brand` pads the 28 px icon 2 px in, and the square starts 2/24 into it).
 - The see-through title bar is as tall as that (42 px), over the top of the page, and clicks under it reach the page: the message's buttons and the list's refresh button work in their top half too (checked in a WebKit window set up like the app's).
 - `accept_first_mouse(true)`: the drag areas are in the page, so the first click on an inactive window has to reach the page for the window to drag at once, as with a system title bar. Other first clicks act at once too, as on Windows: clicking a message in an inactive window opens it.
 - In full screen the system hides the buttons, so the brand moves up into their room, as on Windows (`.mac.full-screen .brand`). `on_event` passes every resize to `macos::on_resized`, which reads the window's style mask in AppKit and sends `full-screen` (`true` or `false`) when it changes; `initTitleBar` sets `full-screen` on `<html>` from it. The mask changes as soon as the switch starts, with its first resize. Tauri's `isFullscreen` keeps saying full screen until the animation leaving it ends, about 0.6 s later, so it isn't used on resize; a page that loads in full screen asks it once.
@@ -54,9 +54,9 @@ On Windows closing the window quits the app.
 
 ## State and rendering
 
-There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first) plus the search's results (`state.lists.search`, see [Search](#search)), the folder chosen in the sidebar, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.
+There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first) plus the search's results (`state.lists.search`, see [Search](#search)), the folder chosen in the sidebar, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, the messages being written (`drafts`, `composing`, `replies`, see [Writing](#writing)), and sync flags.
 
-The sidebar lists the folders, then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail.
+The sidebar lists the folders (Inbox, Sent, Drafts, All Mail, Trash), then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail; Drafts shows how many drafts there are. Sent rows show whom each email went to ("To: Anna Petrova"), from its To header (`recipientNames`).
 
 Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their parts from `state`, using a `DocumentFragment` for the list. That's fast at this size (a few hundred rows). Untrusted text (sender, subject, snippet) is always set with `textContent`, never `innerHTML`. Each account gets a color from `PALETTE` by its position in the account list; the color is used for the row stripe, sidebar dot and chip.
 
@@ -67,6 +67,15 @@ Dates are formatted in English (`en-US`), like the rest of the UI. The system's 
 ## Reading a message
 
 `select(key)` shows the headers right away from the summary, then calls `get_message`. A sequence counter (`openSeq`) discards answers that arrive after the user has already moved to another message. Once the body is shown, an unread message is marked read (see [Read and unread](#read-and-unread)).
+
+### One scroll
+
+The message's buttons (`.msg-actions`: Archive, Delete…) stay at the top. Under them `#m-scroll` scrolls the rest as one page, as on the Gmail website: the subject and sender, the attachments, the email, and at its end Reply / Reply all / Forward or the reply being written (`#m-end`, see [Writing](#writing)). So the whole email stays readable above a reply.
+
+- **The frame is as tall as the email** (`fitHeight`). An email's height can't be read in a frame taller than it: `scrollHeight` is then the frame's. So the frame is squeezed to nothing, measured and set again in one go, before anything is drawn, and the reader keeps its scroll position. That runs with every fit (`fitToFrame`: once the email is parsed, as images arrive on Windows, at the frame's `load`, and when the reader's width changes).
+- **Pictures arriving** make an email taller, and on macOS their `load` events don't reach the page (see [Sandbox](#sandbox)). `watchHeight` checks every 250 ms until a second after the frame's `load` (30 s at most) and grows the frame when the email overflows it, which needs no squeeze.
+- A sideways scroll bar, on an email too wide to shrink, takes room at the frame's bottom; the height includes it.
+- **Keys:** `Space`, `PageUp`/`PageDown`, the arrows and `Home`/`End` in the email scroll the reader (`scrollMessage`), since the frame has nothing to scroll and Chromium doesn't pass a frame's key scrolling on to the page around it (checked in the browser pane). On macOS WebKit gets the key as well (`email-key`, see [Sandbox](#sandbox)); it may scroll the reader itself, so `scrollMessage` only scrolls if the reader hasn't moved 80 ms later. Outside the email, `Space` and `PageUp`/`PageDown` scroll the reader too, and the arrows go through the list.
 
 ### Bodies and charsets
 
@@ -90,7 +99,7 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
   - The image `load` listener doesn't fire either, so on macOS a wide image that arrives late refits the email only at the frame's `load`.
 - `srcdoc` frames inherit the page's CSP (`tauri.conf.json`): images from `https:`/`http:`/`data:` are allowed and inline styles too. Tauri is told not to add nonces to `style-src` (`dangerousDisableAssetCspModification`), because a nonce would switch off `'unsafe-inline'`.
 - In light mode the frame is white, as emails expect. In dark mode see [Dark mode for emails](#dark-mode-for-emails).
-- Some emails set `overflow: hidden` on `html` or `body`, which would make them impossible to scroll. The frame CSS forces `:root { overflow: auto !important }` and `:root > body { overflow: visible !important }`. `:root` outranks the emails' `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
+- The frame is as tall as the email and doesn't scroll up and down itself; the reader does (see [One scroll](#one-scroll)). The frame CSS sets `:root { overflow-x: auto !important; overflow-y: hidden !important }` and `:root > body { overflow: visible !important }`, so an email too wide to shrink still scrolls sideways. Some emails set `overflow` on `html` or `body`; `:root` outranks their `html`/`body` selectors, so this wins even against their `!important`. Only an inline `style="...!important"` on the email's `<body>` could still override it.
 - **Wide emails are scaled to fit.** Newsletters and receipts are often laid out at a fixed 600–700 px, wider than the reader at the default window size (about 610 px). Instead of cutting them off with a sideways scroll bar, `fitToFrame` measures the email and sets CSS `zoom` on its `<body>` to fit, as Apple Mail and Outlook do. It never goes below `MIN_EMAIL_ZOOM` (0.6), so text stays readable; anything wider than that scrolls. It runs:
   - once the email is parsed;
   - again after each image arrives, since an image can widen the layout (`load` captured on the document, coalesced by `scheduleFit`);
@@ -153,6 +162,8 @@ Which actions an open message offers depends on the folder, and in All Mail on w
 | Inbox | Archive, Delete |
 | All Mail, message in the Inbox (shown with an **Inbox** tag) | Archive, Delete |
 | All Mail, archived message | Move to Inbox, Delete |
+| Sent | Delete |
+| Drafts | None: a click opens the draft to write (see [Writing](#writing)) |
 | Trash | Move to Inbox |
 
 Whether an All Mail message is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox. Older All Mail pages loaded by scrolling report their Inbox messages themselves (`inboxExtra`, see [Older mail](#older-mail)).
@@ -194,6 +205,8 @@ Right-click shows the app's own menu (`onContextMenu`, `#menu`). The webview's m
 | Where | Items |
 | --- | --- |
 | Message row | Mark as read / unread, then the folder's actions (as in [Actions](#actions)). The row is outlined while the menu is open |
+| A draft written here (its row) | Open draft, Discard draft |
+| One of Gmail's drafts in the Drafts folder | Open draft |
 | Link in an email | Open link (`open_external`), Copy link |
 | Selected text (email or app) | Copy |
 | Text fields | The system's own Cut/Copy/Paste menu, as in every app |
@@ -228,6 +241,47 @@ The magnifier in the list's header, `/`, or `Cmd+F` (`Ctrl+F` on Windows) opens 
 - **Closing** (Esc, the ×, or a folder in the sidebar) shows the folder again, scrolled where it was. A result open in the reader that isn't in the folder closes with it.
 - On macOS the list header is a window drag area. The field is left out of it (`data-tauri-drag-region="false"`), so a click on its icon or edge reaches the field instead of moving the window.
 
+## Writing
+
+A pencil in the list's header (or `C`) writes a **new message**, and Reply / Reply all / Forward **answer** the open email. Picked in mockups on 2026-11-12: a new message in the reader, an answer under its email.
+
+**A new message** (`openCompose`, `#compose`) takes the reader's place. Its button row, where the email's sits, has Send, Attach and Discard. Under it:
+- **From**: the account, with its color and a menu of the others. It starts as the account chosen in the sidebar, else the one last sent from (`state.lastFrom`, for as long as the app runs), else the first.
+- **To**, then Cc and Bcc once `Cc Bcc` is clicked, **Subject**, the files, and the text.
+- While it's written it's a row at the top of the list (`draftRow`): a red **Draft** tag, whom it's to, its subject and its start, in the From account's color. It stays at the top of every folder and of search results. Opening another email leaves it there, and a click on the row (or the pencil, or `C`) brings it back. Leaving one with nothing in it at all drops it. `Esc` leaves it too.
+- `state.drafts` holds new messages written or opened here, newest first. The pencil brings back the newest; Undo, a failed send, or opening one from Drafts can add others.
+
+**Answering** (`startReply`): the buttons at the end of the email, the Reply arrow and the ⋮ menu next to its date, or `R` / `A` / `F`. They wait for the email to load, since the answer quotes it. The answer opens under the email (`replyBox`, in `#m-end`), and the reader scrolls down to it:
+- First the kind of answer, its icon with a ▾ menu to switch; switching keeps the text. Then the recipients, `Cc Bcc`, the files, and the text, which grows as it's written (`growText`) while the reader follows the cursor down. `···` shows the email as the answer quotes it. The footer has Send, attach, `···`, the account it goes from (the one the email came to, not a menu), and discard.
+- **Recipients** (`setKind`): Reply goes to the sender, or to Reply-To when the email has one. Reply all adds the email's To and Cc. Answering one's own email goes to whom it went to, as Gmail does. The account itself is never a recipient. Forward starts with none, and with the email's files as chips; any can be taken off. The subject gets `Re:` or `Fwd:` unless it has one.
+- An answer waits in `state.replies`, by its email's key, and the email's row shows a red **Draft** tag. Opening another email drops an answer with nothing written in it.
+
+**Fields** (`recipientRow`): each recipient is a chip, its name shown and its address under the mouse. Enter, a comma or a semicolon turns what's typed into chips, and so does leaving the field or sending. Pasting a list adds each address (`parseAddresses`, which reads `Name <a@b.c>`, quoted names and lists as headers write them). Backspace in the empty field removes the last chip. A chip that isn't an email address (`isAddress`, the same rule as `check_address` in `mime.rs`) is red, and sending names it.
+
+**Files:** Attach opens the system's file picker (a hidden `<input type="file">`; WebView2 has it, and wry gives WKWebView one). Files are read as base64 (`FileReader`) and listed as chips with a cross. Up to 25 MB in all (`MAX_ATTACHMENTS`), counting a forward's files and the quoted email's pictures, as Gmail allows; a file that doesn't fit is named in a toast.
+
+**Sending** (`sendDraft`, Send or `Cmd+Enter` / `Ctrl+Enter`):
+1. What's typed in the recipient fields becomes chips, and `draftProblem` checks there's someone to send it to, every address looks right, and the account is there and signed in. A problem shows as a toast, and nothing is sent.
+2. The message leaves the screen. The toast says "Sent from <account>" with **Undo** for 8 s (`UNDO_MS`), which `Z` presses too.
+3. `send_message` waits `UNDO_MS` plus a second (`SEND_GRACE_MS`), so an Undo clicked at the last moment still arrives. Undo calls `cancel_send`, and the message comes back as it was. If the app quits meanwhile, it's sent right away (see [architecture.md](architecture.md#sending)).
+4. Once Gmail has it, the app syncs, so it shows in Sent. If sending fails, the message comes back with the reason in a toast.
+5. A message saved as a Gmail draft (below) goes as that draft: any save on its way finishes first, then `send_message` gets `draftId`, saves it once more with what was last written and sends it with `drafts.send`, which moves it to Sent. Meanwhile the Drafts folder leaves it out (`state.sending`). Undo clicked before `send_message` has started just brings it back.
+
+**What's sent** (`outgoing`): a new message is plain text. An answer also has HTML, like Gmail's: the text, then the email answered in its own formatting (`emailHtml`, its styles going into the new email's head), in a quote (`On <date>, <sender> wrote:`) or under a "Forwarded message" header. The pictures it shows in place (`full.inline`) go along with their Content-IDs, and so do a forward's files: Rust fetches them from Gmail (`parts`). The plain text quotes the email as text (`htmlToText` for HTML emails), with `>` before each line. Answers carry the email's Message-ID and References and go in its conversation (`threadId`), so they thread in Gmail and elsewhere.
+
+**Discard** takes the message away and deletes its Gmail draft, with Undo in the toast too, which saves it as a new draft.
+
+### Drafts in Gmail
+
+What's written is saved in the account's Gmail Drafts, as Gmail does, so a draft is also in Gmail on the web and on a phone, and drafts started there can be finished here. Picked as option G in mockups on 2026-11-12, over keeping drafts on this computer.
+
+- **When** (`draftChanged`, `saveDraft`): `DRAFT_SAVE_MS` (2 s) after typing stops, and at once when the message is left (another email, `Esc`, the pencil) or the window goes behind another or is hidden (`saveAllDrafts`). Nothing is saved before something is written. A draft carrying more than `BIG_DRAFT` (5 MB) of files waits `BIG_DRAFT_SAVE_MS` (a minute) instead, or until it's left: Gmail keeps no draft's files between saves, so every save sends them all again. Quitting in the 2 s after typing loses those last words, since the page can't save as it closes.
+- **How** (`save_draft`): the first save creates a Gmail draft (`gmailId`, in `gmailAccount`), later ones update it. Saves run one after another (`draft.saving`, a promise chain), so a draft is never created twice, and each sends what's written when it starts. The email is written as for sending (`outgoing`): an answer with its quote, the quoted email's pictures and its threading, so the draft is complete in Gmail too. Recipients still being typed are left out if they'd break a header (`mime::Email::write`). A draft whose From changed is deleted from the other account and made anew. A failed save shows **Not saved** (its title says why) and tries again after `DRAFT_RETRY_MS` (30 s).
+- **What the editor says** (`renderSaveState`): "Saving…", then "Saved to Gmail" in a new message's button row, or "Saved" in an answer's footer.
+- **The Drafts folder** lists the drafts written here first (with what's written now), then Gmail's others (`gmailDraftRow`, rows of the `drafts` folder, which carry their draft id), leaving out the ones written or being sent here. Its count in the sidebar adds up both. The account chosen in the sidebar narrows it as in other folders. `J`/`K` don't walk through it.
+- **Opening one of Gmail's drafts** (`openGmailDraft`, `open_draft`): Rust returns its recipients, subject, text and HTML, its files with their data (each save sends them again), and the email it answers, found in its conversation by its In-Reply-To (`gmail::find_in_thread`). An answer opens under that email (`select` with the email's summary, since it isn't in the Drafts list), and the email's full text arrives with it for the quote. Its text is what was written above the quote (`typedText`: cut at "On …, … wrote:" or "Forwarded message" in the plain text, or `.gmail_quote` removed from the HTML), and the pictures of its quote are left out, since saving makes the quote again. Anything else opens in the editor, keeping its threading (`thread`) when the email it answered isn't found. A draft already open here isn't opened twice.
+- Formatting from Gmail (bold, links, pasted pictures) doesn't survive the plain-text editor: pictures become attachments, and the rest is plain text once the draft is saved here.
+
 ## Keyboard
 
 | Key | Action |
@@ -238,15 +292,18 @@ The magnifier in the list's header, `/`, or `Cmd+F` (`Ctrl+F` on Windows) opens 
 | `E` | Archive (Inbox only) |
 | `#` / `Delete` | Delete, i.e. move to Trash (Inbox and All Mail) |
 | `Shift+U` / `Shift+I` | Mark as unread / read |
-| `Z` | Undo the last action, while its toast shows |
+| `Z` | Undo the last action, while its toast shows (also Send and Discard) |
 | `/`, `Cmd+F` (`Ctrl+F` on Windows) | Search (see [Search](#search)) |
-| `Esc` | Close Settings, the right-click menu or the search |
+| `C` | New message (see [Writing](#writing)) |
+| `R` / `A` / `F` | Reply / Reply all / Forward the open message |
+| `Cmd+Enter` (`Ctrl+Enter` on Windows) | Send, while writing |
+| `Esc` | Close Settings, the right-click menu or the search. While writing: leave a new message (it waits in the list), or leave the reply's field |
 
 The Delete button's tooltip names `Del`, which everyone has; `#` is Gmail's key for it, kept for Gmail habits.
 
 Shortcuts work in any keyboard layout (`shortcutKey`). With a Latin layout they go by the character typed (`e.key`), so Dvorak and AZERTY users get their own `J`, `K`, `E`. With any other layout, such as Russian, the letters type something else (`J` is `о`), so they go by the key's position (`e.code`, `KeyJ`), and `Shift+3` (Russian `№`) counts as `#`. `Cmd+F` / `Ctrl+F` follows the same rule. `/` goes by the character typed in every layout, since the key that types it differs between layouts; there's always `Cmd+F` / `Ctrl+F`.
 
-The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z`, `/` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
+The same handler is attached inside the email iframe (`onKey(e, true)`), so the shortcuts keep working after clicking into a message. Inside the message the arrows scroll it instead of changing it, and `Space`, `PageDown` and the arrows scroll the reader around the email (see [One scroll](#one-scroll)). Shortcuts don't act while typing in a field, so writing a message types its letters.
 
 ## Notifications and the icon badge
 

@@ -10,13 +10,16 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. A local build isn't quarantined, so it never shows that prompt
-- [ ] Search against real Gmail: Gmail's search words, `before:` paging of the results, the Inbox tags, and how fast the first search is. So far a unit test and a fake backend only
+- [ ] Sending against real Gmail: so far unit tests of the email `mime.rs` writes and a fake backend. To check with a test account: the upload endpoint with `threadId`; answers threading in Gmail and in another mail app; From with the Send-as name, and without one; Bcc kept from what recipients get; names and subjects outside ASCII; a 20 MB attachment; a forward's files and the quoted email's pictures; Undo, and quitting during the Undo time (`Cmd+Q`, closing the window on Windows)
+- [ ] Drafts against real Gmail: creating and updating through the upload endpoint (`PUT …/drafts/{id}`), `drafts.send`, a draft opened here from one made in Gmail on the web (text above the quote, its answered email found by In-Reply-To), Sent and Drafts rows with their To, and whether `-in:drafts` keeps drafts out of All Mail and search
+- [ ] macOS: scrolling the reader with `Space`, `PageDown` and the arrows after clicking into the email. `scrollMessage` scrolls only if WebKit didn't (80 ms later); Chromium was checked in the browser pane, WebKit not yet. Also wheel and trackpad scrolling over the email, now that the frame itself doesn't scroll
+- [ ] Windows: the file picker (`<input type="file">`) in WebView2, and `Ctrl+Enter`
 - [ ] The Release workflow's Mac signing (rcodesign through the `codesign` stand-in) hasn't run on GitHub yet (see [development.md](development.md#mac-signing)). Checked locally with rcodesign 0.29.0: test apps signed as Tauri signs verify on a Mac that doesn't trust the certificate, and a second build read the first one's keychain item without a prompt. Not checked: the download and the stand-in on the runner, the real app, and a real update
 
 ## Gaps in current features
 
 - [ ] Push only watches the Inbox; All Mail and Trash refresh with it, on focus and every 5 min
-- [ ] More folders: Sent, Starred, Spam, user labels
+- [ ] More folders: Starred, Spam, user labels
 - [ ] Reconnect against a real expired sign-in (checked with a fake backend only so far). One way: remove the app's access at myaccount.google.com/permissions for a test account
 - [ ] An account whose sign-in expires mid-session shows Reconnect only after the next sync; opening a message from it before that shows the error as a toast
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
@@ -45,7 +48,13 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS: once the window is closed, only the Dock icon or a notification brings it back. A Window menu item for it, like Mail's Window → Message Viewer, would add a keyboard way
 - [ ] Star, move to label
 - [ ] **App language** setting (e.g. Russian). The UI is English only. Dates are English too ("Nov 4"), with the system's clock style (24-hour or AM/PM); with a language setting they'd follow the chosen language. Text fields keep the system's own right-click menu, so on a Russian system that shows in Russian
-- [ ] Reply / compose / send (Gmail API `messages.send`; the app's Google permission already allows it). First mockups were shown on 2026-11-12, each in the reader, in a panel at the bottom right, or in its own window, with a From menu and Reply / Reply all / Forward under the email. They need another round before building. The privacy policy says the app doesn't send email, so it changes with this
+- [ ] Drafts: quitting within 2 s of typing loses those last words, since the page can't save as it closes. Rust could ask the page for its drafts on `ExitRequested` (Windows), but `Cmd+Q` doesn't raise it
+- [ ] Drafts with more than 5 MB of files save only after a minute without typing, or when left, since every save uploads the files again (Gmail keeps no draft's files between saves). Uploading the files once, as a draft, and the text in later saves isn't possible with the API
+- [ ] A Gmail draft opened here loses its formatting (bold, links), and its pasted pictures become attachments, once it's saved again: the editor is plain text
+- [ ] The Drafts count comes from the folder's cache until Drafts is opened, so drafts started on a phone count only after that; and only the newest 50 per account count
+- [ ] Writing: suggest addresses while typing (senders in the loaded lists, or Gmail's contacts, which needs another permission); the Gmail signature (`sendAs.signature`); drag and drop files (Tauri takes file drops before the page, as `tauri://drag-drop` events with paths); pictures pasted into the text; bold, links and other formatting
+- [ ] A conversation view would show answers under their email, and drafts under the email they answer, as Gmail does
+- [ ] Sending from another Send-as address of the account
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of two lists
 
 ## Yandex Mail accounts

@@ -4,6 +4,14 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Write emails: click the pencil above the message list, or press C. The new message opens where you read mail, from the account chosen in the sidebar (From picks another), and waits as a Draft at the top of the list while you read other mail. Click it to go back.
+- Reply, Reply all and Forward: the buttons at the end of each email, the arrow and ⋮ next to its date, or R, A and F. You write your answer under the email, which stays whole above it, and its row shows a Draft tag until you send. Forwarding sends the email's files along; take off any you don't want.
+- Attach files with Attach, up to 25 MB as in Gmail. Send with the button, or ⌘Enter on a Mac (Ctrl+Enter on Windows). For 8 seconds Undo brings the message back unsent, and if you quit the app meanwhile, it's sent right away. Discard has Undo too.
+- The email you read now scrolls in one piece with its subject and sender, while Archive, Delete and the other buttons stay at the top. Space, Page Up and Page Down scroll it, also after you click into the email.
+- A Sent folder shows the mail you've sent from all your accounts, with whom each email went to.
+- Drafts are saved to each account's Gmail Drafts a moment after you stop typing ("Saved to Gmail"), so quitting the app doesn't lose them, and they're in Gmail on the web and your phone too. A Drafts folder lists them all, including drafts you started elsewhere: click one to go on writing. A reply's draft opens under its email.
+- All Mail and search no longer list drafts, as in Gmail.
+
 ## 0.2.7 (2026-11-12)
 
 - Search all your mail: click the magnifier above the message list, or press / (⌘F on a Mac, Ctrl+F on Windows). It searches every account at once with Gmail's own search, so words like from: and has:attachment work too, and marks the words you searched for. Click an account in the sidebar to see only its results.

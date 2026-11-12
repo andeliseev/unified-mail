@@ -12,8 +12,12 @@ const AUTO_REFRESH_MS = 5 * 60 * 1000;
 // Gmail often sends several push lines per change; sync once for the burst.
 const PUSH_DEBOUNCE_MS = 300;
 const REFRESH_ON_FOCUS_AFTER_MS = 30 * 1000;
-// How long Undo stays available after an action.
+// How long Undo stays available after an action. A sent email waits this long before it goes
+// (send_message), plus SEND_GRACE_MS, so an Undo clicked at the last moment still arrives in time.
 const UNDO_MS = 8000;
+const SEND_GRACE_MS = 1000;
+// Gmail sends up to 25 MB of attachments with an email (mime.rs checks it again).
+const MAX_ATTACHMENTS = 25 * 1024 * 1024;
 // More new messages at once than this get one summary notification instead.
 const MAX_NOTIFICATIONS = 3;
 // How often to ask GitHub for a newer release while the app runs; opening Settings always asks too.
@@ -34,9 +38,10 @@ const FRAME_CSS = `
   img { max-width: 100%; height: auto; }
   pre.plain { white-space: pre-wrap; font: inherit; margin: 0; padding: 8px 16px 12px; }
   a { color: #1a5fd6; }
-  /* Some emails set overflow: hidden on html/body, which would make them unscrollable.
-     :root outranks the emails' html/body selectors, so this wins even against !important. */
-  :root { overflow: auto !important; }
+  /* The frame is as tall as the email (fitHeight): the reader scrolls it, the frame only sideways,
+     for an email too wide to shrink. Some emails set overflow on html/body; :root outranks their
+     html/body selectors, so this wins even against !important. */
+  :root { overflow-x: auto !important; overflow-y: hidden !important; }
   :root > body { overflow: visible !important; }
 `;
 // The color darkenEmail turns white into: a darkened email's background.
@@ -53,6 +58,8 @@ const FRAME_DARK_CSS = `
 // Sidebar folders; `icon` is an SVG path.
 const FOLDERS = {
   inbox: { name: 'Inbox', empty: 'Inbox zero. Nothing here.', icon: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6z' },
+  sent: { name: 'Sent', empty: 'Nothing sent yet.', icon: 'M10 14L21 3M21 3l-6.5 18a.55.55 0 0 1-1 0L10 14l-7-3.5a.55.55 0 0 1 0-1z' },
+  drafts: { name: 'Drafts', empty: 'No drafts.', icon: 'M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM10 18l5-5a1.4 1.4 0 0 0-2-2l-5 5v2z' },
   all: { name: 'All Mail', empty: 'No mail here.', icon: 'M4 6h16v12H4zM4 7l8 6 8-6' },
   trash: { name: 'Trash', empty: 'Trash is empty.', icon: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14' },
 };
@@ -73,6 +80,9 @@ const inInbox = (m) => state.inboxExtra.has(keyOf(m)) || state.lists.inbox.some(
 function actionsFor(m, inboxKeys = null) {
   switch (listName()) {
     case 'inbox': return ['archive', 'trash'];
+    case 'sent': return ['trash'];
+    // Drafts are written, sent or discarded (see Writing), not moved.
+    case 'drafts': return [];
     case 'all': case 'search': {
       const inbox = inboxKeys ? inboxKeys.has(keyOf(m)) : inInbox(m);
       return inbox ? ['archive', 'trash'] : ['unarchive', 'trash'];
@@ -103,12 +113,12 @@ const ACTIONS = {
     label: 'Delete',
     done: 'Moved to Trash',
     verb: 'delete',
-    leave: ['inbox', 'all'],
+    leave: ['inbox', 'sent', 'all'],
     join: ['trash'],
     run: (m) => invoke('trash_message', ids(m)),
-    undo: (m, { wasInInbox }) => ({
+    undo: (m, { wasInInbox, wasSent }) => ({
       leave: ['trash'],
-      join: wasInInbox ? ['inbox', 'all'] : ['all'],
+      join: [...(wasInInbox ? ['inbox'] : []), ...(wasSent ? ['sent'] : []), 'all'],
       run: () => invoke('restore_message', { ...ids(m), fromTrash: true, toInbox: wasInInbox }),
     }),
   },
@@ -152,9 +162,10 @@ const state = {
   expired: new Set(),    // accounts whose sign-in Google no longer accepts: they offer Reconnect
   folder: 'inbox',       // folder chosen in the sidebar
   // Each folder's messages, all accounts, newest first; `search` holds the search's results.
-  lists: { inbox: [], all: [], trash: [], search: [] },
-  loaded: { inbox: false, all: false, trash: false, search: false },  // list filled from cache or a sync
-  synced: { inbox: false, all: false, trash: false },  // a sync finished this session
+  // Rows in `drafts` also say which Gmail draft they are (`draft`).
+  lists: { inbox: [], sent: [], drafts: [], all: [], trash: [], search: [] },
+  loaded: { inbox: false, sent: false, drafts: false, all: false, trash: false, search: false },  // list filled from cache or a sync
+  synced: { inbox: false, sent: false, drafts: false, all: false, trash: false },  // a sync finished this session
   // The search, while its field is open: `query` (what the results are for, '' before the first
   // search), `seq` (counts searches, so a late answer is dropped), `done` (the results are in),
   // `timer` (the search waiting for typing to pause), `scroll` (where the folder's list was).
@@ -166,9 +177,17 @@ const state = {
   pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
   pendingRead: new Map(), // key → read/unread change Gmail hasn't confirmed yet; same idea
   undo: null,            // what the toast's Undo button does, while it shows
+  // Messages being written (see newDraft): new ones, each a row at the top of the list, newest
+  // first; the one the reader shows (or null); replies, by the key of the email they answer.
+  drafts: [],
+  composing: null,
+  replies: new Map(),
+  lastFrom: null,        // the account a message was last sent from: a new one starts there
+  sendJob: 0,
+  sending: new Set(),    // `account/draft id` of Gmail drafts being sent: the Drafts folder leaves them out
   // Per folder (and the search) and account: `frontier`, the oldest date loaded so far without
   // gaps, and `more`, whether older mail exists. Scrolling pushes the frontier back.
-  paging: { inbox: {}, all: {}, trash: {}, search: {} },
+  paging: { inbox: {}, sent: {}, drafts: {}, all: {}, trash: {}, search: {} },
   inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages and in search results
   newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
   badge: null,           // unread count shown on the app icon
@@ -230,6 +249,8 @@ async function init() {
   $('#client-id').value = setup.clientId || '';
   getVersion().then((version) => { $('#app-version').textContent = version; });
   setList('inbox', await invoke('cached_folder', { folder: 'inbox' }));
+  // The sidebar counts the drafts.
+  setList('drafts', await invoke('cached_folder', { folder: 'drafts' }));
   render();
 
   if (!state.configured) openSettings();
@@ -248,6 +269,12 @@ async function init() {
   window.addEventListener('focus', () => {
     if (Date.now() - state.lastSync > REFRESH_ON_FOCUS_AFTER_MS) refresh();
   });
+  // Drafts are saved as soon as the window goes behind another, is hidden or closed, rather
+  // than when typing pauses (not the page's own `blur`, which a click into the email fires).
+  window.__TAURI__.window.getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+    if (!focused) saveAllDrafts();
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllDrafts(); });
   // Not right at launch, so the first sync goes first.
   setTimeout(checkForUpdate, 10 * 1000);
   setInterval(checkForUpdate, UPDATE_CHECK_MS);
@@ -311,10 +338,11 @@ function initTitleBar() {
   root.classList.add('own-title-bar');
   root.classList.toggle('mac', IS_MAC);
   // The strip above the message: on Windows #window-bar, which holds the window buttons; on
-  // macOS the message's own button row, level with the list header and the window buttons.
-  const strip = IS_MAC ? $('.msg-actions') : $('#window-bar');
+  // macOS the message's own button row (or a new message's), level with the list header and the
+  // window buttons.
+  const strips = IS_MAC ? [...document.querySelectorAll('.msg-actions')] : [$('#window-bar')];
   // "deep": anywhere inside drags, except on buttons.
-  for (const el of [$('.brand'), $('.list-head'), strip]) el.dataset.tauriDragRegion = 'deep';
+  for (const el of [$('.brand'), $('.list-head'), ...strips]) el.dataset.tauriDragRegion = 'deep';
   if (IS_MAC) {
     // In full screen the system hides its window buttons, so the brand moves up into their room.
     // macos.rs says when that changes; a page that loads in full screen asks once.
@@ -368,6 +396,21 @@ function bindEvents() {
     state.search.timer = setTimeout(() => runSearch(), SEARCH_DELAY_MS);
   });
   $('#search-input').addEventListener('keydown', onSearchKey);
+  $('#compose-open').title = 'New message (C)';
+  $('#compose-open').addEventListener('click', () => openCompose());
+  $('#m-reply').addEventListener('click', () => startReply('reply'));
+  $('#m-more').addEventListener('click', (e) => showAnswerMenu(e.currentTarget, (kind) => startReply(kind)));
+  $('#c-send').title = `Send (${IS_MAC ? '⌘' : 'Ctrl+'}Enter)`;
+  $('#c-send').addEventListener('click', () => state.composing && sendDraft(state.composing, $('#compose')));
+  $('#c-attach').addEventListener('click', () => state.composing && pickFiles(state.composing, () => renderComposeFiles()));
+  $('#c-discard').addEventListener('click', () => state.composing && discardDraft(state.composing));
+  $('#c-body').addEventListener('input', () => {
+    if (!state.composing) return;
+    state.composing.body = $('#c-body').value;
+    draftChanged(state.composing);
+  });
+  $('#compose').addEventListener('keydown', (e) => onEditorKey(e, state.composing, $('#compose')));
+  $('#file-picker').addEventListener('change', onFilesPicked);
   $('#toggle-read').addEventListener('click', () => {
     const m = openMessage();
     if (m) setUnread(m, !m.unread);
@@ -393,6 +436,14 @@ function bindEvents() {
   $('#messages').addEventListener('click', (e) => {
     const row = e.target.closest('li.msg');
     if (!row) return;
+    if (row.dataset.draft) {
+      openDraft(draftById(row.dataset.draft));
+      return;
+    }
+    if (row.dataset.gmailDraft) {
+      openGmailDraft(byKey(row.dataset.gmailDraft));
+      return;
+    }
     const button = e.target.closest('.row-actions button');
     if (button) onRowAction(row, button.dataset.kind);
     else select(row.dataset.key);
@@ -406,8 +457,13 @@ function bindEvents() {
   // Also fires when a click moves focus into the email frame.
   window.addEventListener('blur', hideMenu);
   window.addEventListener('resize', hideMenu);
-  // A wider or narrower reader (resizing the window) changes how much an email must shrink.
+  // A wider or narrower reader (resizing the window) changes how much an email must shrink, and
+  // so how tall it is. Only the width counts: the frame's own height changes #m-body's.
+  let readerWidth = 0;
   new ResizeObserver(() => {
+    const width = $('#m-body').clientWidth;
+    if (width === readerWidth) return;
+    readerWidth = width;
     const frame = $('#m-body iframe');
     if (frame) fitToFrame(frame);
   }).observe($('#m-body'));
@@ -659,7 +715,7 @@ function renderSidebar() {
   $('#folders').replaceChildren(...Object.entries(FOLDERS).map(([folder, f]) => navItem({
     label: f.name,
     icon: f.icon,
-    count: folder === 'inbox' ? inboxUnread : 0,
+    count: folder === 'inbox' ? inboxUnread : folder === 'drafts' ? draftCount() : 0,
     active: state.folder === folder,
     onClick: () => openFolder(folder),
   })));
@@ -725,7 +781,9 @@ const CLIP_ICON = '<svg class="clip" viewBox="0 0 24 24" role="img" aria-label="
 
 function renderList() {
   const folder = listName();
-  const messages = visible();
+  // The Drafts folder: drafts being written here, then Gmail's other drafts.
+  const drafts = folder === 'drafts';
+  const messages = drafts ? gmailDrafts() : visible();
   // In All Mail and search results, tag what's still in the Inbox (everything else there is
   // archived or sent).
   const inboxKeys = folder === 'all' || folder === 'search'
@@ -733,22 +791,29 @@ function renderList() {
     : null;
   const marks = folder === 'search' ? searchPattern(state.search.query) : null;
   const fragment = document.createDocumentFragment();
+  // New messages being written stay at the top of every list. The Drafts folder lists answers
+  // too, once something is written in them, and narrows them to the account chosen.
+  const written = (d) => (d.gmailId || hasContent(d) || d === state.composing) && (!state.filter || d.from === state.filter);
+  for (const draft of drafts ? localDrafts().filter(written) : state.drafts) fragment.append(draftRow(draft));
   for (const m of messages) {
+    if (drafts) {
+      fragment.append(gmailDraftRow(m));
+      continue;
+    }
     const li = document.createElement('li');
     li.className = 'msg' + (m.unread ? ' unread' : '') + (keyOf(m) === state.selected ? ' selected' : '');
     li.dataset.key = keyOf(m);
     li.style.setProperty('--acc', colorOf(m.account));
     li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasFiles ? CLIP_ICON : ''}<time></time></div>` +
       '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
-    setMarkedText(li.querySelector('.from'), senderName(m.from), marks);
+    // Sent mail shows whom it went to, as in Gmail.
+    if (folder === 'sent') li.querySelector('.from').textContent = `To: ${recipientNames(m.to) || '(no recipients)'}`;
+    else setMarkedText(li.querySelector('.from'), senderName(m.from), marks);
     li.querySelector('time').textContent = shortDate(m.date);
     setMarkedText(li.querySelector('.subject .text'), m.subject || '(no subject)', marks);
-    if (inboxKeys && inboxKeys.has(keyOf(m))) {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = 'Inbox';
-      li.querySelector('.subject').prepend(tag);
-    }
+    if (inboxKeys && inboxKeys.has(keyOf(m))) li.querySelector('.subject').prepend(tag('Inbox'));
+    // A reply to it is being written.
+    if (state.replies.has(keyOf(m))) li.querySelector('.subject').prepend(tag('Draft', 'draft'));
     setMarkedText(li.querySelector('.snippet'), m.snippet, marks);
     li.title = m.account;
     li.append(rowActions(m, inboxKeys));
@@ -762,7 +827,7 @@ function renderList() {
   }
   $('#messages').replaceChildren(fragment);
 
-  const empty = messages.length === 0;
+  const empty = !$('#messages').children.length;
   $('#list-empty').hidden = !empty;
   $('#messages').hidden = empty;
   if (empty) {
@@ -774,6 +839,54 @@ function renderList() {
     $('#list-empty-text').textContent = text;
     $('#empty-add').hidden = !noAccounts;
   }
+}
+
+function tag(text, kind = '') {
+  const span = document.createElement('span');
+  span.className = `tag ${kind}`.trim();
+  span.textContent = text;
+  return span;
+}
+
+/** The row of a new message being written: whom it's to, its subject and its start. */
+function draftRow(draft) {
+  const li = document.createElement('li');
+  const open = state.composing === draft || (draft.message && state.current && keyOf(state.current) === keyOf(draft.message));
+  li.className = 'msg draft' + (open ? ' selected' : '');
+  li.dataset.draft = draft.id;
+  li.innerHTML = '<div class="row1"><span class="from"><span class="who"></span></span></div>' +
+    '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
+  li.querySelector('.from').prepend(tag('Draft', 'draft'));
+  fillDraftRow(li, draft);
+  return li;
+}
+
+/** Whom a message went to, by name: "Anna Petrova, mark@example.com". */
+const recipientNames = (to) => parseAddresses(to || '').map((r) => r.name || r.email).join(', ');
+
+/** A row of the Drafts folder for one of Gmail's drafts: whom it's to, its subject and its start. */
+function gmailDraftRow(m) {
+  const li = document.createElement('li');
+  li.className = 'msg draft';
+  li.dataset.gmailDraft = keyOf(m);
+  li.style.setProperty('--acc', colorOf(m.account));
+  li.title = `Draft in ${m.account}`;
+  li.innerHTML = '<div class="row1"><span class="from"><span class="who"></span></span><time></time></div>' +
+    '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
+  li.querySelector('.from').prepend(tag('Draft', 'draft'));
+  li.querySelector('.who').textContent = recipientNames(m.to) || 'No recipients yet';
+  li.querySelector('time').textContent = shortDate(m.date);
+  li.querySelector('.subject .text').textContent = m.subject || '(no subject)';
+  li.querySelector('.snippet').textContent = m.snippet || '\u00a0';
+  return li;
+}
+
+function fillDraftRow(li, draft) {
+  li.style.setProperty('--acc', colorOf(draft.from));
+  li.title = `Draft from ${draft.from}`;
+  li.querySelector('.who').textContent = draft.to.map((r) => r.name || r.email).join(', ') || 'No recipients yet';
+  li.querySelector('.subject .text').textContent = draft.subject || '(no subject)';
+  li.querySelector('.snippet').textContent = draft.body.replace(/\s+/g, ' ').trim() || ' ';
 }
 
 /**
@@ -862,6 +975,8 @@ function renderActions() {
   $('#colors .moon').style.display = original ? '' : 'none';
   $('#colors .label').textContent = original ? 'Dark' : 'Original';
   $('#colors').title = original ? 'Show this email in dark colors' : "Show this email's original colors";
+  // Answering quotes the email, so it waits for the email to load.
+  $('#m-reply').disabled = $('#m-more').disabled = !state.full;
 }
 
 // ---------- Search ----------
@@ -962,7 +1077,7 @@ function onSearchKey(e) {
 /** The search field in place of the list's header, and the line under it: where it searches, or what it found. */
 function renderSearch() {
   const search = state.search;
-  $('#search-open').hidden = !state.accounts.length;
+  $('#search-open').hidden = $('#compose-open').hidden = !state.accounts.length;
   $('.list-head').classList.toggle('searching', Boolean(search));
   $('#search-scope').hidden = !search;
   if (!search) return;
@@ -980,18 +1095,24 @@ function renderSearch() {
 
 // ---------- Reading ----------
 
-async function select(key) {
-  const m = byKey(key);
+/** Opens message `key` in the reader; `given` is its summary when it isn't in the list on screen. */
+async function select(key, given = null) {
+  const m = given || byKey(key);
   if (!m) return;
+  leaveMessage(key);
+  const wasComposing = Boolean(state.composing);
+  leaveCompose();
   state.selected = key;
   state.current = m;
   state.full = null;
   state.originalColors = false;  // each email starts dark in dark mode
+  if (wasComposing) renderList();  // the draft's row isn't the one selected any more (or is gone)
   markRow(key);
   renderActions();
 
-  $('#reader-empty').hidden = true;
-  $('#message').hidden = false;
+  renderReaderViews();
+  $('#m-scroll').scrollTop = 0;
+  $('#m-end').replaceChildren();
   $('#m-subject').textContent = m.subject || '(no subject)';
   $('#m-from').textContent = m.from;
   $('#m-date').textContent = longDate(m.date);
@@ -1009,6 +1130,11 @@ async function select(key) {
     full.inline = inlinePictures(full);
     renderAttachments(m, (full.attachments || []).filter((a) => !full.inline.includes(a)));
     showBody(full);
+    renderActions();
+    // An answer opened from Drafts quotes the email once it's here.
+    const reply = state.replies.get(key);
+    if (reply && !reply.full) reply.full = full;
+    renderMessageEnd();
     if (full.inline.length) loadInlinePictures(m, full, seq);
     // Opening marks it read, as in Gmail.
     if ((byKey(key) || m).unread) setUnread(m, false);
@@ -1017,14 +1143,1117 @@ async function select(key) {
   }
 }
 
+/** Closes the open email. A new message being written stays in the reader. */
 function clearReader() {
+  leaveMessage();
   state.selected = null;
   state.current = null;
   state.full = null;
   state.openSeq++;
-  $('#message').hidden = true;
-  $('#reader-empty').hidden = false;
   $('#m-body').replaceChildren();
+  $('#m-end').replaceChildren();
+  renderReaderViews();
+}
+
+/** The reader shows a new message being written, else the open email, else "Select a message". */
+function renderReaderViews() {
+  const composing = Boolean(state.composing);
+  $('#compose').hidden = !composing;
+  $('#message').hidden = composing || !state.current;
+  $('#reader-empty').hidden = composing || Boolean(state.current);
+}
+
+// ---------- Writing: new messages, replies and forwards ----------
+
+const svg = (inner, className = '') =>
+  `<svg${className ? ` class="${className}"` : ''} viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+const CROSS = '<path d="M6 6l12 12M18 6L6 18"/>';
+const CHEVRON = '<path d="M6 9l6 6 6-6"/>';
+const PAPERCLIP = '<path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3 3 0 0 0-6-6l-6.5 6.5a4.5 4.5 0 0 0 9 9L21 13"/>';
+const DOTS = '<circle class="dot" cx="5" cy="12" r="1.3"/><circle class="dot" cx="12" cy="12" r="1.3"/><circle class="dot" cx="19" cy="12" r="1.3"/>';
+const TRASH = '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/>';
+const CHECK = '<path d="M5 12l5 5L20 7"/>';
+// The ways to answer an email, with their keys.
+const KINDS = {
+  reply: { label: 'Reply', key: 'R', icon: '<path d="M9 14l-4-4 4-4M5 10h11a4 4 0 0 1 0 8h-1"/>' },
+  replyAll: { label: 'Reply all', key: 'A', icon: '<path d="M13 14l-4-4 4-4M8 14l-4-4 4-4M9 10h7a4 4 0 0 1 0 8h-1"/>' },
+  forward: { label: 'Forward', key: 'F', icon: '<path d="M15 14l4-4-4-4M19 10H8a4 4 0 0 0 0 8h1"/>' },
+};
+
+let draftSeq = 0;
+/**
+ * A message being written. `kind`: 'new', or how it answers `message` (the email's summary):
+ * 'reply', 'replyAll' or 'forward'; `full` is that email, for the quote. A new message can still
+ * answer one, without the quote (`thread`: a Gmail draft whose email wasn't found). `from`: the
+ * account it goes from. Recipients are `{ name, email }`. `files` were picked on this computer or
+ * came with a Gmail draft (`{ name, mimeType, size, data }`, data in base64); `carried` are the
+ * answered email's files that go along when forwarding (its attachments, as `get_message` lists
+ * them).
+ * Saving it to Gmail's Drafts (saveDraft): `gmailId` and `gmailAccount` once it's saved there,
+ * `dirty` while it has changes to save, `saving` the last save's promise, `saveState` what the
+ * editor says about it, and `closed` once it's sent or discarded, so nothing saves it again.
+ */
+function newDraft(kind, from, message = null, full = null) {
+  return {
+    id: String(++draftSeq), kind, from, message, full, thread: null,
+    to: [], cc: [], bcc: [], showCc: false, subject: '', body: '', files: [], carried: [], showQuote: false,
+    gmailId: null, gmailAccount: null, dirty: false, saving: null, saveTimer: null, saveState: '', saveError: '', closed: false,
+  };
+}
+
+/** Messages being written here: new ones, then answers. */
+const localDrafts = () => [...state.drafts, ...state.replies.values()];
+const draftById = (id) => localDrafts().find((d) => d.id === id) || null;
+/** A reply with nothing written in it yet: leaving its email drops it. */
+const isEmptyDraft = (draft) => !draft.body.trim() && !draft.files.length;
+/** A new message with nothing in it at all: leaving it drops it. */
+const isBlankDraft = (draft) =>
+  isEmptyDraft(draft) && !draft.subject.trim() && !draft.to.length && !draft.cc.length && !draft.bcc.length;
+/** Something worth keeping was written: it's saved, and counts as a draft. */
+const hasContent = (draft) => (draft.message ? !isEmptyDraft(draft) : !isBlankDraft(draft));
+/** A new message goes from the account chosen in the sidebar, else the one last sent from. */
+const defaultFrom = () => state.filter || (state.accounts.includes(state.lastFrom) ? state.lastFrom : state.accounts[0]);
+
+/**
+ * Gmail's drafts that aren't being written or sent here: the Drafts folder's rows from Gmail.
+ * The account chosen in the sidebar narrows them, as in other folders.
+ */
+function gmailDrafts() {
+  const here = new Set(localDrafts().filter((d) => d.gmailId).map((d) => `${d.gmailAccount}/${d.gmailId}`));
+  const list = listName() === 'drafts' ? visible() : state.lists.drafts.filter((m) => !state.filter || m.account === state.filter);
+  return list.filter((m) => m.draft && !here.has(`${m.account}/${m.draft}`) && !state.sending.has(`${m.account}/${m.draft}`));
+}
+
+/** The Drafts folder's count: drafts written here and Gmail's others. */
+const draftCount = () =>
+  localDrafts().filter((d) => (d.gmailId || hasContent(d)) && (!state.filter || d.from === state.filter)).length + gmailDrafts().length;
+
+/** Leaving the open email: a reply to it with nothing written yet is dropped, else it's saved. */
+function leaveMessage(nextKey = null) {
+  const m = state.current;
+  if (!m || keyOf(m) === nextKey) return;
+  const draft = state.replies.get(keyOf(m));
+  if (!draft) return;
+  if (isEmptyDraft(draft)) {
+    dropDraft(draft);
+    renderList();
+  } else {
+    saveDraft(draft);
+  }
+}
+
+/** Leaving the new message in the reader: it stays in the list and is saved, unless there's nothing in it. */
+function leaveCompose() {
+  const draft = state.composing;
+  if (!draft) return;
+  state.composing = null;
+  if (isBlankDraft(draft)) dropDraft(draft);
+  else saveDraft(draft);
+  renderSidebar();
+}
+
+/** Drops a draft with nothing in it, here and from Gmail's Drafts. */
+function dropDraft(draft) {
+  draft.closed = true;
+  clearTimeout(draft.saveTimer);
+  if (draft.message) {
+    if (state.replies.get(keyOf(draft.message)) === draft) state.replies.delete(keyOf(draft.message));
+  } else {
+    state.drafts = state.drafts.filter((d) => d !== draft);
+  }
+  deleteGmailDraft(draft).catch((e) => console.warn(e));
+}
+
+/** Deletes `draft`'s Gmail draft, once a save on its way is done. */
+function deleteGmailDraft(draft) {
+  return (draft.saving || Promise.resolve()).then(() => deleteGmailDraftNow(draft));
+}
+
+/** Deletes `draft`'s Gmail draft now: from a save itself, which mustn't wait for itself. */
+async function deleteGmailDraftNow(draft) {
+  if (!draft.gmailId) return;
+  const [account, id] = [draft.gmailAccount, draft.gmailId];
+  draft.gmailId = null;
+  forgetGmailDraft(account, id);
+  await invoke('delete_draft', { account, id });
+}
+
+/** A Gmail draft sent or deleted leaves the Drafts folder's rows. */
+function forgetGmailDraft(account, id) {
+  state.lists.drafts = state.lists.drafts.filter((m) => !(m.account === account && m.draft === id));
+  renderSidebar();
+  if (listName() === 'drafts') renderList();
+}
+
+// A draft is saved to its account's Gmail Drafts this long after typing stops. One with more
+// than BIG_DRAFT of files waits a minute, or until it's left, since every save sends its files
+// again. A failed save is tried again after DRAFT_RETRY_MS.
+const DRAFT_SAVE_MS = 2000;
+const BIG_DRAFT_SAVE_MS = 60 * 1000;
+const BIG_DRAFT = 5 * 1024 * 1024;
+const DRAFT_RETRY_MS = 30 * 1000;
+
+/** Something in `draft` changed: its row follows, and it's saved once typing pauses. */
+function draftChanged(draft) {
+  const row = $('#messages').querySelector(`li[data-draft="${draft.id}"]`);
+  if (row) fillDraftRow(row, draft);
+  if (draft.closed) return;
+  draft.dirty = true;
+  clearTimeout(draft.saveTimer);
+  draft.saveTimer = setTimeout(() => saveDraft(draft), draftSize(draft) > BIG_DRAFT ? BIG_DRAFT_SAVE_MS : DRAFT_SAVE_MS);
+  if (draft.saveState !== 'saving') setSaveState(draft, '');
+}
+
+/**
+ * Saves `draft` to its account's Gmail Drafts now (`save_draft`): the first time as a new draft,
+ * then over it. Saves run one after another, so a draft is never created twice, and each sends
+ * what's written when it starts. Nothing is saved before something is written, nor an answer
+ * before its email has loaded (it carries the quote). A draft whose From changed leaves the
+ * other account's Drafts. Returns this save's promise.
+ */
+function saveDraft(draft) {
+  clearTimeout(draft.saveTimer);
+  if (!draft.dirty || draft.closed) return draft.saving || Promise.resolve();
+  draft.dirty = false;
+  draft.saving = (draft.saving || Promise.resolve()).then(async () => {
+    if (draft.closed || (!draft.gmailId && !hasContent(draft))) return;
+    if (draft.message && !draft.full) {
+      draft.dirty = true;
+      return;
+    }
+    setSaveState(draft, 'saving');
+    try {
+      if (draft.gmailId && draft.gmailAccount !== draft.from) await deleteGmailDraftNow(draft);
+      const saved = await invoke('save_draft', { draft: { ...outgoing(draft), draftId: draft.gmailId } });
+      draft.gmailId = saved.id;
+      draft.gmailAccount = draft.from;
+      setSaveState(draft, draft.dirty ? '' : 'saved');
+    } catch (e) {
+      draft.dirty = true;
+      draft.saveError = String(e);
+      setSaveState(draft, 'error');
+      clearTimeout(draft.saveTimer);
+      if (!draft.closed) draft.saveTimer = setTimeout(() => saveDraft(draft), DRAFT_RETRY_MS);
+    }
+  });
+  return draft.saving;
+}
+
+/** Saves every draft with changes now: the window went behind another or was hidden. */
+function saveAllDrafts() {
+  for (const draft of localDrafts()) if (draft.dirty) saveDraft(draft);
+}
+
+function setSaveState(draft, saveState) {
+  draft.saveState = saveState;
+  renderSaveState(draft);
+  if (saveState === 'saved') renderSidebar();  // the Drafts count
+}
+
+/** What the editor says about saving: "Saving…", "Saved to Gmail", or "Not saved" with why. */
+function renderSaveState(draft) {
+  const open = state.composing === draft ? $('#c-saved')
+    : draft.message && state.current && keyOf(state.current) === keyOf(draft.message) ? $('#m-end .save-state') : null;
+  if (!open) return;
+  const [text, title] = {
+    saving: ['Saving…', ''],
+    saved: [draft.message ? 'Saved' : 'Saved to Gmail', `Saved in the Gmail Drafts of ${draft.gmailAccount}`],
+    error: ['Not saved', `Couldn't save the draft: ${draft.saveError}`],
+  }[draft.saveState] || ['', ''];
+  open.className = `save-state ${draft.saveState}`;
+  open.title = title;
+  open.innerHTML = draft.saveState === 'saved' ? svg(CHECK) : '';
+  open.append(text);
+}
+
+/** Opens a draft written here: an answer under its email, a new message in the editor. */
+function openDraft(draft) {
+  if (!draft) return;
+  if (draft.message) openReplyDraft(draft);
+  else openCompose(draft);
+}
+
+/** Shows the email an answer being written belongs to, with the answer under it. */
+async function openReplyDraft(draft) {
+  const key = keyOf(draft.message);
+  if (state.current && keyOf(state.current) === key && state.full) renderMessageEnd();
+  else await select(key, byKey(key) || draft.message);
+  focusReply(draft);
+}
+
+/**
+ * Opens one of Gmail's drafts (`open_draft`), to go on writing it: an answer under its email
+ * when that's found in its conversation, anything else in the editor.
+ */
+async function openGmailDraft(m) {
+  if (!m || !m.draft) return;
+  const here = (id) => localDrafts().find((d) => d.gmailId === id && d.gmailAccount === m.account);
+  if (here(m.draft)) {
+    openDraft(here(m.draft));
+    return;
+  }
+  setStatus('Opening the draft…');
+  try {
+    const opened = await invoke('open_draft', { account: m.account, id: m.draft });
+    if (here(opened.id)) {
+      openDraft(here(opened.id));
+      return;
+    }
+    const draft = draftFromGmail(m.account, opened);
+    if (draft.message) state.replies.set(keyOf(draft.message), draft);
+    else state.drafts.unshift(draft);
+    renderList();
+    openDraft(draft);
+  } catch (e) {
+    toast(`Couldn't open the draft: ${e}`, 6000);
+  } finally {
+    setStatus('');
+  }
+}
+
+/**
+ * A draft as Gmail keeps it (`open_draft`), to write here. An answer goes under its email, as
+ * long as no other answer to that email is being written; its quote is made again from the email
+ * when it's saved, so the draft's own quote and the pictures in it are left out.
+ */
+function draftFromGmail(account, o) {
+  const answered = o.answered && !state.replies.has(keyOf(o.answered)) ? o.answered : null;
+  const to = parseAddresses(o.to);
+  const cc = parseAddresses(o.cc);
+  const forward = /^(fwd?|fw):/i.test(o.subject || '');
+  const kind = !answered ? 'new' : forward ? 'forward' : to.length + cc.length > 1 ? 'replyAll' : 'reply';
+  const draft = newDraft(kind, account, answered);
+  Object.assign(draft, {
+    to, cc, bcc: parseAddresses(o.bcc), subject: o.subject || '', body: typedText(o),
+    gmailId: o.id, gmailAccount: account, saveState: 'saved',
+  });
+  draft.showCc = Boolean(draft.cc.length || draft.bcc.length);
+  const html = o.html ? decodeBody(o.html) : '';
+  const quoted = (f) => answered && f.contentId && html.includes(`cid:${f.contentId}`);
+  draft.files = o.files.filter((f) => !quoted(f)).map(({ name, mimeType, size, data }) => ({ name, mimeType, size, data }));
+  if (!answered && o.inReplyTo) draft.thread = { threadId: o.threadId, messageId: o.inReplyTo, references: o.references };
+  return draft;
+}
+
+/**
+ * What was written in a Gmail draft: its text without the email it quotes or forwards. Those
+ * start at a line like "On …, Anna <a@b.c> wrote:" (which may wrap) or "Forwarded message".
+ */
+function typedText(o) {
+  if (o.text) {
+    let text = decodeBody(o.text).replace(/\r\n?/g, '\n');
+    if (o.inReplyTo) {
+      const cut = text.search(/^(On .*(\n.*)?wrote:[ \t]*$|-{5,} ?Forwarded message ?-{5,})/m);
+      if (cut >= 0) text = text.slice(0, cut);
+    }
+    return text.replace(/\s+$/, '');
+  }
+  if (!o.html) return '';
+  const doc = new DOMParser().parseFromString(decodeBody(o.html), 'text/html');
+  for (const quote of doc.querySelectorAll('.gmail_quote')) quote.remove();
+  return htmlToText(doc.body.innerHTML);
+}
+
+/**
+ * Writes a new message in the reader (the pencil, or `C`), or brings back `draft`. Without one,
+ * a message already being written comes back, so there's one row to find it by.
+ */
+function openCompose(draft = null) {
+  if (!state.accounts.length) return;
+  draft ||= state.composing || state.drafts[0] || null;
+  if (state.composing !== draft) leaveCompose();
+  if (!draft) {
+    draft = newDraft('new', defaultFrom());
+    state.drafts.unshift(draft);
+  }
+  leaveMessage();
+  state.selected = null;
+  state.current = null;
+  state.full = null;
+  state.openSeq++;
+  $('#m-body').replaceChildren();
+  $('#m-end').replaceChildren();
+  state.composing = draft;
+  renderCompose();
+  renderSaveState(draft);
+  renderReaderViews();
+  renderList();
+  renderActions();
+  (draft.to.length ? $('#c-body') : $('#c-fields .rcpts input')).focus();
+}
+
+/** The new message's fields: From, To (Cc, Bcc), Subject and its files; then its text. */
+function renderCompose() {
+  const draft = state.composing;
+  const from = document.createElement('div');
+  from.className = 'field';
+  from.innerHTML = '<span class="fk">From</span>';
+  from.append(fromPicker(draft));
+  const showCc = linkButton('Cc Bcc', () => {
+    draft.showCc = true;
+    renderCompose();
+    $('#c-fields input[aria-label="Cc"]').focus();
+  });
+  const rows = [from, recipientRow(draft, 'to', { label: 'To', placeholder: 'Name or email', tail: draft.showCc ? null : showCc })];
+  if (draft.showCc) rows.push(recipientRow(draft, 'cc', { label: 'Cc' }), recipientRow(draft, 'bcc', { label: 'Bcc' }));
+  const subject = document.createElement('div');
+  subject.className = 'field';
+  subject.innerHTML = '<span class="fk">Subject</span><input class="subject" aria-label="Subject">';
+  const input = subject.querySelector('input');
+  input.value = draft.subject;
+  input.addEventListener('input', () => {
+    draft.subject = input.value;
+    draftChanged(draft);
+  });
+  rows.push(subject, composeFiles(draft));
+  $('#c-fields').replaceChildren(...rows);
+  $('#c-body').value = draft.body;
+}
+
+function composeFiles(draft) {
+  const row = filesRow(draft, () => $('#c-fields .draft-files').replaceWith(composeFiles(draft)));
+  row.classList.add('field');
+  return row;
+}
+
+function renderComposeFiles() {
+  if (state.composing) $('#c-fields .draft-files').replaceWith(composeFiles(state.composing));
+}
+
+
+/** From in a new message: the account, and a menu of the others. */
+function fromPicker(draft) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'from-pick';
+  button.title = 'Send from';
+  const draw = () => {
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = draft.from;
+    button.replaceChildren(accountDot(colorOf(draft.from)), label);
+    button.insertAdjacentHTML('beforeend', svg(CHEVRON));
+  };
+  button.addEventListener('click', () => {
+    const box = button.getBoundingClientRect();
+    showMenu([state.accounts.map((account) => ({
+      label: account,
+      color: colorOf(account),
+      run: () => {
+        draft.from = account;
+        draw();
+        draftChanged(draft);
+      },
+    }))], box.left, box.bottom + 4);
+  });
+  draw();
+  return button;
+}
+
+function accountDot(color) {
+  const dot = document.createElement('span');
+  dot.className = 'acc-dot';
+  dot.style.setProperty('--acc', color);
+  return dot;
+}
+
+function linkButton(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'link-btn';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+/**
+ * A row of recipients (`draft[field]`: To, Cc or Bcc): a chip each, then a field to type more.
+ * Enter, a comma or leaving the field turns what's typed into chips; Backspace in the empty field
+ * removes the last one. Pasting a list adds each address. `lead` goes first in place of a label
+ * (a reply's kind of answer), `tail` last (Cc Bcc). The field's `commit()` adds what's typed.
+ */
+function recipientRow(draft, field, { label = '', placeholder = '', lead = null, tail = null }) {
+  const row = document.createElement('div');
+  row.className = 'field rcpts';
+  if (label) {
+    const name = document.createElement('span');
+    name.className = 'fk';
+    name.textContent = label;
+    row.append(name);
+  }
+  if (lead) row.append(lead);
+  const input = document.createElement('input');
+  input.setAttribute('aria-label', label || 'To');
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  const changed = () => {
+    draw();
+    draftChanged(draft);
+  };
+  const draw = () => {
+    for (const chip of row.querySelectorAll('.rcpt')) chip.remove();
+    draft[field].forEach((r, i) => input.before(recipientChip(r, () => {
+      draft[field].splice(i, 1);
+      changed();
+      input.focus();
+    })));
+    input.placeholder = draft[field].length ? '' : placeholder;
+  };
+  input.commit = () => {
+    const added = parseAddresses(input.value).filter((r) => !draft[field].some((x) => sameEmail(x, r)));
+    input.value = '';
+    if (!added.length) return;
+    draft[field].push(...added);
+    changed();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    if ((e.key === 'Enter' || e.key === ',' || e.key === ';') && input.value.trim()) {
+      e.preventDefault();
+      input.commit();
+    } else if (e.key === 'Backspace' && !input.value && input.selectionStart === 0 && draft[field].length) {
+      e.preventDefault();
+      draft[field].pop();
+      changed();
+    }
+  });
+  input.addEventListener('blur', () => input.commit());
+  input.addEventListener('paste', (e) => {
+    const text = e.clipboardData.getData('text');
+    if (!/[,;\n]/.test(text)) return;
+    e.preventDefault();
+    input.value += text;
+    input.commit();
+  });
+  // A click in the row's empty space goes to the field.
+  row.addEventListener('mousedown', (e) => {
+    if (e.target !== row) return;
+    e.preventDefault();
+    input.focus();
+  });
+  row.append(input);
+  if (tail) row.append(tail);
+  draw();
+  return row;
+}
+
+/** A recipient's chip: the name (the address under the mouse), red if it isn't an address. */
+function recipientChip(r, remove) {
+  const chip = document.createElement('span');
+  const ok = isAddress(r.email);
+  chip.className = 'rcpt' + (ok ? '' : ' bad');
+  chip.title = ok ? r.email : `“${r.email}” isn't an email address`;
+  chip.innerHTML = `<span class="who"></span><button type="button" tabindex="-1" aria-label="Remove">${svg(CROSS)}</button>`;
+  chip.querySelector('.who').textContent = r.name || r.email;
+  chip.querySelector('button').addEventListener('click', remove);
+  return chip;
+}
+
+/**
+ * Addresses as people type or paste them, and as email headers list them:
+ * `Anna <anna@example.com>, "Petrova, Anna" <a@b.c>; mark@example.com`.
+ */
+function parseAddresses(text) {
+  const found = [];
+  const add = (piece) => {
+    piece = piece.trim();
+    if (!piece) return;
+    const named = /^(.*?)\s*<([^<>]*)>$/.exec(piece);
+    if (named) {
+      const name = named[1].trim().replace(/^"(.*)"$/, '$1').replace(/\\(.)/g, '$1').trim();
+      found.push({ name, email: named[2].trim() });
+    } else {
+      found.push({ name: '', email: piece.replace(/^mailto:/i, '') });
+    }
+  };
+  let piece = '';
+  let quoted = false;
+  let angle = false;
+  for (const c of text) {
+    if (c === '"' && !angle) quoted = !quoted;
+    else if (c === '<' && !quoted) angle = true;
+    else if (c === '>' && !quoted) angle = false;
+    if (/[,;\n]/.test(c) && !quoted && !angle) {
+      add(piece);
+      piece = '';
+    } else {
+      piece += c;
+    }
+  }
+  add(piece);
+  return found;
+}
+
+/** Whether it looks like an address Gmail can send to; `check_address` in mime.rs agrees. */
+function isAddress(email) {
+  if (email.length > 254 || !/^[\x21-\x7e]+$/.test(email) || /[<>()[\]\\,;:"]/.test(email)) return false;
+  const [local, domain, extra] = email.split('@');
+  return extra === undefined && Boolean(local) && Boolean(domain) && domain.includes('.') &&
+    !domain.startsWith('.') && !domain.endsWith('.') && !domain.includes('..');
+}
+
+const sameEmail = (a, b) => a.email.toLowerCase() === b.email.toLowerCase();
+const uniqueAddresses = (list) => list.filter((r, i) => list.findIndex((x) => sameEmail(x, r)) === i);
+
+/**
+ * The files going with a message, each with a cross to take it off: the answered email's when
+ * forwarding, then those picked. `redraw` runs after one is taken off.
+ */
+function filesRow(draft, redraw) {
+  const row = document.createElement('div');
+  row.className = 'attachments draft-files';
+  const add = (file, remove) => {
+    const kind = attachmentKind({ name: file.name, mimeType: file.mimeType || '' });
+    const chip = document.createElement('span');
+    chip.className = `draft-file ${kind}`;
+    chip.title = file.name;
+    chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
+      `<span class="name"></span><span class="size"></span><button type="button" title="Remove" aria-label="Remove">${svg(CROSS)}</button>`;
+    chip.querySelector('.name').textContent = file.name;
+    chip.querySelector('.size').textContent = formatSize(file.size);
+    chip.querySelector('button').addEventListener('click', () => {
+      remove();
+      draftChanged(draft);
+      redraw();
+    });
+    row.append(chip);
+  };
+  for (const a of draft.carried) add(a, () => { draft.carried = draft.carried.filter((x) => x !== a); });
+  for (const f of draft.files) add(f, () => { draft.files = draft.files.filter((x) => x !== f); });
+  row.hidden = !row.children.length;
+  return row;
+}
+
+let filesFor = null;  // the draft the file picker is open for, and what to do once files are added
+/** Opens the system's file picker to attach files to `draft`; `done` runs once they're added. */
+function pickFiles(draft, done) {
+  filesFor = { draft, done };
+  const picker = $('#file-picker');
+  picker.value = '';
+  picker.click();
+}
+
+/** Reads the picked files into the draft, as long as they fit in what Gmail sends. */
+async function onFilesPicked() {
+  const picked = [...$('#file-picker').files];
+  const target = filesFor;
+  filesFor = null;
+  if (!target || !picked.length) return;
+  const { draft, done } = target;
+  let total = draftSize(draft);
+  for (const file of picked) {
+    if (total + file.size > MAX_ATTACHMENTS) {
+      toast(`${file.name} is too big to attach: Gmail sends up to 25 MB of files with an email.`, 8000);
+      continue;
+    }
+    try {
+      draft.files.push({ name: file.name, mimeType: file.type, size: file.size, data: await readBase64(file) });
+      total += file.size;
+    } catch (e) {
+      toast(`Couldn't attach ${file.name}: ${e}`, 6000);
+    }
+  }
+  draftChanged(draft);
+  done();
+}
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
+    reader.onerror = () => reject(reader.error ? reader.error.message : 'it could not be read');
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Bytes of files going with the draft: picked, carried along, and the quoted email's pictures. */
+function draftSize(draft) {
+  const inline = draft.full && draft.kind !== 'new' ? draft.full.inline || [] : [];
+  return [...draft.files, ...draft.carried, ...inline].reduce((sum, f) => sum + (f.size || 0), 0);
+}
+
+/** Keys in a message being written: Cmd+Enter (Ctrl+Enter) sends it, Esc leaves it. */
+function onEditorKey(e, draft, container) {
+  if (!draft || e.isComposing) return;
+  if (e.key === 'Enter' && (IS_MAC ? e.metaKey : e.ctrlKey)) {
+    e.preventDefault();
+    sendDraft(draft, container);
+  } else if (e.key === 'Escape' && $('#menu').hidden) {
+    e.preventDefault();
+    if (draft.message) {
+      e.target.blur();
+      return;
+    }
+    // A new message closes, and waits in the list.
+    document.activeElement.blur();
+    leaveCompose();
+    renderReaderViews();
+    renderList();
+  }
+}
+
+/** Starts answering the open email (or goes back to the answer already started) as `kind`. */
+function startReply(kind) {
+  const m = openMessage();
+  if (!m || !state.full || state.composing) return;
+  const key = keyOf(m);
+  let draft = state.replies.get(key);
+  if (!draft) {
+    draft = newDraft(kind, m.account, { ...m }, state.full);
+    setKind(draft, kind);
+    state.replies.set(key, draft);
+    renderList();
+  } else if (draft.kind !== kind) {
+    setKind(draft, kind);
+  }
+  renderMessageEnd();
+  focusReply(draft);
+}
+
+/**
+ * Makes `draft` a reply, a reply to all or a forward of its email, keeping its text: whom it
+ * goes to, its subject, and for a forward the email's files. Answering one's own email goes to
+ * whom it went to, as in Gmail. The account it's from is never among the recipients.
+ */
+function setKind(draft, kind) {
+  const { full } = draft;
+  const mine = (r) => r.email.toLowerCase() === draft.from.toLowerCase();
+  draft.kind = kind;
+  draft.subject = subjectFor(kind, full.subject);
+  draft.bcc = [];
+  if (kind === 'forward') {
+    draft.to = [];
+    draft.cc = [];
+    draft.carried = (full.attachments || []).filter((a) => !(full.inline || []).includes(a));
+  } else {
+    const fromMe = parseAddresses(full.from).some(mine);
+    const sender = parseAddresses(full.replyTo || full.from);
+    const toList = parseAddresses(full.to);
+    let to = fromMe ? toList : sender;
+    let cc = [];
+    if (kind === 'replyAll') {
+      if (!fromMe) to = to.concat(toList);
+      cc = parseAddresses(full.cc);
+    }
+    to = uniqueAddresses(to).filter((r) => !mine(r));
+    cc = uniqueAddresses(cc).filter((r) => !mine(r) && !to.some((x) => sameEmail(x, r)));
+    // An email to oneself alone gets its answer there too.
+    draft.to = to.length ? to : sender;
+    draft.cc = cc;
+    draft.carried = [];
+  }
+  draft.showCc = draft.cc.length > 0;
+}
+
+/** `Re: Lunch` or `Fwd: Lunch`, without adding a second one. */
+function subjectFor(kind, subject) {
+  const s = subject || '';
+  if (kind === 'forward') return /^(fwd?|fw):/i.test(s) ? s : `Fwd: ${s}`;
+  return /^re:/i.test(s) ? s : `Re: ${s}`;
+}
+
+/** Under the open email: Reply, Reply all and Forward, or the answer being written. */
+function renderMessageEnd() {
+  const m = openMessage();
+  const end = $('#m-end');
+  if (!m || !state.full) {
+    end.replaceChildren();
+    return;
+  }
+  const draft = state.replies.get(keyOf(m));
+  end.replaceChildren(draft ? replyBox(draft) : answerButtons());
+  const text = end.querySelector('textarea');
+  if (text) growText(text);
+  if (draft) renderSaveState(draft);
+}
+
+function answerButtons() {
+  const row = document.createElement('div');
+  row.className = 'answer-buttons';
+  for (const [kind, k] of Object.entries(KINDS)) {
+    const button = document.createElement('button');
+    button.title = `${k.label} (${k.key})`;
+    button.innerHTML = svg(k.icon);
+    button.append(k.label);
+    button.addEventListener('click', () => startReply(kind));
+    row.append(button);
+  }
+  return row;
+}
+
+/**
+ * An answer being written, under its email: the kind of answer and whom it goes to, its files,
+ * its text (which grows as it's written), the quoted email when shown (···), and Send, attach,
+ * the account it goes from, and discard.
+ */
+function replyBox(draft) {
+  const box = document.createElement('div');
+  box.className = 'reply-box';
+  const redraw = (focus = '') => {
+    renderMessageEnd();
+    if (focus) $(`#m-end ${focus}`)?.focus();
+  };
+  const kind = document.createElement('button');
+  kind.type = 'button';
+  kind.className = 'kind-btn';
+  kind.title = 'Reply, Reply all or Forward';
+  kind.setAttribute('aria-label', `${KINDS[draft.kind].label}: change`);
+  kind.innerHTML = svg(KINDS[draft.kind].icon) + svg(CHEVRON, 'chev');
+  kind.addEventListener('click', () => showAnswerMenu(kind, (k) => {
+    setKind(draft, k);
+    draftChanged(draft);
+    redraw(k === 'forward' && !draft.to.length ? '.rcpts input' : 'textarea');
+  }));
+  const showCc = linkButton('Cc Bcc', () => {
+    draft.showCc = true;
+    redraw('input[aria-label="Cc"]');
+  });
+  box.append(recipientRow(draft, 'to', { placeholder: 'Add recipients', lead: kind, tail: draft.showCc ? null : showCc }));
+  if (draft.showCc) box.append(recipientRow(draft, 'cc', { label: 'Cc' }), recipientRow(draft, 'bcc', { label: 'Bcc' }));
+  box.append(filesRow(draft, () => redraw()));
+
+  const text = document.createElement('textarea');
+  text.setAttribute('aria-label', 'Message');
+  text.placeholder = draft.kind === 'forward' ? 'Add a message' : 'Write your reply';
+  text.value = draft.body;
+  text.addEventListener('input', () => {
+    draft.body = text.value;
+    growText(text);
+    draftChanged(draft);
+  });
+  box.append(text);
+  if (draft.showQuote) {
+    const quoted = document.createElement('div');
+    quoted.className = 'quote';
+    quoted.textContent = quotePreview(draft);
+    box.append(quoted);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'reply-foot';
+  const send = document.createElement('button');
+  send.className = 'primary';
+  send.textContent = 'Send';
+  send.title = `Send (${IS_MAC ? '⌘' : 'Ctrl+'}Enter)`;
+  send.addEventListener('click', () => sendDraft(draft, box));
+  const attach = iconButton(PAPERCLIP, 'Attach files', () => pickFiles(draft, () => redraw()));
+  const quote = iconButton(DOTS, draft.showQuote ? 'Hide the quoted email' : 'Show the quoted email', () => {
+    draft.showQuote = !draft.showQuote;
+    redraw();
+  });
+  quote.classList.toggle('on', draft.showQuote);
+  const saved = document.createElement('span');
+  saved.className = 'save-state';
+  const from = document.createElement('span');
+  from.className = 'reply-from';
+  from.title = 'Answers go from the account the email came to';
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = draft.from;
+  from.append('from', accountDot(colorOf(draft.from)), label);
+  const discard = iconButton(TRASH, 'Discard', () => discardDraft(draft));
+  foot.append(send, attach, quote, saved, from, discard);
+  box.append(foot);
+  box.addEventListener('keydown', (e) => onEditorKey(e, draft, box));
+  return box;
+}
+
+function iconButton(icon, title, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'icon-btn';
+  button.title = title;
+  button.setAttribute('aria-label', title);
+  button.innerHTML = svg(icon);
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+/** A menu of Reply, Reply all and Forward under `anchor`. */
+function showAnswerMenu(anchor, pick) {
+  const box = anchor.getBoundingClientRect();
+  showMenu([Object.entries(KINDS).map(([kind, k]) => ({ label: k.label, hint: k.key, run: () => pick(kind) }))], box.left, box.bottom + 4);
+}
+
+/** Scrolls the reader to the answer being written and puts the cursor in it. */
+function focusReply(draft) {
+  const box = $('#m-end .reply-box');
+  if (!box) return;
+  const field = draft.kind === 'forward' && !draft.to.length ? box.querySelector('.rcpts input') : box.querySelector('textarea');
+  field.focus({ preventScroll: true });
+  box.scrollIntoView({ block: 'nearest' });
+}
+
+/**
+ * The reply's text is as tall as what's written; the reader keeps its place meanwhile, and
+ * follows the cursor down while writing at the end.
+ */
+function growText(text) {
+  const scroller = $('#m-scroll');
+  const top = scroller.scrollTop;
+  text.style.height = 'auto';
+  text.style.height = `${text.scrollHeight}px`;
+  scroller.scrollTop = top;
+  if (document.activeElement === text && text.selectionEnd === text.value.length) {
+    const below = text.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+    if (below > 0) scroller.scrollTop += below + 12;
+  }
+}
+
+/** What's wrong with sending `draft` as it is, for people; null if nothing. */
+function draftProblem(draft) {
+  const everyone = [...draft.to, ...draft.cc, ...draft.bcc];
+  if (!everyone.length) return 'Add someone to send it to.';
+  const wrong = everyone.find((r) => !isAddress(r.email));
+  if (wrong) return `“${wrong.email}” isn't an email address. Check it and send again.`;
+  if (!state.accounts.includes(draft.from)) return `${draft.from} isn't in Unified Mail any more. Pick another account to send from.`;
+  if (state.expired.has(draft.from)) return `The sign-in has expired for ${draft.from}. Click Reconnect above the message list, then send again.`;
+  return null;
+}
+
+/**
+ * Sends `draft` (Send, or Cmd+Enter in it): what's typed in its recipient fields counts. It
+ * leaves the screen at once, and the toast's Undo can bring it back while `send_message` waits
+ * out UNDO_MS. If sending fails, it comes back with the reason.
+ */
+async function sendDraft(draft, container) {
+  for (const input of container.querySelectorAll('.rcpts input')) input.commit();
+  const problem = draftProblem(draft);
+  if (problem) {
+    toast(problem, 6000);
+    return;
+  }
+  closeDraft(draft);
+  const job = ++state.sendJob;
+  // Undo before `send_message` has started just brings it back; after, it asks `cancel_send`.
+  const flow = { undone: false, started: false };
+  let gmail = '';  // `account/id` of the Gmail draft it goes as, left out of Drafts meanwhile
+  toast(`Sent from ${draft.from}`, UNDO_MS, {
+    label: 'Undo',
+    undo: true,
+    run: async () => {
+      if (flow.started && !(await invoke('cancel_send', { job }).catch(() => false))) {
+        toast('Too late to undo: it has been sent.', 4000);
+        return;
+      }
+      flow.undone = true;
+      state.sending.delete(gmail);
+      reopenDraft(draft);
+    },
+  });
+  try {
+    // A save on its way finishes first, so the draft it made is the one that's sent.
+    await draft.saving;
+    if (flow.undone) return;
+    // Its From changed since it was saved: that account's draft goes, and this one is new.
+    if (draft.gmailId && draft.gmailAccount !== draft.from) await deleteGmailDraft(draft).catch(() => {});
+    if (draft.gmailId) {
+      gmail = `${draft.gmailAccount}/${draft.gmailId}`;
+      state.sending.add(gmail);
+      renderSidebar();
+      if (listName() === 'drafts') renderList();
+    }
+    flow.started = true;
+    const payload = { ...outgoing(draft), draftId: draft.gmailId };
+    const sent = await invoke('send_message', { job, delayMs: UNDO_MS + SEND_GRACE_MS, draft: payload });
+    if (!sent) return;  // Undo
+    if (draft.gmailId) forgetGmailDraft(draft.gmailAccount, draft.gmailId);
+    draft.gmailId = null;
+    state.lastFrom = draft.from;
+    refresh();
+  } catch (e) {
+    reopenDraft(draft);
+    toast(`Couldn't send the message: ${e}`, 10000);
+  } finally {
+    state.sending.delete(gmail);
+  }
+}
+
+/** Discards `draft`, deleting it from Gmail's Drafts; the toast's Undo saves it there again. */
+function discardDraft(draft) {
+  closeDraft(draft);
+  const gone = deleteGmailDraft(draft).catch((e) => toast(`Couldn't delete the draft from Gmail: ${e}`, 6000));
+  toast('Draft discarded', UNDO_MS, {
+    label: 'Undo',
+    undo: true,
+    run: async () => {
+      await gone;
+      reopenDraft(draft);
+    },
+  });
+}
+
+/** Takes `draft` off the screen (its row, its email's Draft tag, the editor); it isn't saved again. */
+function closeDraft(draft) {
+  draft.closed = true;
+  clearTimeout(draft.saveTimer);
+  if (draft.message) {
+    const key = keyOf(draft.message);
+    if (state.replies.get(key) === draft) state.replies.delete(key);
+    if (state.current && keyOf(state.current) === key) renderMessageEnd();
+  } else {
+    state.drafts = state.drafts.filter((d) => d !== draft);
+    if (state.composing === draft) {
+      state.composing = null;
+      renderReaderViews();
+    }
+  }
+  renderList();
+  renderSidebar();
+}
+
+/**
+ * Brings `draft` back after Undo, or after sending failed: in the reader if it can show it.
+ * It's saved again, in case Gmail's copy is older.
+ */
+function reopenDraft(draft) {
+  draft.closed = false;
+  if (!draft.message) {
+    if (!state.drafts.includes(draft)) state.drafts.unshift(draft);
+    if (!state.accounts.includes(draft.from)) draft.from = defaultFrom();
+    openCompose(draft);
+    draftChanged(draft);
+    return;
+  }
+  const key = keyOf(draft.message);
+  state.replies.set(key, draft);
+  draftChanged(draft);
+  renderList();
+  if (state.current && keyOf(state.current) === key) {
+    renderMessageEnd();
+    focusReply(draft);
+  } else if (byKey(key)) {
+    select(key);
+  }
+}
+
+/**
+ * A removed account's new messages go from another one, as new drafts there; answers to its
+ * mail are dropped. Its own Gmail drafts stay in its Gmail.
+ */
+function forgetDraftsOf(account) {
+  for (const draft of state.drafts) {
+    if (draft.from === account) draft.from = state.accounts[0];
+    if (draft.gmailAccount === account) draft.gmailId = draft.gmailAccount = null;
+  }
+  state.drafts = state.drafts.filter((d) => d.from);
+  if (state.composing && !state.drafts.includes(state.composing)) {
+    state.composing = null;
+    renderReaderViews();
+  } else if (state.composing) {
+    renderCompose();
+  }
+  for (const [key, draft] of state.replies) {
+    if (draft.from !== account) continue;
+    draft.closed = true;
+    clearTimeout(draft.saveTimer);
+    state.replies.delete(key);
+  }
+}
+
+/** The email a reply quotes or a forward carries: the line(s) introducing it, and its text. */
+function quoteOf(draft) {
+  const { full } = draft;
+  const intro = draft.kind === 'forward'
+    ? ['---------- Forwarded message ---------', `From: ${full.from}`, `Date: ${longDate(full.date)}`,
+      `Subject: ${full.subject}`, `To: ${full.to}`, ...(full.cc ? [`Cc: ${full.cc}`] : [])]
+    : [`On ${longDate(full.date)}, ${full.from} wrote:`];
+  const text = full.text ? decodeBody(full.text) : full.html ? htmlToText(decodeBody(full.html)) : '';
+  return { intro, text: text.trim() };
+}
+
+function quotePreview(draft) {
+  const { intro, text } = quoteOf(draft);
+  return `${intro.join('\n')}\n\n${text}`;
+}
+
+/**
+ * What `send_message` gets for `draft`. A new message is plain text. An answer also has HTML,
+ * like Gmail's: the text, then the email answered in its own formatting, quoted (a reply) or
+ * under a "Forwarded message" header, with the pictures it shows in place and, forwarding, its
+ * files. The plain text quotes the email as text, `>` before each line.
+ */
+function outgoing(draft) {
+  const typed = draft.body.replace(/\s+$/, '');
+  const payload = {
+    account: draft.from,
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    subject: draft.subject,
+    text: typed,
+    html: null,
+    answers: null,
+    files: draft.files.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+    parts: [],
+  };
+  if (!draft.message || !draft.full) {
+    if (draft.thread) payload.answers = { id: '', threadId: draft.thread.threadId, messageId: draft.thread.messageId || '', references: draft.thread.references || '' };
+    return payload;
+  }
+  const { full, message } = draft;
+  const forward = draft.kind === 'forward';
+  const { intro, text } = quoteOf(draft);
+  payload.answers = { id: message.id, threadId: full.threadId || message.threadId, messageId: full.messageId || '', references: full.references || '' };
+  const before = typed ? `${typed}\n\n` : '';
+  payload.text = forward
+    ? `${before}${intro.join('\n')}\n\n${text}`
+    : `${before}${intro[0]}\n${text.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n')}`;
+  const { head, body } = emailHtml(full);
+  const typedHtml = typed ? `<div dir="auto">${linkify(escapeHtml(typed)).replace(/\n/g, '<br>')}</div><br>` : '';
+  const quoted = forward
+    ? `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${intro.map(escapeHtml).join('<br>')}<br></div><br>${body}</div>`
+    : `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${escapeHtml(intro[0])}<br></div>` +
+      `<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
+  payload.html = `<!doctype html><html><head><meta charset="utf-8">${head}</head><body>${typedHtml}${quoted}</body></html>`;
+  payload.parts = [
+    ...draft.carried.map((a) => ({ part: a.part })),
+    ...(full.inline || []).map((a) => ({ part: a.part, contentId: a.contentId })),
+  ];
+  return payload;
+}
+
+/**
+ * The answered email's HTML as an answer quotes it: its styles, for the new email's head, and
+ * its body. Parsing doesn't load anything or run anything. Plain text is escaped, keeping its
+ * line breaks.
+ */
+function emailHtml(full) {
+  if (!full.html) {
+    const text = full.text ? decodeBody(full.text) : '';
+    return { head: '', body: `<div>${linkify(escapeHtml(text)).replace(/\n/g, '<br>')}</div>` };
+  }
+  const doc = new DOMParser().parseFromString(decodeBody(full.html), 'text/html');
+  for (const el of doc.querySelectorAll('script, base, meta, title, link')) el.remove();
+  const styles = [...doc.querySelectorAll('style')];
+  const head = styles.map((style) => style.outerHTML).join('');
+  for (const style of styles) style.remove();
+  return { head, body: doc.body.innerHTML };
+}
+
+/** An HTML email's text, with a line break wherever a block (paragraph, row...) ends. */
+function htmlToText(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const out = [];
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        out.push(child.data.replace(/\s+/g, ' '));
+      } else if (child.nodeType === Node.ELEMENT_NODE && !/^(SCRIPT|STYLE|HEAD|TITLE)$/.test(child.tagName)) {
+        if (child.tagName === 'BR') {
+          out.push('\n');
+          continue;
+        }
+        const block = /^(P|DIV|TR|LI|H[1-6]|BLOCKQUOTE|TABLE|UL|OL|PRE|HR|SECTION|ARTICLE|HEADER|FOOTER)$/.test(child.tagName);
+        if (block) out.push('\n');
+        walk(child);
+        if (block) out.push('\n');
+        else if (/^T[DH]$/.test(child.tagName)) out.push(' ');
+      }
+    }
+  };
+  walk(doc.body);
+  return out.join('').replace(/[ \t ]+\n/g, '\n').replace(/\n[ \t ]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ---------- Attachments ----------
@@ -1280,8 +2509,57 @@ function showBody(full) {
     doc.addEventListener('mousedown', hideMenu);
   });
   // Once everything has loaded (web fonts too), fit one last time.
-  frame.addEventListener('load', () => scheduleFit(frame));
+  frame.addEventListener('load', () => {
+    scheduleFit(frame);
+    frame.loaded = true;
+  });
   $('#m-body').replaceChildren(frame);
+  watchHeight(frame);
+}
+
+/**
+ * Keeps the frame as tall as the email while its pictures arrive: on macOS their `load` events
+ * don't reach this page, and an email whose pictures have no set size grows as each one comes.
+ * Checks every HEIGHT_CHECK_MS until a second after the frame's `load`, or HEIGHT_WATCH_MS.
+ */
+const HEIGHT_CHECK_MS = 250;
+const HEIGHT_WATCH_MS = 30 * 1000;
+function watchHeight(frame) {
+  const start = Date.now();
+  let loadedAt = 0;
+  const check = () => {
+    if (!frame.isConnected) return;
+    fitHeight(frame, false);
+    if (frame.loaded && !loadedAt) loadedAt = Date.now();
+    if ((loadedAt && Date.now() - loadedAt > 1000) || Date.now() - start > HEIGHT_WATCH_MS) return;
+    setTimeout(check, HEIGHT_CHECK_MS);
+  };
+  setTimeout(check, HEIGHT_CHECK_MS);
+}
+
+/**
+ * Makes the frame as tall as the email, so the reader scrolls the email with its header and the
+ * reply, and the frame scrolls only sideways. `exact`: also shrink it, for a reader that got
+ * wider. The email's height can't be read in a frame taller than it (`scrollHeight` is then the
+ * frame's), so the frame is squeezed to nothing to measure, and set again before anything is
+ * drawn; the reader keeps its scroll position. Otherwise it only grows, which needs no squeeze.
+ */
+function fitHeight(frame, exact = true) {
+  const doc = frame.contentDocument;
+  if (!doc || doc.URL !== 'about:srcdoc' || !doc.documentElement) return;
+  const root = doc.documentElement;
+  if (!exact) {
+    if (root.scrollHeight > root.clientHeight) frame.style.height = `${frame.offsetHeight + root.scrollHeight - root.clientHeight}px`;
+    return;
+  }
+  const scroller = $('#m-scroll');
+  const top = scroller.scrollTop;
+  frame.style.height = '0px';
+  const height = root.scrollHeight;
+  frame.style.height = `${height}px`;
+  // A sideways scroll bar, on an email too wide to shrink, takes room at the bottom.
+  if (root.scrollHeight > root.clientHeight) frame.style.height = `${height + root.scrollHeight - root.clientHeight}px`;
+  scroller.scrollTop = top;
 }
 
 /**
@@ -1427,6 +2705,8 @@ function fitToFrame(frame) {
   const room = doc.documentElement.clientWidth;
   // One pixel to spare, so rounding can't leave a scroll bar behind.
   if (wide > room) doc.body.style.zoom = String(Math.max(MIN_EMAIL_ZOOM, (room - 1) / wide));
+  // Shrinking it, or a wider reader, makes it shorter.
+  fitHeight(frame);
 }
 
 /**
@@ -1579,6 +2859,7 @@ function runUndo() {
 }
 
 function move(delta) {
+  if (listName() === 'drafts') return;
   const list = visible();
   if (!list.length) return;
   const index = list.findIndex((m) => keyOf(m) === state.selected);
@@ -1586,10 +2867,24 @@ function move(delta) {
   if (nextIndex !== index) select(keyOf(list[nextIndex]));
 }
 
-/** Scrolls the open message by about a screen; `direction` is 1 (down) or -1 (up). */
-function scrollMessage(direction) {
-  const frame = $('#m-body iframe');
-  if (frame && frame.contentWindow) frame.contentWindow.scrollBy({ top: direction * frame.clientHeight * 0.9 });
+/**
+ * Scrolls the open message by about a screen, or `amount` px; `direction` is 1 (down) or -1 (up).
+ * The email's frame doesn't scroll (fitHeight), and Chromium doesn't pass its keys' scrolling on
+ * to the reader, so keys in the email scroll the reader here. `native`: the key also went to
+ * WebKit (macOS, in the email), which may scroll the reader itself; then this only scrolls if
+ * that didn't, so it never scrolls twice.
+ */
+const LINE_SCROLL = 40;
+function scrollMessage(direction, amount = null, native = false) {
+  const scroller = $('#m-scroll');
+  if (!state.current) return;
+  const by = direction * (amount ?? scroller.clientHeight * 0.9);
+  if (!native) {
+    scroller.scrollBy({ top: by });
+    return;
+  }
+  const top = scroller.scrollTop;
+  setTimeout(() => { if (scroller.scrollTop === top) scroller.scrollBy({ top: by }); }, 80);
 }
 
 /**
@@ -1628,16 +2923,22 @@ function onKey(e, inMessage = false) {
   }
   if (e.target.closest && e.target.closest('input, textarea')) return;
   const key = shortcutKey(e);
+  // macOS: a key in the email went to WebKit as well (onEmailKey).
+  const native = inMessage && IS_MAC;
   switch (key) {
     case 'j': move(1); break;
     case 'k': move(-1); break;
     case 'ArrowDown': case 'ArrowUp':
-      if (inMessage) return;
-      move(e.key === 'ArrowDown' ? 1 : -1);
+      // In the email the arrows scroll it; elsewhere they go through the list.
+      if (inMessage) scrollMessage(e.key === 'ArrowDown' ? 1 : -1, LINE_SCROLL, native);
+      else move(e.key === 'ArrowDown' ? 1 : -1);
       break;
     case ' ': case 'PageDown': case 'PageUp':
-      if (inMessage) return;
-      scrollMessage(e.key === 'PageUp' || (e.key === ' ' && e.shiftKey) ? -1 : 1);
+      scrollMessage(e.key === 'PageUp' || (e.key === ' ' && e.shiftKey) ? -1 : 1, null, native);
+      break;
+    case 'Home': case 'End':
+      if (!inMessage) return;
+      scrollMessage(e.key === 'End' ? 1 : -1, $('#m-scroll').scrollHeight, native);
       break;
     case 'e': act('archive'); break;
     case '#': case 'Delete': act('trash'); break;
@@ -1649,6 +2950,10 @@ function onKey(e, inMessage = false) {
     }
     case 'z': runUndo(); break;
     case '/': openSearch(); break;
+    case 'c': openCompose(); break;
+    case 'r': startReply('reply'); break;
+    case 'a': startReply('replyAll'); break;
+    case 'f': startReply('forward'); break;
     case 'Escape':
       if (!state.search) return;
       closeSearch();
@@ -1670,6 +2975,15 @@ function onContextMenu(e, frame = null) {
   e.preventDefault();
   const groups = [];
   const row = !frame && e.target.closest && e.target.closest('li.msg');
+  const draft = row && draftById(row.dataset.draft);
+  if (draft) {
+    groups.push([
+      { label: 'Open draft', run: () => openDraft(draft) },
+      { label: 'Discard draft', danger: true, run: () => discardDraft(draft) },
+    ]);
+  }
+  const gmailDraft = row && row.dataset.gmailDraft && byKey(row.dataset.gmailDraft);
+  if (gmailDraft) groups.push([{ label: 'Open draft', run: () => openGmailDraft(gmailDraft) }]);
   const m = row && byKey(row.dataset.key);
   if (m) {
     groups.push(
@@ -1717,7 +3031,10 @@ function onEmailKey(key, code, shiftKey) {
   onKey({ key, code, shiftKey, target, preventDefault() {} }, true);
 }
 
-/** `groups`: lists of `{ label, run, danger }`, shown with lines between them. */
+/**
+ * `groups`: lists of `{ label, run, danger }`, shown with lines between them. An item can also
+ * have an account's `color` (a dot before it) and a `hint` after it, such as its key.
+ */
 function showMenu(groups, x, y, row = null) {
   hideMenu();
   const menu = $('#menu');
@@ -1728,7 +3045,14 @@ function showMenu(groups, x, y, row = null) {
       const button = document.createElement('button');
       button.setAttribute('role', 'menuitem');
       if (item.danger) button.className = 'danger';
-      button.textContent = item.label;
+      if (item.color) button.append(accountDot(item.color));
+      button.append(item.label);
+      if (item.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = item.hint;
+        button.append(hint);
+      }
       button.addEventListener('click', () => { hideMenu(); item.run(); });
       menu.append(button);
     }
@@ -1813,6 +3137,7 @@ function renderSettingsAccounts() {
         }
         if (state.filter === account) state.filter = null;
         if (state.current && state.current.account === account) clearReader();
+        forgetDraftsOf(account);
         render();
       } catch (e) {
         toast(String(e));

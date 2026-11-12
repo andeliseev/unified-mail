@@ -6,19 +6,27 @@ mod gmail;
 mod idle;
 #[cfg(target_os = "macos")]
 mod macos;
+mod mime;
 mod oauth;
 mod state;
 
 use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
+use state::{AppState, ClientCreds, Draft, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
 use futures_util::future::{AbortHandle, Abortable};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
+use tokio::sync::oneshot;
+
+/// The longest a sent email waits for Undo, whatever the page asks.
+const MAX_SEND_DELAY: Duration = Duration::from_secs(30);
+/// How long quitting (or installing an update) waits for emails still on their way.
+const SEND_ON_QUIT: Duration = Duration::from_secs(20);
 
 /// The newer release `check_update` found, kept for `install_update`.
 #[derive(Default)]
@@ -27,6 +35,46 @@ struct PendingUpdate(Mutex<Option<Update>>);
 /// Attachment downloads still running, by the page's job number, so `cancel_save` can stop one.
 #[derive(Default)]
 struct Saving(Mutex<HashMap<u64, AbortHandle>>);
+
+/// Emails sent in the app that are still waiting out the time Undo has (`send_message`), by the
+/// page's job number. Each waits for its time to pass or to be told: `true` sends it at once,
+/// `false` (Undo) never.
+#[derive(Default)]
+struct Outbox {
+    waiting: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
+    /// Emails waiting or being sent. Quitting waits for them (`flush`).
+    unsent: AtomicUsize,
+}
+
+impl Outbox {
+    /// Sends every email that's waiting at once, then waits for all of them to be sent, up to
+    /// `limit`. For when the app quits, so a sent email isn't lost with it.
+    fn flush(&self, limit: Duration) {
+        for (_, go) in self.waiting.lock().unwrap().drain() {
+            let _ = go.send(true);
+        }
+        let start = Instant::now();
+        while self.unsent.load(Ordering::SeqCst) > 0 && start.elapsed() < limit {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Counts an email as unsent for as long as it lives.
+struct Unsent<'a>(&'a AtomicUsize);
+
+impl<'a> Unsent<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for Unsent<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 #[tauri::command]
 fn get_setup(state: State<'_, AppState>) -> Setup {
@@ -193,6 +241,61 @@ fn save_error(error: &std::io::Error) -> String {
     error.to_string()
 }
 
+/// Sends an email written in the app after `delay_ms`, the time its Undo shows: until then
+/// `cancel_send(job)` stops it. Returns the sent message's id, or null when Undo stopped it.
+/// If the app quits first, it's sent right away (`Outbox::flush`). Errors give the reason; the
+/// page puts "Couldn't send the message:" in front.
+#[tauri::command]
+async fn send_message(
+    state: State<'_, AppState>,
+    outbox: State<'_, Outbox>,
+    job: u64,
+    delay_ms: u64,
+    draft: Draft,
+) -> Result<Option<String>, String> {
+    let _unsent = Unsent::new(&outbox.unsent);
+    let (go, told) = oneshot::channel();
+    outbox.waiting.lock().unwrap().insert(job, go);
+    // `told` comes first: an Undo that arrives as the time runs out still stops it.
+    let send = tokio::select! {
+        biased;
+        told = told => told.unwrap_or(true),
+        _ = tokio::time::sleep(Duration::from_millis(delay_ms).min(MAX_SEND_DELAY)) => true,
+    };
+    outbox.waiting.lock().unwrap().remove(&job);
+    if !send {
+        return Ok(None);
+    }
+    state.send(draft).await.map(Some)
+}
+
+/// Undo for `send_message(job)`: returns whether it was stopped in time.
+#[tauri::command]
+fn cancel_send(outbox: State<'_, Outbox>, job: u64) -> bool {
+    let waiting = outbox.waiting.lock().unwrap().remove(&job);
+    waiting.is_some_and(|go| go.send(false).is_ok())
+}
+
+/// Saves what's written as a Gmail draft of `draft.account`: a new one, or `draft.draftId`
+/// updated. Returns the draft's id and its new message.
+#[tauri::command]
+async fn save_draft(state: State<'_, AppState>, draft: Draft) -> Result<gmail::SavedDraft, String> {
+    state.save_draft(draft).await
+}
+
+/// Deletes Gmail draft `id` for good: Discard.
+#[tauri::command]
+async fn delete_draft(state: State<'_, AppState>, account: String, id: String) -> Result<(), String> {
+    state.delete_draft(&account, &id).await
+}
+
+/// Gmail draft `id`, to go on writing it: its recipients, subject, text, files with their data,
+/// and the email it answers, when it's found.
+#[tauri::command]
+async fn open_draft(state: State<'_, AppState>, account: String, id: String) -> Result<gmail::OpenedDraft, String> {
+    state.open_draft(&account, &id).await
+}
+
 /// Opening a message marks it read; "Mark as unread" and "Mark as read" set it either way.
 #[tauri::command]
 async fn set_unread(state: State<'_, AppState>, account: String, id: String, unread: bool) -> Result<(), String> {
@@ -284,6 +387,9 @@ async fn check_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Resu
 async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
     let update = pending.0.lock().unwrap().take();
     let update = update.ok_or("There's no update to install. Open Settings again to check.")?;
+    // Installing ends the app without the `Exit` event that sends what's waiting, so send it first.
+    let handle = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || handle.state::<Outbox>().flush(SEND_ON_QUIT)).await;
     update
         .download_and_install(|_, _| {}, || {})
         .await
@@ -367,6 +473,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
         .manage(Saving::default())
+        .manage(Outbox::default())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             // Up to 0.1.11 the app was io.unifiedmail.desktop. Before anything reads the data folder
@@ -439,6 +546,11 @@ fn main() {
             inline_images,
             cancel_save,
             show_in_folder,
+            send_message,
+            cancel_send,
+            save_draft,
+            delete_draft,
+            open_draft,
             set_unread,
             archive_message,
             trash_message,
@@ -460,7 +572,12 @@ fn main() {
 /// Dock, as Mail does, so push and notifications go on. Clicking the Dock icon brings it back.
 /// Cmd+Q still quits: it ends the app without asking the window to close. Elsewhere closing the
 /// window quits the app. Resizes on macOS go to `macos::on_resized`, which follows full screen.
+/// Quitting, however it happens (Cmd+Q included), first sends the emails still waiting for Undo.
 fn on_event(app: &AppHandle, event: tauri::RunEvent) {
+    if let tauri::RunEvent::Exit = event {
+        app.state::<Outbox>().flush(SEND_ON_QUIT);
+        return;
+    }
     #[cfg(target_os = "macos")]
     match event {
         tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {

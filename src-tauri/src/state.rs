@@ -14,7 +14,7 @@ use futures_util::{future::join_all, stream, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::gmail::{self, FullMessage, MessageSummary};
-use crate::oauth;
+use crate::{mime, oauth};
 
 const KEYRING_SERVICE: &str = "unified-mail";
 const CLIENT_FILE: &str = "client.json";
@@ -27,6 +27,8 @@ const FETCH_CONCURRENCY: usize = 8;
 /// Summaries kept in memory for pages the caches don't hold (`AppState::recent`); past this
 /// many, they're all dropped and collected again.
 const RECENT_MAX: usize = 2000;
+/// Bytes of parts kept for emails being written (`AppState::parts`); past this, they're dropped.
+const PARTS_MAX: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,35 +83,61 @@ struct Settings {
 #[serde(rename_all = "lowercase")]
 pub enum Folder {
     Inbox,
-    /// Gmail's All Mail: everything outside Spam and Trash, which is what an unfiltered list returns.
+    Sent,
+    /// Gmail's drafts, of every account: each row also says which draft it is (`draft`).
+    Drafts,
+    /// Gmail's All Mail: everything outside Spam and Trash, which is what an unfiltered list
+    /// returns, without drafts.
     All,
     Trash,
 }
 
 impl Folder {
-    const EVERY: [Folder; 3] = [Folder::Inbox, Folder::All, Folder::Trash];
+    const EVERY: [Folder; 5] = [Folder::Inbox, Folder::Sent, Folder::Drafts, Folder::All, Folder::Trash];
 
     /// Labels a message must carry to be in this folder.
     fn labels(self) -> &'static [&'static str] {
         match self {
             Folder::Inbox => &["INBOX"],
+            Folder::Sent => &["SENT"],
+            Folder::Drafts => &["DRAFT"],
             Folder::All => &[],
             Folder::Trash => &["TRASH"],
         }
     }
 
-    /// Labels of this folder's unread messages.
-    fn unread_labels(self) -> &'static [&'static str] {
+    /// Labels of this folder's unread messages; none for drafts, which are never unread.
+    fn unread_labels(self) -> Option<&'static [&'static str]> {
         match self {
-            Folder::Inbox => &["INBOX", "UNREAD"],
-            Folder::All => &["UNREAD"],
-            Folder::Trash => &["TRASH", "UNREAD"],
+            Folder::Inbox => Some(&["INBOX", "UNREAD"]),
+            Folder::Sent => Some(&["SENT", "UNREAD"]),
+            Folder::Drafts => None,
+            Folder::All => Some(&["UNREAD"]),
+            Folder::Trash => Some(&["TRASH", "UNREAD"]),
         }
+    }
+
+    /// The Gmail search a list of this folder uses, given the one asked for (`q`): All Mail
+    /// leaves drafts out, as Gmail's own All Mail does. A draft is a message too, and saving one
+    /// as it's written replaces it again and again.
+    fn query(self, q: Option<&str>) -> Option<String> {
+        match (self, q) {
+            (Folder::All, Some(q)) => Some(format!("({q}) -in:drafts")),
+            (Folder::All, None) => Some("-in:drafts".into()),
+            (_, q) => q.map(str::to_string),
+        }
+    }
+
+    /// The folder's rows show whom each message went to (`MessageSummary::to`).
+    fn shows_recipients(self) -> bool {
+        matches!(self, Folder::Sent | Folder::Drafts)
     }
 
     fn cache_file(self) -> &'static str {
         match self {
             Folder::Inbox => "inbox-cache.json",
+            Folder::Sent => "sent-cache.json",
+            Folder::Drafts => "drafts-cache.json",
             Folder::All => "all-cache.json",
             Folder::Trash => "trash-cache.json",
         }
@@ -118,6 +146,9 @@ impl Folder {
 
 /// One folder's messages, keyed by `account/id`.
 type FolderCache = HashMap<String, MessageSummary>;
+
+/// A part of another message that goes along with an email: its name, type and bytes.
+type CarriedFile = (String, String, Arc<Vec<u8>>);
 
 #[derive(Serialize)]
 pub struct FolderResult {
@@ -144,6 +175,69 @@ pub struct OlderPage {
 #[serde(rename_all = "camelCase")]
 pub struct Trashed {
     pub was_in_inbox: bool,
+    pub was_sent: bool,
+}
+
+/// An email written in the app, to send from `account` (`AppState::send`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Draft {
+    pub account: String,
+    #[serde(default)]
+    pub to: Vec<mime::Address>,
+    #[serde(default)]
+    pub cc: Vec<mime::Address>,
+    #[serde(default)]
+    pub bcc: Vec<mime::Address>,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub text: String,
+    /// The text as HTML, with the quoted or forwarded email in its own formatting.
+    #[serde(default)]
+    pub html: Option<String>,
+    /// Replying or forwarding: the email answered, so this one joins its conversation.
+    #[serde(default)]
+    pub answers: Option<Answered>,
+    /// The Gmail draft it's saved as, if it is.
+    #[serde(default)]
+    pub draft_id: Option<String>,
+    /// Files picked on this computer.
+    #[serde(default)]
+    pub files: Vec<PickedFile>,
+    /// Parts of the email answered that go along: its files when forwarding, and the pictures
+    /// its quoted HTML shows in place (with their `contentId`).
+    #[serde(default)]
+    pub parts: Vec<CarriedPart>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Answered {
+    pub id: String,
+    pub thread_id: String,
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub references: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedFile {
+    pub name: String,
+    #[serde(default)]
+    pub mime_type: String,
+    /// The file's bytes, as base64.
+    pub data: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarriedPart {
+    pub part: String,
+    #[serde(default)]
+    pub content_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +282,10 @@ pub struct AppState {
     /// searching again or scrolling back doesn't fetch them again. In memory only, keyed by
     /// `account/id`. Locked after `cache` or `reported_failures`, never before them.
     recent: Mutex<FolderCache>,
+    /// The name each account sends under, once read (`display_name`); None when none is set.
+    names: Mutex<HashMap<String, Option<String>>>,
+    /// Parts of other messages that went along with an email, by `account/id/part` (`carried`).
+    parts: Mutex<HashMap<String, CarriedFile>>,
     /// Messages whose metadata failed to load and were already reported (`account/id`).
     /// They are retried on every sync but reported only once.
     reported_failures: Mutex<HashSet<String>>,
@@ -226,6 +324,8 @@ impl AppState {
             expired: Mutex::new(HashSet::new()),
             cache: Mutex::new(cache),
             recent: Mutex::new(HashMap::new()),
+            names: Mutex::new(HashMap::new()),
+            parts: Mutex::new(HashMap::new()),
             reported_failures: Mutex::new(HashSet::new()),
             dir,
         }
@@ -408,11 +508,18 @@ impl AppState {
     async fn sync_account(&self, account: &str, folder: Folder, q: Option<&str>) -> Result<AccountSync, String> {
         let token = self.access_token(account).await?;
         let trash = folder == Folder::Trash;
+        let query = folder.query(q);
+        let unread_ids = async {
+            match folder.unread_labels() {
+                // Any unread message in this page is also among the PAGE_SIZE newest unread
+                // ones of the same query, so this one call keeps read state current.
+                Some(labels) => gmail::list_ids(&self.http, &token, labels, trash, query.as_deref(), PAGE_SIZE).await,
+                None => Ok(gmail::Page { ids: Vec::new(), more: false }),
+            }
+        };
         let (page, unread) = tokio::try_join!(
-            gmail::list_ids(&self.http, &token, folder.labels(), trash, q, PAGE_SIZE),
-            // Any unread message in this page is also among the PAGE_SIZE newest unread
-            // ones of the same query, so this one call keeps read state current.
-            gmail::list_ids(&self.http, &token, folder.unread_labels(), trash, q, PAGE_SIZE),
+            gmail::list_ids(&self.http, &token, folder.labels(), trash, query.as_deref(), PAGE_SIZE),
+            unread_ids,
         )?;
         let unread: HashSet<String> = unread.ids.into_iter().collect();
         let ids = page.ids;
@@ -428,8 +535,9 @@ impl AppState {
                         .get(&key)
                         .or_else(|| caches.values().find_map(|cache| cache.get(&key)))
                         .or_else(|| recent.get(&key))
-                        // Not known yet whether it has files (`has_files`): fetched again.
-                        .filter(|m| m.has_files.is_some())
+                        // Not known yet whether it has files (`has_files`), or whom it went to where
+                        // the rows show it (`to`): fetched again.
+                        .filter(|m| m.has_files.is_some() && (m.to.is_some() || !folder.shows_recipients()))
                         .map(|m| (id.clone(), m.clone()))
                 })
                 .collect()
@@ -473,7 +581,7 @@ impl AppState {
             n => format!("{n} messages couldn't be loaded: {first}"),
         });
 
-        let messages = ids
+        let mut messages: Vec<MessageSummary> = ids
             .iter()
             .filter_map(|id| known.remove(id))
             .map(|mut m| {
@@ -481,6 +589,14 @@ impl AppState {
                 m
             })
             .collect();
+        // Which draft each draft message is: a draft keeps its id while every save gives it a new
+        // message.
+        if folder == Folder::Drafts {
+            let drafts = gmail::draft_ids(http, token).await?;
+            for m in &mut messages {
+                m.draft = drafts.get(&m.id).cloned();
+            }
+        }
         Ok(AccountSync { messages, warning, more: page.more })
     }
 
@@ -533,10 +649,12 @@ impl AppState {
     /// Moves to Trash and reports whether the message was in the Inbox, so Undo can put it back there.
     pub async fn trash(&self, account: &str, id: &str) -> Result<Trashed, String> {
         let token = self.access_token(account).await?;
-        let was_in_inbox = gmail::labels(&self.http, &token, id).await?.iter().any(|l| l == "INBOX");
+        let labels = gmail::labels(&self.http, &token, id).await?;
+        let was_in_inbox = labels.iter().any(|l| l == "INBOX");
+        let was_sent = labels.iter().any(|l| l == "SENT");
         gmail::trash(&self.http, &token, id).await?;
-        self.forget(account, id, &[Folder::Inbox, Folder::All]);
-        Ok(Trashed { was_in_inbox })
+        self.forget(account, id, &[Folder::Inbox, Folder::Sent, Folder::All]);
+        Ok(Trashed { was_in_inbox, was_sent })
     }
 
     /// Undoes Archive or Delete, or restores from Trash: optionally takes the message out of
@@ -551,6 +669,152 @@ impl AppState {
             gmail::move_to_inbox(&self.http, &token, id).await?;
         }
         Ok(())
+    }
+
+    /// Sends an email written in the app and returns its id. A draft saved in Gmail
+    /// (`draft_id`) is saved once more with what was last written and sent as itself, which
+    /// moves it to Sent; anything else goes as a new message. Errors are for people.
+    pub async fn send(&self, draft: Draft) -> Result<String, String> {
+        let (account, draft_id) = (draft.account.clone(), draft.draft_id.clone());
+        let (raw, thread, token) = self.write_email(draft, true).await?;
+        let Some(id) = draft_id else {
+            return gmail::send_email(&self.http, &token, &raw, thread.as_deref()).await;
+        };
+        let saved = gmail::save_draft(&self.http, &token, Some(&id), &raw, thread.as_deref()).await?;
+        let sent = gmail::send_draft(&self.http, &token, &saved.id).await?;
+        self.forget_draft(&account, &[&id, &saved.id]);
+        Ok(sent)
+    }
+
+    /// Saves what's written as a Gmail draft of its account: a new one, or `draft_id` updated.
+    /// It may still lack recipients, or have one half typed.
+    pub async fn save_draft(&self, draft: Draft) -> Result<gmail::SavedDraft, String> {
+        let draft_id = draft.draft_id.clone();
+        let (raw, thread, token) = self.write_email(draft, false).await?;
+        gmail::save_draft(&self.http, &token, draft_id.as_deref(), &raw, thread.as_deref()).await
+    }
+
+    /// Deletes a Gmail draft for good (Discard).
+    pub async fn delete_draft(&self, account: &str, id: &str) -> Result<(), String> {
+        let token = self.access_token(account).await?;
+        gmail::delete_draft(&self.http, &token, id).await?;
+        self.forget_draft(account, &[id]);
+        Ok(())
+    }
+
+    /// A Gmail draft to go on writing, with the email it answers when that's still in its
+    /// conversation.
+    pub async fn open_draft(&self, account: &str, id: &str) -> Result<gmail::OpenedDraft, String> {
+        let token = self.access_token(account).await?;
+        let mut draft = gmail::get_draft(&self.http, &token, id).await?;
+        if !draft.in_reply_to.trim().is_empty() && !draft.thread_id.is_empty() {
+            if let Ok(Some(answered)) = gmail::find_in_thread(&self.http, &token, &draft.thread_id, &draft.in_reply_to).await {
+                draft.answered = gmail::get_summary(&self.http, &token, account, &answered).await.ok();
+            }
+        }
+        Ok(draft)
+    }
+
+    /// Drafts sent or deleted leave the Drafts folder's cache.
+    fn forget_draft(&self, account: &str, ids: &[&str]) {
+        self.edit_cache(Folder::Drafts, |cache| {
+            cache.retain(|_, m| m.account != account || !m.draft.as_deref().is_some_and(|d| ids.contains(&d)));
+        });
+    }
+
+    /// Writes out an email from the app, to send (`check`: someone to send it to, every
+    /// address right, checked before anything downloads) or as a draft. From gets the account's
+    /// name, and the parts of the email answered that go along are fetched. Returns the email,
+    /// the conversation it goes in, and the account's access token.
+    async fn write_email(&self, draft: Draft, check: bool) -> Result<(Vec<u8>, Option<String>, String), String> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let mut files = Vec::new();
+        for file in &draft.files {
+            let data = STANDARD
+                .decode(&file.data)
+                .map_err(|_| format!("{} couldn't be read. Attach it again.", file.name))?;
+            files.push(mime::File { name: file.name.clone(), mime_type: file.mime_type.clone(), content_id: None, data });
+        }
+        let (in_reply_to, references) = match &draft.answers {
+            Some(answered) if !answered.message_id.trim().is_empty() => {
+                let mut references: Vec<String> = answered.references.split_whitespace().map(String::from).collect();
+                references.push(answered.message_id.trim().to_string());
+                (Some(answered.message_id.clone()), references)
+            }
+            _ => (None, Vec::new()),
+        };
+        let mut email = mime::Email {
+            from: None,
+            to: draft.to,
+            cc: draft.cc,
+            bcc: draft.bcc,
+            subject: draft.subject,
+            text: draft.text,
+            html: draft.html,
+            in_reply_to,
+            references,
+            files,
+        };
+        if check {
+            email.check()?;
+        }
+        let token = self.access_token(&draft.account).await?;
+        // The account's name, as Gmail's own sending shows it. If it can't be read, the email still
+        // goes, From filled in by Gmail.
+        if let Some(name) = self.display_name(&token, &draft.account).await {
+            email.from = Some(mime::Address { name, email: draft.account.clone() });
+        }
+        if let (Some(answered), false) = (&draft.answers, draft.parts.is_empty()) {
+            email.files.extend(self.carried(&token, &draft.account, &answered.id, &draft.parts).await?);
+        }
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let raw = if check { email.build(now)? } else { email.write(now) };
+        let thread = draft.answers.map(|a| a.thread_id).filter(|t| !t.is_empty());
+        Ok((raw, thread, token))
+    }
+
+    /// The name Gmail sends `account` under (`gmail::display_name`), read once per launch.
+    async fn display_name(&self, token: &str, account: &str) -> Option<String> {
+        if let Some(name) = self.names.lock().unwrap().get(account) {
+            return name.clone();
+        }
+        // Not kept if it can't be read, so the next email asks again.
+        let name = gmail::display_name(&self.http, token, account).await.ok()?;
+        self.names.lock().unwrap().insert(account.to_string(), name.clone());
+        name
+    }
+
+    /// Parts of message `id` that go along with an email: a forward's files, and the pictures its
+    /// quoted HTML shows in place (with their Content-ID). Downloaded once, then kept in memory
+    /// (`parts`), since a draft is saved again and again with them.
+    async fn carried(&self, token: &str, account: &str, id: &str, parts: &[CarriedPart]) -> Result<Vec<mime::File>, String> {
+        let key = |part: &str| format!("{account}/{id}/{part}");
+        let cached: HashMap<String, CarriedFile> = {
+            let cache = self.parts.lock().unwrap();
+            parts.iter().filter_map(|p| cache.get(&key(&p.part)).map(|f| (p.part.clone(), f.clone()))).collect()
+        };
+        let missing: Vec<String> = parts.iter().map(|p| p.part.clone()).filter(|p| !cached.contains_key(p)).collect();
+        let mut found = cached;
+        if !missing.is_empty() {
+            let fetched = gmail::get_files(&self.http, token, id, &missing).await?;
+            let mut cache = self.parts.lock().unwrap();
+            let fetched_size: usize = fetched.iter().map(|(_, _, data)| data.len()).sum();
+            if cache.values().map(|(_, _, data)| data.len()).sum::<usize>() + fetched_size > PARTS_MAX {
+                cache.clear();
+            }
+            for (part, (name, mime_type, data)) in missing.into_iter().zip(fetched) {
+                let file: CarriedFile = (name, mime_type, Arc::new(data));
+                cache.insert(key(&part), file.clone());
+                found.insert(part, file);
+            }
+        }
+        parts
+            .iter()
+            .map(|p| {
+                let (name, mime_type, data) = found.get(&p.part).ok_or("A file to send along is missing. Open the email again.")?;
+                Ok(mime::File { name: name.clone(), mime_type: mime_type.clone(), content_id: p.content_id.clone(), data: data.to_vec() })
+            })
+            .collect()
     }
 
     /// Drops a message from folders it just left. Folders it joined pick it up on their next sync.
@@ -769,19 +1033,28 @@ mod tests {
     #[test]
     fn folder_names_match_the_ui() {
         let names: Vec<String> = Folder::EVERY.iter().map(|f| serde_json::to_string(f).unwrap()).collect();
-        assert_eq!(names, [r#""inbox""#, r#""all""#, r#""trash""#]);
+        assert_eq!(names, [r#""inbox""#, r#""sent""#, r#""drafts""#, r#""all""#, r#""trash""#]);
         assert_eq!(serde_json::from_str::<Folder>(r#""trash""#).unwrap(), Folder::Trash);
+    }
+
+    #[test]
+    fn all_mail_leaves_drafts_out() {
+        assert_eq!(Folder::All.query(None).as_deref(), Some("-in:drafts"));
+        assert_eq!(Folder::All.query(Some("from:a OR from:b")).as_deref(), Some("(from:a OR from:b) -in:drafts"));
+        assert_eq!(Folder::Inbox.query(None), None);
+        assert_eq!(Folder::Drafts.query(Some("before:1")).as_deref(), Some("before:1"));
     }
 
     #[test]
     fn unread_lists_narrow_the_folder() {
         for folder in Folder::EVERY {
-            let unread = folder.unread_labels();
+            let Some(unread) = folder.unread_labels() else { continue };
             assert!(folder.labels().iter().all(|l| unread.contains(l)), "{folder:?}");
             assert!(unread.contains(&"UNREAD"), "{folder:?}");
         }
+        assert!(Folder::Drafts.unread_labels().is_none());
         let files: HashSet<_> = Folder::EVERY.iter().map(|f| f.cache_file()).collect();
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 5);
         // The Inbox keeps its old file name, so existing caches still load.
         assert_eq!(Folder::Inbox.cache_file(), "inbox-cache.json");
     }

@@ -245,6 +245,7 @@ Never run a development build on your real Gmail accounts: a bug could archive, 
 
 - `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `com.andeliseev.unified-mail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
 - Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
+- Send only from test accounts, and only to addresses that are yours: the app really sends. Undo stops a message for 8 s, and quitting in that time sends it at once.
 - Release builds (`npm run build`, `npx tauri build`) use the real identity, `com.andeliseev.unified-mail`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
 - For the UI alone, use a fake backend, as described next.
 
@@ -253,10 +254,10 @@ Never run a development build on your real Gmail accounts: a bug could archive, 
 The UI talks to Rust only through `window.__TAURI__.core.invoke` and `window.__TAURI__.event.listen`. To check layout and behavior in a normal browser:
 
 1. Copy `src/` somewhere else.
-2. Add a script before `app.js` that defines `window.__TAURI__` with fake `invoke` answers for the commands in [architecture.md](architecture.md#commands-ui--rust), plus a no-op `listen`.
+2. Add a script before `app.js` that defines `window.__TAURI__` with fake `invoke` answers for the commands in [architecture.md](architecture.md#commands-ui--rust), plus a no-op `listen`. A fake `send_message` should wait `delayMs` and answer null if `cancel_send` came first, and keep what it was given, to look at.
 3. Serve the folder (for example `python -m http.server`).
 
-This is how reading, the sandbox, the windows-1251 decoding, archive/delete and Settings were checked during development.
+This is how reading, the sandbox, the windows-1251 decoding, archive/delete, Settings, search, and writing and sending were checked during development.
 
 To test in the **real WebView2**, including the release CSP, without touching your own accounts:
 

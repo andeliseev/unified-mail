@@ -135,8 +135,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 #window-buttons #win-close:active { background: #c83c30; color: #fff; }
 /* Windows: the strip above the reader (#window-bar) already gives the message's buttons room.
    macOS has no strip there: the buttons sit on the list header's row, centered 26 px down. */
-.own-title-bar .msg-head { padding-top: 2px; }
-.mac .msg-head { padding-top: 10px; }
+.own-title-bar .msg-actions { padding-top: 2px; }
+.mac .msg-actions { padding-top: 10px; }
 
 .nav-item, .side-btn {
   display: flex;
@@ -351,6 +351,10 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   color: var(--accent);
   background: var(--selected);
 }
+/* A message being written: a new one's row at the top of the list, or a reply's email. */
+.msg .tag.draft { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.msg.draft .from { display: flex; align-items: baseline; }
+.msg.draft .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.unread .from, .msg.unread .subject { font-weight: 700; }
 .msg.unread .row1::before {
   content: "";
@@ -377,11 +381,23 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 /* Reader */
 
 #reader { display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
-#message { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.msg-head { padding: 12px 24px 14px; border-bottom: 1px solid var(--border); user-select: text; }
-.msg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+#message, #compose { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The message's buttons (or a new message's) stay at the top; under them the header, the email
+   and the reply scroll as one page (#m-scroll), so the email is never cut off. */
+.msg-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 24px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.reader-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.msg-head { padding: 14px 24px; border-bottom: 1px solid var(--border); user-select: text; }
 .tool { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-/* Original / Dark sits apart from the actions on the message. */
+.tool.primary { padding-left: 18px; padding-right: 18px; }
+/* Original / Dark sits apart from the actions on the message, as Discard (after how saving went)
+   does from Send. */
 #colors { margin-left: auto; }
 .tool.danger:hover { color: var(--danger); border-color: var(--danger); }
 #m-subject { font-size: 19px; margin: 0 0 10px; line-height: 1.3; overflow-wrap: anywhere; }
@@ -390,6 +406,13 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .meta-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta .from { font-weight: 600; }
 .meta time { flex: none; font-size: 12.5px; }
+/* Next to the date: Reply, and ⋮ for Reply all and Forward. */
+.meta-end { flex: none; display: flex; align-items: center; gap: 2px; align-self: center; }
+.meta-end time { margin-right: 6px; }
+.icon-btn.mini { padding: 4px; border-radius: 6px; color: var(--muted); }
+.icon-btn.mini:hover { color: var(--text); }
+.icon-btn.mini svg { width: 15px; height: 15px; }
+svg .dot { fill: currentColor; stroke: none; }
 .chip {
   flex: none;
   font-size: 11.5px;
@@ -446,9 +469,121 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .att.file .kind { color: var(--muted); }
 .save-all { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
 .save-all.saving { padding-right: 8px; }
-#m-body { flex: 1; min-height: 0; display: flex; }
-#m-body iframe { flex: 1; width: 100%; border: 0; background: #fff; }
-#m-body .empty { background: var(--panel); }
+/* The frame is as tall as the email (fitHeight), so the reader scrolls it with the rest. */
+#m-body iframe { display: block; width: 100%; height: 0; border: 0; background: #fff; }
+#m-body .empty { min-height: 160px; background: var(--panel); }
+
+/* Writing: a new message (#compose) and a reply under the email (.reply-box) */
+
+/* Reply, Reply all and Forward at the end of the email, or the reply being written. */
+#m-end { padding: 18px 24px 32px; }
+#m-end:empty { display: none; }
+.answer-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.answer-buttons button { display: flex; align-items: center; gap: 7px; padding: 6px 16px; border-radius: 999px; }
+.reply-box { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--panel); }
+.reply-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+/* A row of the editor: From, To, Cc, Bcc, Subject, files. */
+.field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-height: 37px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+}
+#c-fields .field { padding-left: 24px; padding-right: 24px; }
+.field .fk { flex: none; width: 58px; color: var(--muted); }
+.field input {
+  flex: 1;
+  min-width: 90px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  user-select: text;
+}
+.field input:focus { outline: none; }
+.field .subject { font-weight: 600; }
+/* A recipient. One that isn't an email address is red, and sending says so. */
+.rcpt {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 2px 0 9px;
+  border-radius: 999px;
+  background: var(--selected);
+  font-size: 12.5px;
+  line-height: 23px;
+}
+.rcpt .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcpt button { display: grid; place-items: center; width: 19px; height: 19px; margin-left: 1px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); }
+.rcpt button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.rcpt button svg { width: 11px; height: 11px; }
+.rcpt.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.link-btn { flex: none; margin-left: auto; padding: 2px 4px; border: 0; color: var(--muted); font-size: 12.5px; }
+.link-btn:hover { background: none; color: var(--text); }
+/* From: the account's color and address; in a new message a menu of the accounts. */
+.from-pick { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -7px; padding: 3px 7px; border: 0; border-radius: 6px; }
+.from-pick svg { width: 13px; height: 13px; color: var(--muted); }
+.from-pick .label, .reply-from .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--acc); }
+/* Files going with the message: removable chips, in the reader's attachment style. */
+.draft-files { gap: 6px; margin: 0; }
+.draft-files.field { padding-top: 6px; padding-bottom: 6px; }
+.reply-box .draft-files { border-bottom: 0; padding: 8px 12px 0; }
+.draft-file { display: flex; align-items: center; gap: 7px; max-width: 260px; padding: 3px 3px 3px 9px; border: 1px solid var(--border); border-radius: 7px; font-size: 12.5px; }
+.draft-file .kind { width: 16px; height: 16px; }
+.draft-file .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-file .size { flex: none; color: var(--muted); font-size: 12px; }
+.draft-file button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); }
+.draft-file button svg { width: 12px; height: 12px; }
+.draft-file.image .kind { color: #1d9e75; }
+.draft-file.pdf .kind { color: #e24b4a; }
+.draft-file.archive .kind { color: #ba7517; }
+.draft-file.document .kind { color: var(--accent); }
+.draft-file.file .kind { color: var(--muted); }
+textarea {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  resize: none;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: none;
+  user-select: text;
+}
+textarea:focus { outline: none; }
+textarea::placeholder, .field input::placeholder { color: var(--muted); }
+#c-body { flex: 1; min-height: 0; padding: 14px 24px; }
+/* The reply's text grows as it's written (growText); the reader scrolls. */
+.reply-box textarea { min-height: 110px; padding: 12px; overflow: hidden; }
+/* The kind of answer, first in the To row: its icon and a ▾ for a menu. */
+.kind-btn { display: inline-flex; align-items: center; gap: 1px; margin-left: -6px; padding: 3px 4px; border: 0; border-radius: 6px; color: var(--muted); }
+.kind-btn:hover { color: var(--text); }
+.kind-btn .chev { width: 11px; height: 11px; }
+/* The email answered, as the reply quotes it (···). */
+.quote {
+  margin: 0 12px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.reply-foot { display: flex; align-items: center; gap: 4px; padding: 7px 8px 7px 10px; border-top: 1px solid var(--border); }
+.reply-foot .primary { padding: 5px 18px; }
+.reply-foot .icon-btn { color: var(--muted); }
+.reply-foot .icon-btn:hover { color: var(--text); }
+.reply-foot .icon-btn.on { color: var(--accent); }
+.reply-from { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 6px; color: var(--muted); font-size: 12px; }
+/* How saving to Gmail's Drafts went (renderSaveState), right of what can be done to the draft. */
+.save-state { display: flex; align-items: center; gap: 4px; margin-left: auto; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.save-state svg { width: 14px; height: 14px; }
+.save-state.error { color: var(--danger); }
 
 /* Overlays */
 
@@ -538,8 +673,9 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   border-radius: 9px;
   box-shadow: var(--shadow);
 }
-#menu button { border: 0; border-radius: 6px; padding: 6px 10px; text-align: left; }
+#menu button { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 6px 10px; text-align: left; white-space: nowrap; }
 #menu button.danger:hover { color: var(--danger); }
+#menu .hint { margin-left: auto; padding-left: 20px; color: var(--muted); font-size: 12px; }
 #menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }
 
 #toast {

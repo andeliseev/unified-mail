@@ -116,9 +116,17 @@ unsafe extern "C-unwind" fn key_down(view: &NSView, cmd: Sel, event: &NSEvent) {
     let not_ours = NSEventModifierFlags::Command | NSEventModifierFlags::Control | NSEventModifierFlags::Option;
     if !flags.intersects(not_ours) {
         if let Some(app) = APP.get() {
+            // Keys that don't type a character get the names a browser gives them; they scroll
+            // the reader, which holds the email (`scrollMessage` in app.js).
             let key = match event.keyCode() {
                 0x75 => "Delete".to_string(), // the forward Delete key
                 0x35 => "Escape".to_string(),
+                0x7d => "ArrowDown".to_string(),
+                0x7e => "ArrowUp".to_string(),
+                0x79 => "PageDown".to_string(),
+                0x74 => "PageUp".to_string(),
+                0x73 => "Home".to_string(),
+                0x77 => "End".to_string(),
                 _ => event.characters().map(|c| c.to_string()).unwrap_or_default(),
             };
             // Where the key sits, for layouts without Latin letters (`shortcutKey` in app.js).
@@ -127,6 +135,10 @@ unsafe extern "C-unwind" fn key_down(view: &NSView, cmd: Sel, event: &NSEvent) {
                 0x28 => "KeyK",
                 0x0e => "KeyE",
                 0x06 => "KeyZ",
+                0x08 => "KeyC",
+                0x0f => "KeyR",
+                0x00 => "KeyA",
+                0x03 => "KeyF",
                 0x20 => "KeyU",
                 0x22 => "KeyI",
                 0x14 => "Digit3",

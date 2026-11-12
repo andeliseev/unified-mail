@@ -2,8 +2,9 @@
 
 A small, fast desktop email app for Gmail on Windows and macOS: one inbox for all your Gmail accounts.
 
-- **Inbox, All Mail and Trash** for all your accounts together, or for one account at a time
+- **Inbox, Sent, Drafts, All Mail and Trash** for all your accounts together, or for one account at a time
 - **Search** all your accounts at once, with Gmail's search words such as `from:` and `has:attachment`
+- **Write, reply and forward** from any of your accounts, with attachments, and **Undo** for a few seconds after you click Send. Drafts are saved to your Gmail Drafts as you type
 - **New mail appears within seconds**, with no need to refresh, and a **notification** tells you about it when the app is in the background
 - The **unread count** shows on the app's taskbar / Dock icon
 - **Updates itself:** when a new version is out, Settings shows an **Update** button, and one click installs it
@@ -41,7 +42,7 @@ Click **Add account**, choose your Google account in the browser window that ope
 
 - Google may warn that **"Google hasn't verified this app"**, because the app hasn't finished Google's review yet. Click **Advanced → Go to Unified Mail** to continue.
 - **Work accounts (Google Workspace):** your administrator may block apps that Google hasn't verified. If sign-in is refused, ask them to allow Unified Mail.
-- Google's permission screen asks for full Gmail access. Gmail requires that for instant new-mail notifications. The app only reads your mail, marks it read or unread, archives it, and moves it to or from Trash. It never permanently deletes anything.
+- Google's permission screen asks for full Gmail access. Gmail requires that for instant new-mail notifications. The app reads your mail, sends the emails you write and keeps their drafts in your Gmail Drafts, marks mail read or unread, archives it, and moves it to or from Trash. It never permanently deletes anything except drafts you discard or send.
 
 ## Keyboard shortcuts
 
@@ -54,6 +55,9 @@ Click **Add account**, choose your Google account in the browser window that ope
 | `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo |
 | `/`, or `Cmd+F` on a Mac and `Ctrl+F` on Windows | Search |
+| `C` | New message |
+| `R` / `A` / `F` | Reply / Reply all / Forward |
+| `Cmd+Enter` on a Mac, `Ctrl+Enter` on Windows | Send, while writing |
 | `Esc` | Close the search |
 
 ## Privacy
@@ -62,6 +66,7 @@ Unified Mail runs entirely on your computer and talks only to Google, plus GitHu
 
 - **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain.
 - **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save: they go to your Downloads folder.
+- **Emails you write** are saved as drafts in the account's Gmail Drafts as you type, and sent from Gmail when you click Send. They're not saved on your computer.
 - **Updates:** when it starts, every few hours, and when you open Settings, the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
 - **Notifications** show the sender and subject of new mail. Windows and macOS keep recent notifications in their notification center until you clear them.
 - **Removing an account** in Settings revokes the app's access at Google and deletes its data from your computer.
@@ -72,7 +77,7 @@ Read the full [privacy policy](https://andeliseev.github.io/unified-mail/privacy
 ## Current limits
 
 - Gmail only for now. Other providers, such as Yandex Mail, are planned.
-- No compose or reply yet.
+- Drafts are plain text: a draft started in Gmail with bold text or pictures loses that formatting once you edit it here.
 - Older messages you've scrolled to aren't refreshed in the background. Reopen the folder to update them.
 
 ## Building from source and contributing
