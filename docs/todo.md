@@ -10,6 +10,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS: a wide image that arrives late refits the email only at the frame's `load`, because WebKit doesn't run the image `load` listener in the frame either. A `ResizeObserver` from the page might work there
 - [ ] Notifications from the installed app: they should carry the app's name and icon, since the installer's shortcut registers the app's ID with Windows. Dev builds run from `target\` and show as "Windows PowerShell". Checked so far: toasts and the mail sound in the test app, the taskbar badge, and the second-launch handling. A click on a toast isn't checked yet
 - [ ] macOS `.dmg` from the Release workflow: first run of a downloaded copy, with the Gatekeeper prompt. A local build isn't quarantined, so it never shows that prompt
+- [ ] Search against real Gmail: Gmail's search words, `before:` paging of the results, the Inbox tags, and how fast the first search is. So far a unit test and a fake backend only
 - [ ] The Release workflow's Mac signing (rcodesign through the `codesign` stand-in) hasn't run on GitHub yet (see [development.md](development.md#mac-signing)). Checked locally with rcodesign 0.29.0: test apps signed as Tauri signs verify on a Mac that doesn't trust the certificate, and a second build read the first one's keychain item without a prompt. Not checked: the download and the stand-in on the runner, the real app, and a real update
 
 ## Gaps in current features
@@ -20,7 +21,9 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] An account whose sign-in expires mid-session shows Reconnect only after the next sync; opening a message from it before that shows the error as a toast
 - [ ] **Push status** in the UI: show when an account's IDLE connection is down, instead of only logging `[push]`
 - [ ] Older pages aren't re-synced: something archived elsewhere stays visible there until the folder is reopened or the app restarts
-- [ ] Search across all mail (Gmail `q=`), for finding old messages without scrolling
+- [ ] Search results don't update by themselves: push and syncs don't run the search again, only Enter does
+- [ ] Search leaves out Spam and Trash (`includeSpamTrash` off), so typing `in:trash` or `in:anywhere` probably finds nothing more. Trash results would also need Trash's actions
+- [ ] Search: recent searches, or suggestions of senders while typing
 - [ ] Rendering re-creates every row; with many thousands of loaded rows, switch to a virtualized list
 - [ ] Message-level list: add **conversation (thread) view** like Gmail's
 - [ ] Sync only the account that sent `mail-changed`, not all accounts
@@ -42,8 +45,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS: once the window is closed, only the Dock icon or a notification brings it back. A Window menu item for it, like Mail's Window → Message Viewer, would add a keyboard way
 - [ ] Star, move to label
 - [ ] **App language** setting (e.g. Russian). The UI is English only. Dates are English too ("Nov 4"), with the system's clock style (24-hour or AM/PM); with a language setting they'd follow the chosen language. Text fields keep the system's own right-click menu, so on a Russian system that shows in Russian
-- [ ] Search (Gmail `q=` query)
-- [ ] Reply / compose / send (Gmail API `messages.send`)
+- [ ] Reply / compose / send (Gmail API `messages.send`; the app's Google permission already allows it). First mockups were shown on 2026-11-12, each in the reader, in a panel at the bottom right, or in its own window, with a From menu and Reply / Reply all / Forward under the email. They need another round before building. The privacy policy says the app doesn't send email, so it changes with this
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of two lists
 
 ## Yandex Mail accounts

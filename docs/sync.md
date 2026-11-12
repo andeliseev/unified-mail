@@ -41,6 +41,13 @@ Scrolling asks for one account's next page with `load_older(folder, account, bef
 
 Older pages don't go into the caches. The caches stay one newest page per folder, so they don't grow, and the next launch starts from the newest page again. How the UI merges pages across accounts is in [ui.md](ui.md#older-mail).
 
+## Search (`AppState::search`)
+
+`search_messages(account, query, before)` is an older page of All Mail with Gmail's `q` set to what was typed (`gmail::search_query`): the same three list calls, for the results, their unread ones and their Inbox ones, with no label. So it searches All Mail without Spam and Trash, as Gmail's own search does, and the unread and Inbox arguments above hold for it too. What was typed goes to Gmail as it is, so Gmail's search words (`from:`, `has:attachment`, `OR`…) work.
+- The first page has no `before`. As the results scroll, `before:` is added as for older pages. What was typed goes in parentheses first, so `before:` applies to all of it, `OR` included, and a quote left open is closed, so it can't take `before:` into the quoted words.
+- Results aren't written to the caches or to disk. Summaries fetched for them, and for older pages, are kept in memory (`AppState::recent`, up to `RECENT_MAX`, then emptied and filled again), so searching again, narrowing a search or scrolling back doesn't fetch them again. Read state still comes from the unread call each time.
+- How the UI shows the results is in [ui.md](ui.md#search).
+
 A single message that fails to load is skipped; the rest of the account still syncs. The failure is reported once ("N messages couldn't be loaded: ...") and remembered in `reported_failures`, so it doesn't pop up again on every push. The message is retried on each sync and appears once it loads. Responses are parsed with `serde_json` directly, so errors name the field and position (e.g. ``missing field `x` at line 1 column 300``), and network errors include their cause chain. Response types require only fields Google always sends (`id`), because Google omits empty values, such as the `value` of an empty header. An entirely empty response body is read as `{}`: Gmail returned one for `messages.list` with `fields=messages/id`, most likely when nothing matched (e.g. no unread mail). That used to fail the whole account. After every sync the folder's snapshot is written to its cache file. The next launch paints the Inbox from it immediately (`cached_folder`) and then syncs.
 
 **Cost:** a sync with no new mail is two small requests per account. Gmail's quota is 250 units/s per user; a list call costs 5 units, metadata 5.
@@ -93,6 +100,8 @@ The app's own actions (archive, delete, mark read or unread) also produce IDLE l
 | --- | --- | --- |
 | `PAGE_SIZE` | state.rs | 50 messages per account |
 | `FETCH_CONCURRENCY` | state.rs | 8 |
+| `RECENT_MAX` | state.rs | 2000 summaries kept in memory for search results and older pages |
+| `SEARCH_DELAY_MS` | app.js | 500 ms of no typing before a search runs |
 | `IDLE_CYCLE` | idle.rs | 5 min |
 | `STEP_TIMEOUT` | idle.rs | 30 s |
 | `MIN_BACKOFF` / `MAX_BACKOFF` | idle.rs | 5 s / 5 min |

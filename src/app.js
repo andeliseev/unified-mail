@@ -20,6 +20,8 @@ const MAX_NOTIFICATIONS = 3;
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 // Emails wider than the reader are scaled down to fit, but not below this; past it they scroll.
 const MIN_EMAIL_ZOOM = 0.6;
+// Search runs once typing has paused this long (or at once on Enter).
+const SEARCH_DELAY_MS = 500;
 // Dragging the message list's edge (initListResize) sets its width within these. The reader
 // keeps READER_MIN, as in the CSS grid, which narrows the list in narrow windows.
 const LIST_MIN = 250;
@@ -66,11 +68,12 @@ const inInbox = (m) => state.inboxExtra.has(keyOf(m)) || state.lists.inbox.some(
 /**
  * Actions offered on a message. `inboxKeys`: the keys of everything in the Inbox, when the
  * caller already has them (renderList asks for every row, and `inInbox` searches a list).
+ * Search results come from All Mail, so they get All Mail's actions.
  */
 function actionsFor(m, inboxKeys = null) {
-  switch (state.folder) {
+  switch (listName()) {
     case 'inbox': return ['archive', 'trash'];
-    case 'all': {
+    case 'all': case 'search': {
       const inbox = inboxKeys ? inboxKeys.has(keyOf(m)) : inInbox(m);
       return inbox ? ['archive', 'trash'] : ['unarchive', 'trash'];
     }
@@ -147,20 +150,26 @@ const state = {
   originalColors: false, // dark mode: show the open email in its original light colors
   accounts: [],
   expired: new Set(),    // accounts whose sign-in Google no longer accepts: they offer Reconnect
-  folder: 'inbox',       // folder on screen
-  lists: { inbox: [], all: [], trash: [] },  // each folder's messages, all accounts, newest first
-  loaded: { inbox: false, all: false, trash: false },  // list filled from cache or a sync
+  folder: 'inbox',       // folder chosen in the sidebar
+  // Each folder's messages, all accounts, newest first; `search` holds the search's results.
+  lists: { inbox: [], all: [], trash: [], search: [] },
+  loaded: { inbox: false, all: false, trash: false, search: false },  // list filled from cache or a sync
   synced: { inbox: false, all: false, trash: false },  // a sync finished this session
+  // The search, while its field is open: `query` (what the results are for, '' before the first
+  // search), `seq` (counts searches, so a late answer is dropped), `done` (the results are in),
+  // `timer` (the search waiting for typing to pause), `scroll` (where the folder's list was).
+  search: null,
+  searchLeft: new Set(), // keys of results an action took out of the search; Undo puts them back
   filter: null,          // account email, or null for all accounts
   selected: null,        // key of the highlighted row
   current: null,         // message shown in the reader
   pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
   pendingRead: new Map(), // key → read/unread change Gmail hasn't confirmed yet; same idea
   undo: null,            // what the toast's Undo button does, while it shows
-  // Per folder and account: `frontier`, the oldest date loaded so far without gaps, and
-  // `more`, whether older mail exists. Scrolling pushes the frontier back.
-  paging: { inbox: {}, all: {}, trash: {} },
-  inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages
+  // Per folder (and the search) and account: `frontier`, the oldest date loaded so far without
+  // gaps, and `more`, whether older mail exists. Scrolling pushes the frontier back.
+  paging: { inbox: {}, all: {}, trash: {}, search: {} },
+  inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages and in search results
   newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
   badge: null,           // unread count shown on the app icon
   update: null,          // a newer version on GitHub, offered in Settings
@@ -178,21 +187,29 @@ const keyOf = (m) => `${m.account}/${m.id}`;
 const colorOf = (account) => PALETTE[Math.max(0, state.accounts.indexOf(account)) % PALETTE.length];
 const byDate = (a, b) => b.date - a.date;
 
+/** The list on screen: the search's results once a search has run, else the folder's. */
+const listName = () => (state.search?.query ? 'search' : state.folder);
+
 /** Accounts on screen that have older mail than what's loaded in `folder`. */
 const accountsWithMore = (folder) =>
   (state.filter ? [state.filter] : state.accounts).filter((a) => state.paging[folder][a]?.more);
 
 /**
- * The folder's messages on screen. The list stops at the newest frontier among accounts
+ * The messages on screen. The list stops at the newest frontier among accounts
  * with more mail to load: below it that account's messages are missing, so the merged
  * list would have gaps. Scrolling loads that account next, and the cut-off moves down.
  */
 const visible = () => {
-  const folder = state.folder;
+  const folder = listName();
   const cutoff = Math.max(-Infinity, ...accountsWithMore(folder).map((a) => state.paging[folder][a].frontier));
   return state.lists[folder].filter((m) => (!state.filter || m.account === state.filter) && m.date >= cutoff);
 };
-const byKey = (key) => state.lists[state.folder].find((m) => keyOf(m) === key);
+const byKey = (key) => state.lists[listName()].find((m) => keyOf(m) === key);
+/**
+ * Whether `move` takes a message out of `list`. Search results come from All Mail, so what
+ * leaves All Mail leaves them too.
+ */
+const leaves = (move, list) => move.leave.includes(list) || (list === 'search' && move.leave.includes('all'));
 /** The open message as the folder list has it now; syncs replace the list's objects. */
 const openMessage = () => state.current && (byKey(keyOf(state.current)) || state.current);
 
@@ -335,7 +352,22 @@ function bindEvents() {
   $('#cancel-wait').addEventListener('click', () => { state.authSeq++; $('#waiting').hidden = true; });
   $('#archive').addEventListener('click', () => act('archive'));
   $('#trash').addEventListener('click', () => act('trash'));
-  $('#restore').addEventListener('click', () => act(state.folder === 'trash' ? 'restore' : 'unarchive'));
+  $('#restore').addEventListener('click', () => act(listName() === 'trash' ? 'restore' : 'unarchive'));
+  $('#search-open').title = IS_MAC ? 'Search (/ or ⌘F)' : 'Search (/ or Ctrl+F)';
+  $('#search-open').addEventListener('click', openSearch);
+  $('#search-close').addEventListener('click', closeSearch);
+  // A click on the field's icon or edge goes to the field too.
+  $('#search-box').addEventListener('mousedown', (e) => {
+    if (e.target.closest('input, button')) return;
+    e.preventDefault();
+    $('#search-input').focus();
+  });
+  $('#search-input').addEventListener('input', () => {
+    if (!state.search) return;
+    clearTimeout(state.search.timer);
+    state.search.timer = setTimeout(() => runSearch(), SEARCH_DELAY_MS);
+  });
+  $('#search-input').addEventListener('keydown', onSearchKey);
   $('#toggle-read').addEventListener('click', () => {
     const m = openMessage();
     if (m) setUnread(m, !m.unread);
@@ -418,11 +450,11 @@ async function refresh() {
   }
 }
 
-/** Stores a folder's messages, re-applying changes Gmail hasn't confirmed yet. */
+/** Stores a folder's messages (or the search's), re-applying changes Gmail hasn't confirmed yet. */
 function setList(folder, messages) {
   let list = messages;
   for (const [key, move] of state.pending) {
-    if (move.leave.includes(folder)) list = list.filter((m) => keyOf(m) !== key);
+    if (leaves(move, folder)) list = list.filter((m) => keyOf(m) !== key);
     if (move.join.includes(folder) && !list.some((m) => keyOf(m) === key)) list = withMessage(list, move.message);
   }
   for (const m of list) {
@@ -469,17 +501,25 @@ function forgetLeftInbox(account, page, pageOldest, more) {
   }
 }
 
-/** Loads the next older page for the account(s) holding the list back, while near the bottom. */
+/**
+ * Loads the next older page for the account(s) holding the list back, while near the bottom:
+ * the folder's, or the search's results.
+ */
 async function loadOlder() {
-  const folder = state.folder;
+  const folder = listName();
   const accounts = accountsWithMore(folder);
   if (!accounts.length) return;
   const frontier = Math.max(...accounts.map((a) => state.paging[folder][a].frontier));
   const targets = accounts.filter((a) => state.paging[folder][a].frontier === frontier);
+  const { search } = state;
+  const seq = search?.seq;
   state.loadingOlder = true;
   try {
-    const pages = await Promise.all(targets.map((account) =>
-      invoke('load_older', { folder, account, before: frontier })));
+    const pages = await Promise.all(targets.map((account) => folder === 'search'
+      ? invoke('search_messages', { account, query: search.query, before: frontier })
+      : invoke('load_older', { folder, account, before: frontier })));
+    // The search was closed or changed while these loaded.
+    if (folder === 'search' && (state.search !== search || search.seq !== seq)) return;
     targets.forEach((account, i) => mergeOlder(folder, account, pages[i]));
     const warnings = pages.map((p) => p.warning).filter(Boolean);
     if (warnings.length && !state.undo) toast(warnings.join('\n'), 8000);
@@ -495,15 +535,21 @@ async function loadOlder() {
 function mergeOlder(folder, account, page) {
   const paging = state.paging[folder][account];
   const known = new Set(state.lists[folder].map(keyOf));
-  const fresh = page.messages.filter((m) => !known.has(keyOf(m)) && !state.pending.get(keyOf(m))?.leave.includes(folder));
+  const fresh = page.messages.filter((m) => {
+    const move = state.pending.get(keyOf(m));
+    return !known.has(keyOf(m)) && !(move && leaves(move, folder));
+  });
   const oldest = Math.min(paging.frontier, ...page.messages.map((m) => m.date));
   // Stop if Gmail returned nothing older, so a quirk can't make this loop forever.
   state.paging[folder][account] = { frontier: oldest, more: page.more && oldest < paging.frontier };
-  if (folder === 'all') {
-    const inInboxIds = new Set(page.inbox);
-    for (const m of page.messages) if (inInboxIds.has(m.id)) state.inboxExtra.set(keyOf(m), m.date);
-  }
+  if (folder === 'all' || folder === 'search') noteInInbox(page);
   state.lists[folder] = state.lists[folder].concat(fresh).sort(byDate);
+}
+
+/** Notes which of an All Mail page's messages (or search results) are in the Inbox. */
+function noteInInbox(page) {
+  const inInboxIds = new Set(page.inbox);
+  for (const m of page.messages) if (inInboxIds.has(m.id)) state.inboxExtra.set(keyOf(m), m.date);
 }
 
 /** Starts loading older mail when the list is scrolled (or short enough) to its end. */
@@ -511,7 +557,7 @@ function maybeLoadOlder() {
   const list = $('#messages');
   if (state.loadingOlder || list.hidden || Date.now() < state.olderRetryAt) return;
   if (list.scrollTop + list.clientHeight < list.scrollHeight - 400) return;
-  if (accountsWithMore(state.folder).length) loadOlder();
+  if (accountsWithMore(listName()).length) loadOlder();
 }
 
 // ---------- New mail: notifications and the icon badge ----------
@@ -547,6 +593,7 @@ function notifyNewMail(result) {
 
 /** A click on a notification: show the Inbox, and open the message if it names one. */
 async function openFromNotification(message) {
+  closeSearch();
   if (state.folder !== 'inbox') await openFolder('inbox');
   if (state.filter && (!message || state.filter !== message.account)) setFilter(null);
   if (message && byKey(keyOf(message))) select(keyOf(message));
@@ -578,7 +625,9 @@ function badgeIcon(count, size) {
   return Array.from(g.getImageData(0, 0, size, size).data);
 }
 
+/** Shows a folder chosen in the sidebar, closing the search if it's open. */
 async function openFolder(folder) {
+  closeSearch();
   if (folder !== state.folder) {
     state.folder = folder;
     clearReader();
@@ -593,6 +642,7 @@ async function openFolder(folder) {
 function render() {
   renderSidebar();
   renderList();
+  renderSearch();
   // An open message's buttons depend on the lists (e.g. Archive vs Move to Inbox in All Mail).
   renderActions();
   // A short list (or one already scrolled to the end) loads older mail right away.
@@ -674,11 +724,14 @@ const CLIP_ICON = '<svg class="clip" viewBox="0 0 24 24" role="img" aria-label="
   '<path transform="rotate(45 12 12)" d="M16.5 7v8.5a4.5 4.5 0 0 1-9 0V7a3 3 0 0 1 6 0v8.5a1.5 1.5 0 0 1-3 0V9"/></svg>';
 
 function renderList() {
+  const folder = listName();
   const messages = visible();
-  // In All Mail, tag what's still in the Inbox (everything else there is archived or sent).
-  const inboxKeys = state.folder === 'all'
+  // In All Mail and search results, tag what's still in the Inbox (everything else there is
+  // archived or sent).
+  const inboxKeys = folder === 'all' || folder === 'search'
     ? new Set([...state.lists.inbox.map(keyOf), ...state.inboxExtra.keys()])
     : null;
+  const marks = folder === 'search' ? searchPattern(state.search.query) : null;
   const fragment = document.createDocumentFragment();
   for (const m of messages) {
     const li = document.createElement('li');
@@ -687,24 +740,24 @@ function renderList() {
     li.style.setProperty('--acc', colorOf(m.account));
     li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasFiles ? CLIP_ICON : ''}<time></time></div>` +
       '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
-    li.querySelector('.from').textContent = senderName(m.from);
+    setMarkedText(li.querySelector('.from'), senderName(m.from), marks);
     li.querySelector('time').textContent = shortDate(m.date);
-    li.querySelector('.subject .text').textContent = m.subject || '(no subject)';
+    setMarkedText(li.querySelector('.subject .text'), m.subject || '(no subject)', marks);
     if (inboxKeys && inboxKeys.has(keyOf(m))) {
       const tag = document.createElement('span');
       tag.className = 'tag';
       tag.textContent = 'Inbox';
       li.querySelector('.subject').prepend(tag);
     }
-    li.querySelector('.snippet').textContent = m.snippet;
+    setMarkedText(li.querySelector('.snippet'), m.snippet, marks);
     li.title = m.account;
     li.append(rowActions(m, inboxKeys));
     fragment.append(li);
   }
-  if (messages.length && accountsWithMore(state.folder).length) {
+  if (messages.length && accountsWithMore(folder).length) {
     const more = document.createElement('li');
     more.className = 'more';
-    more.textContent = 'Loading older messages…';
+    more.textContent = folder === 'search' ? 'Loading older results…' : 'Loading older messages…';
     fragment.append(more);
   }
   $('#messages').replaceChildren(fragment);
@@ -714,11 +767,48 @@ function renderList() {
   $('#messages').hidden = empty;
   if (empty) {
     const noAccounts = state.accounts.length === 0;
-    $('#list-empty-text').textContent = noAccounts
-      ? 'Add your Gmail account to get started.'
-      : state.syncing && !state.synced[state.folder] ? 'Loading…' : FOLDERS[state.folder].empty;
+    let text;
+    if (noAccounts) text = 'Add your Gmail account to get started.';
+    else if (folder === 'search') text = state.search.done ? `Nothing matches “${state.search.query}”.` : 'Searching…';
+    else text = state.syncing && !state.synced[folder] ? 'Loading…' : FOLDERS[folder].empty;
+    $('#list-empty-text').textContent = text;
     $('#empty-add').hidden = !noAccounts;
   }
+}
+
+/**
+ * The words of a search to mark in its results, as a pattern, or null if there are none: what
+ * was typed, without Gmail's operators (`from:`, `has:attachment`, `-word`, `OR`...). Quoted words
+ * count as one. Single letters aren't marked, since they'd be marked everywhere.
+ */
+function searchPattern(query) {
+  const words = [];
+  for (const [, quoted, word] of query.matchAll(/"([^"]*)"?|(\S+)/g)) {
+    if (word && (word.includes(':') || word.startsWith('-') || /^(OR|AND|AROUND)$/.test(word))) continue;
+    const text = (quoted ?? word.replace(/["(){}]/g, '').replace(/^\+/, '')).trim();
+    if (text.length > 1) words.push(text);
+  }
+  if (!words.length) return null;
+  // Longest first, so a longer word wins where two overlap.
+  words.sort((a, b) => b.length - a.length);
+  return new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'giu');
+}
+
+/** Sets an element's text, marking what `marks` (from searchPattern) matches. */
+function setMarkedText(el, text, marks) {
+  if (!marks) {
+    el.textContent = text;
+    return;
+  }
+  el.replaceChildren();
+  let at = 0;
+  for (const match of text.matchAll(marks)) {
+    const mark = document.createElement('mark');
+    mark.textContent = match[0];
+    el.append(text.slice(at, match.index), mark);
+    at = match.index + match[0].length;
+  }
+  el.append(text.slice(at));
 }
 
 /** The buttons a row shows under the mouse: the folder's actions, then Mark as read/unread. */
@@ -746,7 +836,7 @@ function onRowAction(row, kind) {
   const m = byKey(row.dataset.key);
   if (!m) return;
   if (kind === 'read') setUnread(m, !m.unread);
-  else act(kind === 'restore' && state.folder !== 'trash' ? 'unarchive' : kind, m);
+  else act(kind === 'restore' && listName() !== 'trash' ? 'unarchive' : kind, m);
 }
 
 function markRow(key) {
@@ -772,6 +862,120 @@ function renderActions() {
   $('#colors .moon').style.display = original ? '' : 'none';
   $('#colors .label').textContent = original ? 'Dark' : 'Original';
   $('#colors').title = original ? 'Show this email in dark colors' : "Show this email's original colors";
+}
+
+// ---------- Search ----------
+
+/** Opens the search field in the list's header: the magnifier, `/`, or Cmd+F (Ctrl+F on Windows). */
+function openSearch() {
+  if (!state.accounts.length) return;
+  if (!state.search) {
+    state.search = { query: '', seq: 0, done: false, timer: null, scroll: $('#messages').scrollTop };
+    $('#search-input').value = '';
+    render();
+  }
+  $('#search-input').focus();
+  $('#search-input').select();
+}
+
+/** Closes the search and shows the folder again, scrolled where it was. */
+function closeSearch() {
+  const search = state.search;
+  if (!search) return;
+  clearTimeout(search.timer);
+  state.search = null;
+  clearSearchResults();
+  // A result that isn't in the folder closes with the search.
+  if (state.current && !byKey(keyOf(state.current))) clearReader();
+  if (document.activeElement === $('#search-input')) $('#search-input').blur();
+  render();
+  $('#messages').scrollTop = search.scroll;
+}
+
+function clearSearchResults() {
+  state.lists.search = [];
+  state.loaded.search = false;
+  state.paging.search = {};
+  state.searchLeft.clear();
+}
+
+/**
+ * Searches every account for what's in the field, with Gmail's search (`search_messages`): its
+ * All Mail, newest first, 50 per account, more as the results scroll (loadOlder). An account
+ * picked in the sidebar only narrows what's shown, so switching accounts doesn't search again.
+ * `again`: search even if the field hasn't changed (Enter), for mail that arrived since.
+ */
+async function runSearch(again = false) {
+  const search = state.search;
+  if (!search) return;
+  clearTimeout(search.timer);
+  const query = $('#search-input').value.trim();
+  if (query === search.query && !again) return;
+  const seq = ++search.seq;
+  search.query = query;
+  search.done = false;
+  clearSearchResults();
+  render();
+  // An emptied field shows the folder again, where it was.
+  $('#messages').scrollTop = query ? 0 : search.scroll;
+  if (!query) return;
+  // Expired sign-ins can't search; the line above the list already offers Reconnect for them.
+  const accounts = state.accounts.filter((account) => !state.expired.has(account));
+  const answers = await Promise.all(accounts.map((account) =>
+    invoke('search_messages', { account, query, before: null })
+      .then((page) => ({ account, page }), (error) => ({ account, error }))));
+  if (state.search !== search || search.seq !== seq) return;  // closed, or searching for something else now
+  const messages = [];
+  const problems = [];
+  for (const { account, page, error } of answers) {
+    if (error) {
+      problems.push(`Couldn't search ${account}: ${error}`);
+      continue;
+    }
+    messages.push(...page.messages);
+    state.paging.search[account] = { frontier: Math.min(...page.messages.map((m) => m.date)), more: page.more };
+    noteInInbox(page);
+    if (page.warning) problems.push(`${account}: ${page.warning}`);
+  }
+  setList('search', messages.sort(byDate));
+  search.done = true;
+  render();
+  if (problems.length && !state.undo) toast(problems.join('\n'), 8000);
+}
+
+/** Keys in the search field: Enter searches at once, Esc closes, ↓ goes to the results. */
+function onSearchKey(e) {
+  if (e.isComposing) return;  // choosing characters in an input method
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    runSearch(true);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  } else if (e.key === 'ArrowDown' && visible().length) {
+    e.preventDefault();
+    $('#search-input').blur();
+    if (!visible().some((m) => keyOf(m) === state.selected)) move(1);
+  }
+}
+
+/** The search field in place of the list's header, and the line under it: where it searches, or what it found. */
+function renderSearch() {
+  const search = state.search;
+  $('#search-open').hidden = !state.accounts.length;
+  $('.list-head').classList.toggle('searching', Boolean(search));
+  $('#search-scope').hidden = !search;
+  if (!search) return;
+  const where = state.filter || state.accounts.length === 1 ? `in ${state.filter || state.accounts[0]}` : 'in all accounts';
+  let text;
+  if (!search.query) text = `Search All Mail ${where}`;
+  else if (!search.done) text = `Searching ${where}…`;
+  else {
+    const count = visible().length;
+    const more = accountsWithMore('search').length > 0;
+    text = count ? `${count}${more ? '+' : ''} ${count === 1 && !more ? 'result' : 'results'} ${where}` : `No results ${where}`;
+  }
+  $('#search-scope').textContent = text;
 }
 
 // ---------- Reading ----------
@@ -1302,7 +1506,12 @@ async function perform(m, move, run) {
   }
 }
 
-/** Takes the message out of the `leave` lists and adds it to the `join` lists that are loaded. */
+/**
+ * Takes the message out of the `leave` lists and adds it to the `join` lists that are loaded.
+ * Search results come from All Mail: a message leaving All Mail leaves them too, and one joining
+ * All Mail joins them only if it left them before (Undo, or a failed action), since it may not
+ * match the search.
+ */
 function shift(m, leave, join) {
   const key = keyOf(m);
   if (leave.includes('inbox')) state.inboxExtra.delete(key);
@@ -1313,6 +1522,11 @@ function shift(m, leave, join) {
       state.lists[folder] = withMessage(state.lists[folder], m);
     }
   }
+  if (leave.includes('all') && state.lists.search.some((x) => keyOf(x) === key)) {
+    state.lists.search = state.lists.search.filter((x) => keyOf(x) !== key);
+    state.searchLeft.add(key);
+  }
+  if (join.includes('all') && state.searchLeft.delete(key)) state.lists.search = withMessage(state.lists.search, m);
 }
 
 /**
@@ -1399,6 +1613,14 @@ function onKey(e, inMessage = false) {
     hideMenu();
     if (e.key === 'Escape') { e.preventDefault(); return; }
   }
+  // Cmd+F (Ctrl+F on Windows) searches, as Find does in most apps.
+  if ((IS_MAC ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && shortcutKey(e).toLowerCase() === 'f') {
+    if ($('#settings').hidden && $('#waiting').hidden) {
+      e.preventDefault();
+      openSearch();
+    }
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (!$('#settings').hidden || !$('#waiting').hidden) {
     if (e.key === 'Escape' && state.configured && state.accounts.length) closeSettings();
@@ -1426,6 +1648,11 @@ function onKey(e, inMessage = false) {
       break;
     }
     case 'z': runUndo(); break;
+    case '/': openSearch(); break;
+    case 'Escape':
+      if (!state.search) return;
+      closeSearch();
+      break;
     default: return;
   }
   e.preventDefault();

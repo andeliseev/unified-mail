@@ -91,6 +91,18 @@ async fn load_older(
     state.older(folder, &account, before).await
 }
 
+/// Gmail search in the account's All Mail: its newest messages matching `query`, typed in Gmail's
+/// search syntax, or the next ones older than `before` (ms since epoch) as the results scroll.
+#[tauri::command]
+async fn search_messages(
+    state: State<'_, AppState>,
+    account: String,
+    query: String,
+    before: Option<i64>,
+) -> Result<OlderPage, String> {
+    state.search(&account, &query, before).await
+}
+
 #[tauri::command]
 async fn get_message(state: State<'_, AppState>, account: String, id: String) -> Result<FullMessage, String> {
     state.get_message(&account, &id).await
@@ -421,6 +433,7 @@ fn main() {
             cached_folder,
             refresh_folder,
             load_older,
+            search_messages,
             get_message,
             save_attachments,
             inline_images,

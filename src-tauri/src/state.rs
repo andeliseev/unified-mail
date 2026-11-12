@@ -24,6 +24,9 @@ const SETTINGS_FILE: &str = "settings.json";
 const PAGE_SIZE: u32 = 50;
 /// Parallel metadata requests per account (Gmail allows ~50/s per user).
 const FETCH_CONCURRENCY: usize = 8;
+/// Summaries kept in memory for pages the caches don't hold (`AppState::recent`); past this
+/// many, they're all dropped and collected again.
+const RECENT_MAX: usize = 2000;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +184,10 @@ pub struct AppState {
     expired: Mutex<HashSet<String>>,
     /// Current contents of each folder, for every account.
     cache: Mutex<HashMap<Folder, FolderCache>>,
+    /// Summaries of messages on pages the caches don't hold (search results, older pages), so
+    /// searching again or scrolling back doesn't fetch them again. In memory only, keyed by
+    /// `account/id`. Locked after `cache` or `reported_failures`, never before them.
+    recent: Mutex<FolderCache>,
     /// Messages whose metadata failed to load and were already reported (`account/id`).
     /// They are retried on every sync but reported only once.
     reported_failures: Mutex<HashSet<String>>,
@@ -218,6 +225,7 @@ impl AppState {
             refreshing: Mutex::new(HashMap::new()),
             expired: Mutex::new(HashSet::new()),
             cache: Mutex::new(cache),
+            recent: Mutex::new(HashMap::new()),
             reported_failures: Mutex::new(HashSet::new()),
             dir,
         }
@@ -318,6 +326,7 @@ impl AppState {
         for folder in Folder::EVERY {
             self.edit_cache(folder, |cache| cache.retain(|_, m| m.account != email));
         }
+        self.recent.lock().unwrap().retain(|_, m| m.account != email);
         Ok(())
     }
 
@@ -364,17 +373,32 @@ impl AppState {
     /// The account's next page of messages older than `before` (ms), for scrolling.
     /// Older pages aren't cached; the caches hold only each folder's newest page.
     pub async fn older(&self, folder: Folder, account: &str, before: i64) -> Result<OlderPage, String> {
-        let q = gmail::before_query(before);
+        self.page(folder, account, &gmail::before_query(before)).await
+    }
+
+    /// Gmail search in the account's All Mail, which leaves out Spam and Trash as Gmail's own
+    /// search does: the newest messages matching `query`, or those older than `before` (ms) as
+    /// the results scroll. Results aren't cached on disk.
+    pub async fn search(&self, account: &str, query: &str, before: Option<i64>) -> Result<OlderPage, String> {
+        if query.trim().is_empty() {
+            return Err("Type what to search for.".into());
+        }
+        self.page(Folder::All, account, &gmail::search_query(query, before)).await
+    }
+
+    /// One page of the account's folder matching the Gmail search `q`. In All Mail it also says
+    /// which of the page's messages are in the Inbox.
+    async fn page(&self, folder: Folder, account: &str, q: &str) -> Result<OlderPage, String> {
         let inbox_ids = async {
             if folder != Folder::All {
                 return Ok(Vec::new());
             }
             let token = self.access_token(account).await?;
             // As with unread: any Inbox message in this page is among the newest PAGE_SIZE
-            // Inbox messages before the same date.
-            Ok(gmail::list_ids(&self.http, &token, &["INBOX"], false, Some(&q), PAGE_SIZE).await?.ids)
+            // Inbox messages matching the same search.
+            Ok(gmail::list_ids(&self.http, &token, &["INBOX"], false, Some(q), PAGE_SIZE).await?.ids)
         };
-        let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(&q)), inbox_ids)?;
+        let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(q)), inbox_ids)?;
         Ok(OlderPage { messages: page.messages, more: page.more, inbox, warning: page.warning })
     }
 
@@ -395,6 +419,7 @@ impl AppState {
 
         let mut known: HashMap<String, MessageSummary> = {
             let caches = self.cache.lock().unwrap();
+            let recent = self.recent.lock().unwrap();
             ids.iter()
                 .filter_map(|id| {
                     let key = cache_key(account, id);
@@ -402,6 +427,7 @@ impl AppState {
                     caches[&folder]
                         .get(&key)
                         .or_else(|| caches.values().find_map(|cache| cache.get(&key)))
+                        .or_else(|| recent.get(&key))
                         // Not known yet whether it has files (`has_files`): fetched again.
                         .filter(|m| m.has_files.is_some())
                         .map(|m| (id.clone(), m.clone()))
@@ -419,10 +445,19 @@ impl AppState {
         let mut new_failures = Vec::new();
         {
             let mut reported = self.reported_failures.lock().unwrap();
+            let mut recent = self.recent.lock().unwrap();
             for result in fetched {
                 match result {
                     Ok(m) => {
-                        reported.remove(&cache_key(account, &m.id));
+                        let key = cache_key(account, &m.id);
+                        reported.remove(&key);
+                        // A folder's newest page goes into its cache; other pages are kept here.
+                        if q.is_some() {
+                            if recent.len() >= RECENT_MAX {
+                                recent.clear();
+                            }
+                            recent.insert(key, m.clone());
+                        }
                         known.insert(m.id.clone(), m);
                     }
                     Err((id, error)) => {

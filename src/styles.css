@@ -12,6 +12,7 @@
   --danger: #d93025;
   --update: #c2410c;
   --update-text: #ffffff;
+  --mark: #ffe27a;
   --shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
   color-scheme: light;
 }
@@ -31,6 +32,7 @@
     --danger: #f2766b;
     --update: #fb923c;
     --update-text: #1a1c20;
+    --mark: #665514;
     --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
@@ -202,6 +204,41 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .list-head h2 { margin: 0; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { display: grid; place-items: center; border: 0; padding: 6px; }
 #refresh.spin svg { animation: spin 0.9s linear infinite; }
+/* Search (openSearch): while it's open, the field takes the header's place, as tall as the
+   header's buttons so nothing moves, and a line under the header says what the results cover. */
+#search-box {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin-left: -8px;
+  padding: 0 1px 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--bg);
+  cursor: text;
+}
+.list-head.searching > * { display: none; }
+.list-head.searching > #search-box { display: flex; }
+#search-box > svg { width: 15px; height: 15px; color: var(--muted); }
+#search-input { flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+#search-input:focus { outline: none; }
+#search-close { padding: 5px; color: var(--muted); cursor: pointer; }
+#search-close:hover { color: var(--text); }
+#search-close svg { width: 14px; height: 14px; }
+#search-scope {
+  flex: none;
+  padding: 5px 12px 5px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--side);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Expired sign-ins: a line per account above the message list, in the Update button's orange. */
 #reconnect {
   flex: none;
@@ -258,6 +295,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .msg:hover .clip { visibility: hidden; }
 .msg .subject, .msg .snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg .snippet { color: var(--muted); font-size: 12.5px; }
+/* The searched words in search results (searchPattern). */
+.msg mark { background: var(--mark); color: inherit; border-radius: 2px; }
 /* The row under the mouse shows its actions in place of the time. Their background is the
    row's (hover or selected), so a long sender name runs under them. */
 .row-actions {

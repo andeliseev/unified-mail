@@ -54,7 +54,7 @@ On Windows closing the window quits the app.
 
 ## State and rendering
 
-There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first), the folder on screen, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.
+There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first) plus the search's results (`state.lists.search`, see [Search](#search)), the folder chosen in the sidebar, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, and sync flags.
 
 The sidebar lists the folders, then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail.
 
@@ -213,6 +213,21 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 - **Syncs** (`applySync`) refresh only each account's newest page. Messages below it that scrolling loaded are kept, with the deeper frontier, as long as Gmail still reports more mail.
 - **Inbox tags on older All Mail pages:** `load_older` also returns which messages are in the Inbox, using the same "newest 50 before the same date" argument as for unread. Those go into `state.inboxExtra`. Actions update it, and Inbox syncs drop entries they show have left the Inbox.
 
+## Search
+
+The magnifier in the list's header, `/`, or `Cmd+F` (`Ctrl+F` on Windows) opens the search field in the header's place (`openSearch`), at the header's height, so nothing moves. A line under the header (`#search-scope`) says where it searches, then what it found: "12 results in all accounts", or "50+ results" while more can load.
+
+- **What it searches:** every account's All Mail, with Gmail's own search (`search_messages`, see [sync.md](sync.md#search-appstatesearch)). Gmail's search words work: `from:`, `has:attachment`, `before:`, `"exact words"`, `OR`… As in Gmail, Spam and Trash are left out. Results come newest first, 50 per account, merged like a folder's pages, and more load as you scroll (`loadOlder`, with the cut-off from [Older mail](#older-mail)).
+- **When:** once typing pauses for `SEARCH_DELAY_MS` (500 ms), or at once on Enter. Enter also searches again when the field hasn't changed, for mail that arrived since: results don't update by themselves. A counter (`state.search.seq`) drops answers for an earlier query.
+- **Accounts:** an account chosen in the sidebar narrows the results shown, and the scope line names it. The search itself covers every account, so switching accounts doesn't search again. Accounts whose sign-in expired are skipped. An account whose search fails is named in a toast, and the other accounts' results still show.
+- **The list:** once a search has run, `listName()` says `search` instead of the folder, and everything that works on the list on screen (`visible`, `byKey`, `loadOlder`, `actionsFor`…) uses `state.lists.search`. Results are All Mail's messages:
+  - those in the Inbox get the **Inbox** tag. Each search page says which of its messages are in the Inbox, kept in `inboxExtra` as for older All Mail pages;
+  - they get All Mail's actions. Archive keeps a result in the list. Delete takes it out, and Undo or a failed Delete puts it back: `shift` notes the results that left (`searchLeft`), since a message joining All Mail may not match the search.
+- **Marks:** the searched words are marked in the sender, subject and preview (`searchPattern`, `setMarkedText`, which builds text nodes and `<mark>` elements, never HTML). Gmail's operators (`from:`, `-word`, `OR`…) and single letters aren't marked. Gmail also matches the rest of the email, attachment names and other forms of a word, so some results show no mark.
+- **Keys in the field:** Enter searches, `↓` goes to the results, where J/K and the other shortcuts work, and Esc closes. Esc closes it from the list too.
+- **Closing** (Esc, the ×, or a folder in the sidebar) shows the folder again, scrolled where it was. A result open in the reader that isn't in the folder closes with it.
+- On macOS the list header is a window drag area. The field is left out of it (`data-tauri-drag-region="false"`), so a click on its icon or edge reaches the field instead of moving the window.
+
 ## Keyboard
 
 | Key | Action |
@@ -224,13 +239,14 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 | `#` / `Delete` | Delete, i.e. move to Trash (Inbox and All Mail) |
 | `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo the last action, while its toast shows |
-| `Esc` | Close Settings or the right-click menu |
+| `/`, `Cmd+F` (`Ctrl+F` on Windows) | Search (see [Search](#search)) |
+| `Esc` | Close Settings, the right-click menu or the search |
 
 The Delete button's tooltip names `Del`, which everyone has; `#` is Gmail's key for it, kept for Gmail habits.
 
-Shortcuts work in any keyboard layout (`shortcutKey`). With a Latin layout they go by the character typed (`e.key`), so Dvorak and AZERTY users get their own `J`, `K`, `E`. With any other layout, such as Russian, the letters type something else (`J` is `о`), so they go by the key's position (`e.code`, `KeyJ`), and `Shift+3` (Russian `№`) counts as `#`.
+Shortcuts work in any keyboard layout (`shortcutKey`). With a Latin layout they go by the character typed (`e.key`), so Dvorak and AZERTY users get their own `J`, `K`, `E`. With any other layout, such as Russian, the letters type something else (`J` is `о`), so they go by the key's position (`e.code`, `KeyJ`), and `Shift+3` (Russian `№`) counts as `#`. `Cmd+F` / `Ctrl+F` follows the same rule. `/` goes by the character typed in every layout, since the key that types it differs between layouts; there's always `Cmd+F` / `Ctrl+F`.
 
-The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
+The same handler is attached inside the email iframe (`onKey(e, true)`), so `J`/`K`/`E`/`#`/`Z`, `/` and `Shift+U`/`Shift+I` keep working after clicking into a message. Inside the message, arrows, `Space` and `PageDown` are left to the frame, so they scroll the message instead of changing it.
 
 ## Notifications and the icon badge
 

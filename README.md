@@ -3,6 +3,7 @@
 A small, fast desktop email app for Gmail on Windows and macOS: one inbox for all your Gmail accounts.
 
 - **Inbox, All Mail and Trash** for all your accounts together, or for one account at a time
+- **Search** all your accounts at once, with Gmail's search words such as `from:` and `has:attachment`
 - **New mail appears within seconds**, with no need to refresh, and a **notification** tells you about it when the app is in the background
 - The **unread count** shows on the app's taskbar / Dock icon
 - **Updates itself:** when a new version is out, Settings shows an **Update** button, and one click installs it
@@ -52,6 +53,8 @@ Click **Add account**, choose your Google account in the browser window that ope
 | `#` or `Delete` | Delete (move to Trash) |
 | `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo |
+| `/`, or `Cmd+F` on a Mac and `Ctrl+F` on Windows | Search |
+| `Esc` | Close the search |
 
 ## Privacy
 
@@ -69,7 +72,7 @@ Read the full [privacy policy](https://andeliseev.github.io/unified-mail/privacy
 ## Current limits
 
 - Gmail only for now. Other providers, such as Yandex Mail, are planned.
-- No compose, reply or search yet.
+- No compose or reply yet.
 - Older messages you've scrolled to aren't refreshed in the background. Reopen the folder to update them.
 
 ## Building from source and contributing

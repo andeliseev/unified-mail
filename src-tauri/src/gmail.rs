@@ -196,6 +196,21 @@ pub fn before_query(before_ms: i64) -> String {
     format!("before:{}", before_ms.div_euclid(1000) + 1)
 }
 
+/// The Gmail search for what someone typed, in Gmail's own search syntax (`from:`,
+/// `has:attachment`, `OR`...). As the results scroll, `before_ms` limits it to older messages:
+/// what was typed goes in parentheses, so `before:` applies to all of it, `OR` included, and a
+/// quote left open is closed, so it can't take `before:` into the quoted words.
+pub fn search_query(typed: &str, before_ms: Option<i64>) -> String {
+    let mut query = typed.trim().to_string();
+    if query.matches('"').count() % 2 == 1 {
+        query.push('"');
+    }
+    match before_ms {
+        Some(before) => format!("({query}) {}", before_query(before)),
+        None => query,
+    }
+}
+
 pub async fn get_summary(http: &Client, token: &str, account: &str, id: &str) -> Result<MessageSummary, String> {
     check_id(id)?;
     let url = format!(
@@ -870,6 +885,16 @@ mod tests {
     fn before_query_includes_the_same_second() {
         assert_eq!(before_query(1_730_000_000_000), "before:1730000001");
         assert_eq!(before_query(1_730_000_000_999), "before:1730000001");
+    }
+
+    #[test]
+    fn search_query_keeps_what_was_typed() {
+        assert_eq!(search_query("  invoice from:anna ", None), "invoice from:anna");
+        // Older results: before: applies to all of it, OR included.
+        assert_eq!(search_query("from:a OR from:b", Some(1_730_000_000_000)), "(from:a OR from:b) before:1730000001");
+        // A quote left open is closed, so it can't swallow before:.
+        assert_eq!(search_query("\"q3 report", Some(1_730_000_000_000)), "(\"q3 report\") before:1730000001");
+        assert_eq!(search_query("\"q3 report\" pdf", None), "\"q3 report\" pdf");
     }
 
     #[test]

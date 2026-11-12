@@ -32,10 +32,24 @@
       <header class="list-head">
         <h2 id="list-title">All inboxes</h2>
         <span id="sync-status" class="muted"></span>
+        <button id="search-open" class="icon-btn" aria-label="Search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        </button>
         <button id="refresh" class="icon-btn" title="Refresh">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
         </button>
+        <!-- The search field (openSearch) takes the header's place while open. It's no part of the
+             window's drag area, so a click anywhere in it goes to the field. -->
+        <div id="search-box" data-tauri-drag-region="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="search-input" placeholder="Search all mail" aria-label="Search all mail" spellcheck="false" autocomplete="off">
+          <button id="search-close" class="icon-btn" title="Close search (Esc)" aria-label="Close search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
       </header>
+      <!-- While searching: what the results cover and how many there are (renderSearch). -->
+      <div id="search-scope" hidden></div>
       <!-- Accounts whose sign-in expired, each with a Reconnect button (renderReconnect). -->
       <div id="reconnect" hidden></div>
       <ul id="messages"></ul>
