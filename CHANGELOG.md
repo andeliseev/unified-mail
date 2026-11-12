@@ -4,6 +4,10 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Pointing at a link in an email shows where it goes, at the bottom of the reader. A link whose text shows one site but goes to another, a common phishing trick, asks before it opens.
+- Attachments show what they really are: invisible characters can no longer hide the end of a name (`Invoice.pdf…….html`), the icon follows the file's extension, and files that open in your browser or can run programs say so.
+- When replies to an email would go to someone other than its sender, the reader says so, in orange when that's another site.
+
 ## 0.2.11 (2026-11-12)
 
 - Removing an account no longer signs it out of Unified Mail on your other computers. To take back the app's access everywhere, use Third-party apps in your Google Account.

@@ -382,6 +382,29 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 
 #reader { display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
 #message, #compose { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#message { position: relative; }
+/* Where the link under the pointer goes, at the bottom of the reader, as in a browser (showLinkAddress). */
+.link-address {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 5;
+  max-width: calc(100% - 24px);
+  padding: 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+  font-size: 12px;
+  pointer-events: none;
+}
+.link-address b { font-weight: 600; }
+/* Where a reply goes, when not to the sender (renderReplyTo): orange when that's another site. */
+.reply-to { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12.5px; }
+.reply-to.warn { color: var(--update); }
 /* The message's buttons (or a new message's) stay at the top; under them the header, the email
    and the reply scroll as one page (#m-scroll), so the email is never cut off. */
 .msg-actions {
@@ -426,7 +449,8 @@ svg .dot { fill: currentColor; stroke: none; }
 .attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .att { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 5px 8px 5px 10px; }
 .att .kind { width: 18px; height: 18px; }
-.att .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att:has(.risk) { max-width: 420px; }
+.draft-file:has(.risk) { max-width: 400px; }
 .att .save-label { flex: none; color: var(--muted); font-size: 12px; }
 .att .save { visibility: hidden; color: var(--accent); }
 .att:hover .save, .att:focus-visible .save { visibility: visible; }
@@ -534,7 +558,21 @@ svg .dot { fill: currentColor; stroke: none; }
 .reply-box .draft-files { border-bottom: 0; padding: 8px 12px 0; }
 .draft-file { display: flex; align-items: center; gap: 7px; max-width: 260px; padding: 3px 3px 3px 9px; border: 1px solid var(--border); border-radius: 7px; font-size: 12.5px; }
 .draft-file .kind { width: 16px; height: 16px; }
-.draft-file .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A file's name keeps its extension in sight however narrow the chip (fillFileName), and a file
+   that opens in a browser or can run code says so (attachmentRisk). */
+.att .name, .draft-file .name { display: flex; min-width: 0; white-space: nowrap; }
+.att .name .base, .draft-file .name .base { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.att .name .ext, .draft-file .name .ext { flex: none; }
+.att .risk, .draft-file .risk {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--update);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .draft-file .size { flex: none; color: var(--muted); font-size: 12px; }
 .draft-file button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); }
 .draft-file button svg { width: 12px; height: 12px; }
@@ -677,6 +715,31 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #menu button.danger:hover { color: var(--danger); }
 #menu .hint { margin-left: auto; padding-left: 20px; color: var(--muted); font-size: 12px; }
 #menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }
+
+/* A link whose text shows another site than where it goes asks first (askLink). */
+#link-check {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 14, 22, 0.25);
+}
+.link-check-box {
+  width: min(420px, 100%);
+  padding: 18px 20px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  user-select: text;
+}
+.link-check-box h2 { margin: 0 0 8px; font-size: 15px; }
+.link-check-box .warn { margin: 0 0 8px; color: var(--update); }
+.link-check-box .address { margin: 0 0 16px; color: var(--muted); word-break: break-all; }
+.link-check-box .address b { color: var(--text); font-weight: 600; }
+.link-check-box .buttons { display: flex; justify-content: flex-end; gap: 8px; }
 
 #toast {
   position: fixed;

@@ -11,14 +11,24 @@ const MAX_NAME: usize = 200;
 
 /// `name` as a file name that's safe to create: no folders in it, no characters Windows refuses,
 /// no control characters, no direction marks that could disguise the extension
-/// (`invoice\u{202E}fdp.exe` shows as `invoiceexe.pdf`), not hidden (no leading dot), not a device
-/// name Windows reserves (CON, NUL, COM1…), and at most `MAX_NAME` bytes, keeping the extension.
+/// (`invoice\u{202E}fdp.exe` shows as `invoiceexe.pdf`), no characters that show nothing and
+/// runs of blank ones as one space (`Invoice.pdf⠀⠀⠀….html` hides its `.html` otherwise, as
+/// `cleanFileName` in app.js shows it), not hidden (no leading dot), not a device name Windows
+/// reserves (CON, NUL, COM1…), and at most `MAX_NAME` bytes, keeping the extension.
 pub fn safe_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .filter(|&c| !is_direction_mark(c))
-        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c })
-        .collect();
+    let mut cleaned = String::with_capacity(name.len());
+    for c in name.chars().filter(|&c| !is_direction_mark(c) && !is_invisible(c)) {
+        let c = if c.is_control() || "/\\:*?\"<>|".contains(c) {
+            '_'
+        } else if c.is_whitespace() {
+            ' '
+        } else {
+            c
+        };
+        if !(c == ' ' && cleaned.ends_with(' ')) {
+            cleaned.push(c);
+        }
+    }
     let trimmed = cleaned
         .trim_start_matches(|c: char| c == '.' || c.is_whitespace())
         .trim_end_matches(|c: char| c == '.' || c.is_whitespace());
@@ -39,6 +49,29 @@ pub fn safe_file_name(name: &str) -> String {
 /// Marks that change the direction text runs in, which can make a name read differently.
 fn is_direction_mark(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Characters that show nothing: zero-width spaces and joiners, the soft hyphen, fillers and the
+/// blank Braille pattern, which looks like a space but isn't one.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2060}'..='\u{2065}'
+            | '\u{206A}'..='\u{206F}'
+            | '\u{2800}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+    )
 }
 
 /// `name` cut to at most `max` bytes, on a character boundary, keeping a short extension.
@@ -147,6 +180,15 @@ mod tests {
         assert_eq!(safe_file_name("LPT9"), "_LPT9");
         assert_eq!(safe_file_name("COM0.txt"), "COM0.txt");
         assert_eq!(safe_file_name("console.log"), "console.log");
+    }
+
+    #[test]
+    fn invisible_characters_cant_hide_the_extension() {
+        let blanks = "\u{2800}".repeat(30);
+        assert_eq!(safe_file_name(&format!("Invoice-4821.pdf{blanks}.html")), "Invoice-4821.pdf.html");
+        assert_eq!(safe_file_name("report\u{200B}\u{FEFF}.pdf\u{00A0}\u{00A0}\u{3000}.exe"), "report.pdf .exe");
+        assert_eq!(safe_file_name("a\u{00A0}\u{2003} b.txt"), "a b.txt");
+        assert_eq!(safe_file_name("\u{2800}\u{200B}"), "attachment");
     }
 
     #[test]

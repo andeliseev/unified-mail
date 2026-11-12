@@ -11,6 +11,7 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - Light or dark look, or follow the system (Settings → Appearance). In dark mode emails are dark too, with one click back to their original colors
 - **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
 - **Mark as unread** to come back to a message later
+- **Phishing checks:** point at a link to see where it goes, and a link that shows one site but goes to another asks before it opens. Attachments show their real type, and the reader says when replies would go to someone other than the sender
 - Point at a message in the list for quick **Archive**, **Delete** and **Mark as unread** buttons, or right-click it for its actions
 - Older mail loads as you scroll
 - The installer is about 1.5 MB, and the app starts instantly

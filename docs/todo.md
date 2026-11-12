@@ -14,6 +14,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Drafts against real Gmail: creating and updating through the upload endpoint (`PUT …/drafts/{id}`), `drafts.send`, a draft opened here from one made in Gmail on the web (text above the quote, its answered email found by In-Reply-To), Sent and Drafts rows with their To, and whether `-in:drafts` keeps drafts out of All Mail and search
 - [ ] macOS: scrolling the reader with `Space`, `PageDown` and the arrows after clicking into the email. `scrollMessage` scrolls only if WebKit didn't (80 ms later); Chromium was checked in the browser pane, WebKit not yet. Also wheel and trackpad scrolling over the email, now that the frame itself doesn't scroll
 - [ ] Windows: the file picker (`<input type="file">`) in WebView2, and `Ctrl+Enter`
+- [ ] macOS: the line under the pointer that says where a link goes (WebKit's private `_webView:mouseDidMoveOverElement:withFlags:userInfo:`, see [ui.md](ui.md#sandbox)) and links handed to the page to check (`email-link`). Checked in the browser pane, where the frame's own handlers run as on Windows; not yet in the app on macOS
 - [ ] macOS: the sign-in hand-over across a real update (see [auth.md](auth.md#macos-keychain)). Checked with two builds of a test program on the login keychain, not yet from one release to the next: the first release with the hand-over still asks once per account, and the update after it shouldn't
 
 ## Gaps in current features
@@ -104,7 +105,6 @@ From the review on 2026-11-13; none of it urgent.
 - [ ] Email images: `img-src` allows `http:`, so an opened email can make requests to `127.0.0.1` or the router. Leaving `http:` out would also break old newsletters' pictures
 - [ ] Sign-in: the loopback listener ends the sign-in on a request whose `state` doesn't match (an `?error=` one included), so anything that hits its port can cancel it. It could answer and skip such requests
 - [ ] The macOS sign-in hand-over file: accept it only when fresh and for this build, and have the relaunch helper delete one the new version didn't pick up
-- [ ] Phishing defenses (they show, so mock them up first): attachment chips by the file's extension, with invisible and blank characters taken out of names and the extension always visible; a link's address before it opens; Reply-To in the reader; addresses on recipient chips
 - [ ] The webview's cache keeps opened emails' remote pictures and fonts (the privacy policy says so). It could be cleared when an account is removed, or from Settings
 
 ## Code quality

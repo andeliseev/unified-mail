@@ -140,6 +140,8 @@
                 </span>
               </div>
               <div class="meta-row muted"><span id="m-to"></span><span id="m-account" class="chip"></span></div>
+              <!-- Where a reply goes, when not to the sender (renderReplyTo). -->
+              <div id="m-replyto" class="reply-to" hidden></div>
             </div>
             <!-- The message's files (renderAttachments): a click saves one to Downloads. -->
             <div id="m-attachments" class="attachments" hidden></div>
@@ -148,6 +150,8 @@
           <!-- Reply, Reply all and Forward, or the reply being written (renderMessageEnd). -->
           <div id="m-end"></div>
         </div>
+        <!-- Where the link under the pointer goes (showLinkAddress). -->
+        <div id="link-address" class="link-address" hidden></div>
       </article>
       <!-- A new message being written (openCompose). Its buttons take the place of the email's. -->
       <article id="compose" hidden>
@@ -241,6 +245,20 @@
   </div>
 
   <div id="menu" role="menu" hidden></div>
+
+  <!-- A link whose text shows another site than where it goes asks first (askLink). -->
+  <div id="link-check" hidden>
+    <div class="link-check-box" role="alertdialog" aria-modal="true" aria-labelledby="lc-title" aria-describedby="lc-why">
+      <h2 id="lc-title">This link may not go where it says</h2>
+      <p id="lc-why" class="warn"></p>
+      <p id="lc-address" class="address"></p>
+      <div class="buttons">
+        <button id="lc-copy">Copy address</button>
+        <button id="lc-cancel">Cancel</button>
+        <button id="lc-open" class="primary">Open anyway</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" role="status" hidden>
     <span id="toast-text"></span>

@@ -35,10 +35,10 @@ flowchart LR
 | `keychain.rs` | Sign-ins in the system keychain: the macOS keychain through the Security framework, saving each as a new item so updates read it without asking, and Windows Credential Manager through `keyring` (see [auth.md](auth.md#macos-keychain)) |
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
 | `mime.rs` | Writes the emails the app sends: headers (encoded words for text outside ASCII, nothing a field can turn into a header of its own), quoted-printable text and HTML, base64 files, and the parts they nest in (see [Sending](#sending)) |
-| `files.rs` | Saving attachments: safe file names, never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
+| `files.rs` | Saving attachments: safe file names (no characters that hide the extension), never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
-| `macos.rs` | macOS only: opens links clicked in the email in the browser, and passes right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). Gives saved attachments macOS's quarantine mark (see [ui.md](ui.md#attachments)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
+| `macos.rs` | macOS only: passes links clicked in the email, the link under the pointer, right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). Gives saved attachments macOS's quarantine mark (see [ui.md](ui.md#attachments)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
 ## Commands (UI → Rust)
@@ -84,7 +84,7 @@ Two more commands are for the [new-mail alerts](ui.md#notifications-and-the-icon
 Events (Rust → UI):
 - `mail-changed`, with the account email as payload.
 - `open-message`, `{ account, id }` or null, when a notification is clicked.
-- macOS only, from `macos.rs`: `email-context-menu`, `[x, y]` in the window, for a right-click in the email; `email-key`, `[key, code, shift]`, for every key pressed without Cmd, Ctrl or Option; and `full-screen`, `true` or `false`, when the window enters or leaves full screen.
+- macOS only, from `macos.rs`: `email-link`, the address of a link clicked in the email; `email-link-hover`, the address of the link under the pointer, or null; `email-context-menu`, `[x, y]` in the window, for a right-click in the email; `email-key`, `[key, code, shift]`, for every key pressed without Cmd, Ctrl or Option; and `full-screen`, `true` or `false`, when the window enters or leaves full screen.
 
 And two for [updates](development.md#updates):
 

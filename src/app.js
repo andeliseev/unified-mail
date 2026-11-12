@@ -199,6 +199,8 @@ const state = {
   syncQueued: false,
   lastSync: 0,
   openSeq: 0,
+  emailLinks: new Map(),  // the open email's links, by address: what its text shows instead, or '' (checkLinks)
+  linkCheck: null,        // the address `askLink` asks about
   authSeq: 0,
 };
 
@@ -266,6 +268,9 @@ async function init() {
   // macOS: right-clicks and keys in the email, which WebKit doesn't hand to this page (macos.rs).
   await listen('email-context-menu', (e) => onEmailContextMenu(...e.payload));
   await listen('email-key', (e) => onEmailKey(...e.payload));
+  // macOS: a link clicked in the email, and the link under the pointer (macos.rs).
+  await listen('email-link', (e) => openEmailLink(e.payload));
+  await listen('email-link-hover', (e) => showLinkAddress(e.payload));
   setInterval(() => { if (!document.hidden) refresh(); }, AUTO_REFRESH_MS);
   window.addEventListener('focus', () => {
     if (Date.now() - state.lastSync > REFRESH_ON_FOCUS_AFTER_MS) refresh();
@@ -430,6 +435,18 @@ function bindEvents() {
     if (state.full) showBody(state.full);
   });
   $('#toast-action').addEventListener('click', runToastAction);
+  // "This link may not go where it says" (askLink): a click beside the box cancels, as Cancel does.
+  $('#lc-open').addEventListener('click', () => {
+    const href = state.linkCheck;
+    closeLinkCheck();
+    if (href) openExternal(href);
+  });
+  $('#lc-copy').addEventListener('click', () => {
+    if (state.linkCheck) copyText(state.linkCheck.replace(/^mailto:/i, ''));
+    closeLinkCheck();
+  });
+  $('#lc-cancel').addEventListener('click', closeLinkCheck);
+  $('#link-check').addEventListener('mousedown', (e) => { if (e.target === $('#link-check')) closeLinkCheck(); });
   $('#update').addEventListener('click', installUpdate);
   for (const button of document.querySelectorAll('#theme button')) {
     button.addEventListener('click', () => setTheme(button.dataset.theme));
@@ -1152,6 +1169,7 @@ async function select(key, given = null) {
   $('#m-from').textContent = m.from;
   $('#m-date').textContent = longDate(m.date);
   $('#m-to').textContent = '';
+  $('#m-replyto').hidden = true;
   $('#m-account').textContent = m.account;
   $('#m-account').style.setProperty('--acc', colorOf(m.account));
   renderAttachments(m, []);
@@ -1162,6 +1180,7 @@ async function select(key, given = null) {
     const full = await invoke('get_message', { account: m.account, id: m.id });
     if (seq !== state.openSeq) return;
     $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
+    renderReplyTo(full);
     full.inline = inlinePictures(full);
     renderAttachments(m, (full.attachments || []).filter((a) => !full.inline.includes(a)));
     showBody(full);
@@ -1766,10 +1785,12 @@ function filesRow(draft, redraw) {
     const kind = attachmentKind({ name: file.name, mimeType: file.mimeType || '' });
     const chip = document.createElement('span');
     chip.className = `draft-file ${kind}`;
-    chip.title = file.name;
+    chip.title = cleanFileName(file.name);
     chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
       `<span class="name"></span><span class="size"></span><button type="button" title="Remove" aria-label="Remove">${svg(CROSS)}</button>`;
-    chip.querySelector('.name').textContent = file.name;
+    fillFileName(chip.querySelector('.name'), file.name);
+    const risk = riskTag(file.name);
+    if (risk) chip.querySelector('.name').after(risk);
     chip.querySelector('.size').textContent = formatSize(file.size);
     chip.querySelector('button').addEventListener('click', () => {
       remove();
@@ -2360,25 +2381,103 @@ function attachmentChip(m, a) {
   const kind = attachmentKind(a);
   const chip = document.createElement('button');
   chip.className = `att ${kind}`;
-  chip.title = `Save ${a.name} to Downloads`;
+  chip.title = `Save ${cleanFileName(a.name)} to Downloads`;
   chip.innerHTML = `<svg class="kind" viewBox="0 0 24 24" aria-hidden="true">${ATTACHMENT_ICONS[kind]}</svg>` +
     `<span class="name"></span><span class="save-label"><span class="size idle"></span>${SAVING_LABELS}</span>${SAVE_ICON}${CANCEL_ICON}`;
-  chip.querySelector('.name').textContent = a.name;
+  fillFileName(chip.querySelector('.name'), a.name);
+  const risk = riskTag(a.name);
+  if (risk) chip.querySelector('.name').after(risk);
   chip.querySelector('.size').textContent = formatSize(a.size);
   chip.addEventListener('click', () => saveAttachments(m, [a], chip));
   return chip;
 }
 
-/** Picks the icon and its color, from the type Gmail gives or, for `octet-stream`, the extension. */
+const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff', 'ico'];
+const ARCHIVE_EXTENSIONS = ['zip', 'rar', '7z', 'gz', 'tgz', 'tar', 'xz', 'bz2'];
+const DOCUMENT_EXTENSIONS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pages', 'numbers', 'key'];
+
+/**
+ * Picks the icon and its color by the file's extension, which is what decides how the system
+ * opens it, whatever type the sender gave it: `invoice.pdf.html` sent as a PDF is no PDF. A name
+ * without an extension goes by that type.
+ */
 function attachmentKind(a) {
-  const type = a.mimeType;
-  const extension = a.name.includes('.') ? a.name.split('.').pop().toLowerCase() : '';
-  if (type.startsWith('image/')) return 'image';
-  if (type === 'application/pdf' || extension === 'pdf') return 'pdf';
-  if (/zip|rar|7z|tar|compressed/.test(type) || ['zip', 'rar', '7z', 'gz', 'tgz', 'tar', 'xz', 'bz2'].includes(extension)) return 'archive';
-  if (/^text\/|word|excel|spreadsheet|presentation|powerpoint|opendocument|rtf/.test(type) ||
-    ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pages', 'numbers', 'key'].includes(extension)) return 'document';
+  const extension = extensionOf(a.name);
+  if (extension) {
+    if (IMAGE_EXTENSIONS.includes(extension)) return 'image';
+    if (extension === 'pdf') return 'pdf';
+    if (ARCHIVE_EXTENSIONS.includes(extension)) return 'archive';
+    if (DOCUMENT_EXTENSIONS.includes(extension)) return 'document';
+    return 'file';
+  }
+  const type = a.mimeType || '';
+  if (type.startsWith('image/') && type !== 'image/svg+xml') return 'image';
+  if (type === 'application/pdf') return 'pdf';
+  if (/zip|rar|7z|tar|compressed/.test(type)) return 'archive';
+  if (/^text\/plain|word|excel|spreadsheet|presentation|powerpoint|opendocument|rtf/.test(type)) return 'document';
   return 'file';
+}
+
+/**
+ * Characters that show nothing (zero-width spaces and joiners, soft hyphens, fillers, the blank
+ * Braille pattern) or turn the text around, which a sender can put in a file name to push its
+ * real extension out of sight: `Invoice.pdf⠀⠀⠀…⠀.html`.
+ */
+const INVISIBLE_CHARACTERS = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯⠀ㅤ︀-️﻿ﾠ]/g;
+
+/** A file name as it's shown: without invisible characters, and blank runs as one space. */
+function cleanFileName(name) {
+  return name.replace(INVISIBLE_CHARACTERS, '').replace(/\s+/g, ' ').trim() || 'attachment';
+}
+
+/** A file name's extension, lowercase, or '' (`cleanFileName` first, so blanks can't hide it). */
+function extensionOf(name) {
+  const match = /\.([a-z0-9]{1,10})$/i.exec(cleanFileName(name));
+  return match ? match[1].toLowerCase() : '';
+}
+
+/**
+ * Fills a chip's `.name` with a file name whose extension always shows: the rest is cut short
+ * (with "…") when the chip is too narrow, the extension isn't.
+ */
+function fillFileName(span, name) {
+  const clean = cleanFileName(name);
+  const extension = extensionOf(clean);
+  const cut = extension ? clean.length - extension.length - 1 : clean.length;
+  const base = document.createElement('span');
+  base.className = 'base';
+  base.textContent = clean.slice(0, cut);
+  const end = document.createElement('span');
+  end.className = 'ext';
+  end.textContent = clean.slice(cut);
+  span.replaceChildren(base, end);
+}
+
+const OPENS_IN_BROWSER = ['htm', 'html', 'xht', 'xhtml', 'shtml', 'mht', 'mhtml', 'svg', 'svgz'];
+const RUNS_PROGRAMS = [
+  'exe', 'msi', 'msix', 'msixbundle', 'appx', 'appxbundle', 'bat', 'cmd', 'com', 'scr', 'pif', 'cpl', 'hta', 'js', 'jse',
+  'vbs', 'vbe', 'wsf', 'wsh', 'ps1', 'psm1', 'jar', 'lnk', 'url', 'reg', 'inf', 'command', 'sh', 'app', 'pkg', 'dmg',
+  'iso', 'img', 'vhd', 'vhdx', 'one',
+];
+const HAS_MACROS = ['docm', 'dotm', 'xlsm', 'xltm', 'xlam', 'pptm', 'potm', 'ppam', 'ppsm', 'sldm'];
+
+/** For a file the system opens in a web browser, or that can run code: its tag, else ''. */
+function attachmentRisk(name) {
+  const extension = extensionOf(name);
+  if (OPENS_IN_BROWSER.includes(extension)) return 'Opens in your browser';
+  if (RUNS_PROGRAMS.includes(extension)) return 'Runs programs';
+  if (HAS_MACROS.includes(extension)) return 'Can run macros';
+  return '';
+}
+
+/** The tag `attachmentRisk` gives a file, as a chip's part, or null. */
+function riskTag(name) {
+  const risk = attachmentRisk(name);
+  if (!risk) return null;
+  const tag = document.createElement('span');
+  tag.className = 'risk';
+  tag.textContent = risk;
+  return tag;
 }
 
 /** 512 B, 248 KB, 1.2 MB, 24 MB: in units of 1024, as Gmail and Windows count. */
@@ -2517,6 +2616,132 @@ function showInlinePictures(doc, pictures) {
 
 // ---------- Message body ----------
 
+/**
+ * Under the sender, where a reply goes when the email asks for replies at another address
+ * (Reply-To), as Reply does: in grey at the sender's own site, in orange anywhere else, where a
+ * phishing email collects the answers its sender's name invites.
+ */
+function renderReplyTo(full) {
+  const line = $('#m-replyto');
+  const sender = parseAddresses(full.from || '')[0];
+  const same = (r) => sender && r.email.toLowerCase() === sender.email.toLowerCase();
+  const others = parseAddresses(full.replyTo || '').filter((r) => r.email && !same(r));
+  line.hidden = !others.length;
+  if (!others.length) return;
+  const domain = (email) => email.split('@').pop();
+  const elsewhere = !sender || others.some((r) => !sameSite(domain(r.email), domain(sender.email)));
+  const addresses = others.map((r) => r.email).join(', ');
+  line.textContent = elsewhere ? `Replies go to ${addresses}, not the sender` : `reply to ${addresses}`;
+  line.classList.toggle('warn', elsewhere);
+}
+
+// ---------- Links in the email ----------
+
+/**
+ * The open email's links, by address, each with what its text shows instead when that's
+ * another site or address than where it goes: "www.paypal.com" on a link to paypa1-secure.com.
+ * Opening one of those asks first (`openEmailLink`). Senders' own tooltips on links go, so only
+ * the line at the bottom of the reader (`showLinkAddress`) says where a link goes.
+ */
+function checkLinks(doc) {
+  const links = new Map();
+  for (const link of doc.querySelectorAll('a[href], area[href]')) {
+    link.removeAttribute('title');
+    let href;
+    try { href = new URL(link.href).href; } catch { continue; }
+    if (!/^(https?|mailto):/i.test(href)) continue;
+    const shown = shownElsewhere(link.textContent, href);
+    if (shown || !links.has(href)) links.set(href, shown || '');
+  }
+  return links;
+}
+
+/**
+ * What a link's text shows, when it reads as a site ("paypal.com", "https://www.paypal.com/x")
+ * or an email address, and that's not where the link goes. Text in words ("Sign in") shows
+ * nothing to compare. A site counts as the same when one is the other or a part of it
+ * (`email.paypal.com` and `paypal.com`).
+ */
+function shownElsewhere(text, href) {
+  const shown = text.trim().replace(/^<(.*)>$/, '$1');
+  if (!shown || /\s/.test(shown)) return '';
+  const url = new URL(href);
+  const mailto = url.protocol === 'mailto:';
+  const address = /^(?:mailto:)?([^@\s/]+@[^@\s/]+\.[^@\s/.]{2,})$/i.exec(shown);
+  if (address) {
+    const to = mailto ? decodeURIComponent(url.pathname).toLowerCase() : '';
+    return to === address[1].toLowerCase() ? '' : address[1];
+  }
+  const site = /^(?:https?:\/\/)?([^\s/?#:@]+\.[^\s/?#:@.]{2,})(?::\d+)?(?:[/?#]\S*)?$/i.exec(shown);
+  if (!site) return '';
+  let host;
+  try { host = new URL(`http://${site[1]}`).hostname; } catch { return ''; }  // Unicode names as their xn-- form
+  return !mailto && sameSite(host, url.hostname) ? '' : site[1];
+}
+
+/** Whether two hosts are one site: the same, or one inside the other, `www.` aside. */
+function sameSite(a, b) {
+  const [x, y] = [a, b].map((host) => host.toLowerCase().replace(/^www\./, ''));
+  return Boolean(x && y) && (x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`));
+}
+
+/** A link's address with its site (or a mailto's address) in bold, as nodes for textContent-safe display. */
+function addressParts(href) {
+  const url = new URL(href);
+  const bold = document.createElement('b');
+  if (url.protocol === 'mailto:') {
+    bold.textContent = decodeURIComponent(url.pathname);
+    return ['mailto:', bold];
+  }
+  bold.textContent = url.host;
+  return [`${url.protocol}//`, bold, `${url.pathname === '/' && !url.search && !url.hash ? '' : url.pathname}${url.search}${url.hash}`];
+}
+
+/**
+ * The line at the bottom of the reader saying where the link under the pointer goes, as a
+ * browser's does. `url` is null off a link; links that aren't the open email's show nothing.
+ */
+function showLinkAddress(url) {
+  const line = $('#link-address');
+  let href = null;
+  try { href = url ? new URL(url).href : null; } catch {}
+  if (!href || !state.emailLinks.has(href)) {
+    line.hidden = true;
+    return;
+  }
+  if (line.dataset.href !== href) {
+    line.replaceChildren(...addressParts(href));
+    line.dataset.href = href;
+  }
+  line.hidden = false;
+}
+
+/** Opens a link from the email in the browser, or asks first when its text shows another site (`checkLinks`). */
+function openEmailLink(url) {
+  let href;
+  try { href = new URL(url).href; } catch { return; }
+  const shown = state.emailLinks.get(href);
+  if (shown) askLink(href, shown);
+  else openExternal(href);
+}
+
+/** "This link may not go where it says": the site it shows, where it goes, and Open anyway. */
+function askLink(href, shown) {
+  const url = new URL(href);
+  const goes = url.protocol === 'mailto:' ? decodeURIComponent(url.pathname) : url.hostname;
+  $('#lc-why').textContent = `It shows ${shown} but goes to ${goes}.`;
+  $('#lc-address').replaceChildren(...addressParts(href));
+  state.linkCheck = href;
+  hideMenu();
+  $('#link-check').hidden = false;
+  $('#lc-cancel').focus();
+}
+
+function closeLinkCheck() {
+  $('#link-check').hidden = true;
+  state.linkCheck = null;
+}
+
 function showBodyMessage(text) {
   const div = document.createElement('div');
   div.className = 'empty';
@@ -2532,6 +2757,8 @@ function showBody(full) {
   else html = '<p style="color:#888">(This message has no text.)</p>';
 
   state.full = full;  // to show it again with other colors (Original / Dark, a theme change)
+  state.emailLinks = new Map();
+  showLinkAddress(null);
   const dark = appIsDark() && !state.originalColors;
   const frame = document.createElement('iframe');
   // allow-same-origin (without allow-scripts) only lets this page reach the email to set it up
@@ -2561,19 +2788,28 @@ function showBody(full) {
     // Every link opens through <base target="_blank">, which the click handler below (or on
     // macOS, macos.rs) catches. A link's own target, such as _top, would get around that.
     for (const link of doc.querySelectorAll('a[target], area[target]')) link.removeAttribute('target');
+    state.emailLinks = checkLinks(doc);
     // Images can widen the layout as they arrive. Their `load` events don't bubble, so capture them.
     doc.addEventListener('load', () => scheduleFit(frame), true);
     doc.addEventListener('click', (e) => {
-      const link = e.target.closest && e.target.closest('a[href]');
+      const link = e.target.closest && e.target.closest('a[href], area[href]');
       if (!link) return;
       e.preventDefault();
-      if (!link.getAttribute('href').startsWith('#')) openExternal(link.href);
+      if (!link.getAttribute('href').startsWith('#')) openEmailLink(link.href);
+    });
+    // Where the link under the pointer goes. On macOS this handler doesn't run, and macos.rs
+    // passes the link on instead (`email-link-hover`).
+    doc.addEventListener('mouseover', (e) => {
+      const link = e.target.closest && e.target.closest('a[href], area[href]');
+      showLinkAddress(link ? link.href : null);
     });
     // On macOS keys come from macos.rs instead (onEmailKey), so they never act twice.
     if (!IS_MAC) doc.addEventListener('keydown', (e) => onKey(e, true));
     doc.addEventListener('contextmenu', (e) => onContextMenu(e, frame));
     doc.addEventListener('mousedown', hideMenu);
   });
+  // This frame is in the page, so leaving it reaches the page on macOS too.
+  frame.addEventListener('mouseleave', () => showLinkAddress(null));
   // Once everything has loaded (web fonts too), fit one last time.
   frame.addEventListener('load', () => {
     scheduleFit(frame);
@@ -2980,6 +3216,11 @@ function onKey(e, inMessage = false) {
     hideMenu();
     if (e.key === 'Escape') { e.preventDefault(); return; }
   }
+  // While the link check asks, keys are its own: Esc cancels, Tab and Enter work its buttons.
+  if (!$('#link-check').hidden) {
+    if (e.key === 'Escape') { e.preventDefault(); closeLinkCheck(); }
+    return;
+  }
   // F5 and Ctrl+R reload the page in WebView2 (Windows), which loses Undo and what isn't saved
   // yet; Ctrl+R is Reply in Outlook. The app has nothing to reload.
   if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.altKey && shortcutKey(e).toLowerCase() === 'r')) {
@@ -3076,7 +3317,7 @@ function onContextMenu(e, frame = null) {
   const link = frame && e.target.closest && e.target.closest('a[href]');
   if (link && /^(https?|mailto):/i.test(link.href)) {
     groups.push([
-      { label: 'Open link', run: () => openExternal(link.href) },
+      { label: 'Open link', run: () => openEmailLink(link.href) },
       { label: 'Copy link', run: () => copyText(link.href.replace(/^mailto:/i, '')) },
     ]);
   }

@@ -3,7 +3,10 @@
 //! scripts; Chromium, on Windows, runs them. So the webview passes on what happens there
 //! (docs/ui.md#sandbox):
 //! - a click on a link asks for a new window (the frame has `allow-popups` on macOS), and
-//!   `on_navigation` opens the link in the default browser instead;
+//!   `on_navigation` passes the link to the page instead (`email-link`), which opens it in the
+//!   default browser, or first asks when its text shows another site;
+//! - the link under the pointer reaches the page (`email-link-hover`) from WebKit's
+//!   `_webView:mouseDidMoveOverElement:withFlags:userInfo:`, the call Safari's status bar uses;
 //! - a right-click gets the app's menu (`email-context-menu`) instead of WebKit's, whose items
 //!   do nothing here;
 //! - keys reach the app's shortcuts (`email-key`).
@@ -13,7 +16,7 @@
 //! (`relaunch_after_exit`).
 
 use objc2::runtime::{AnyObject, Imp, Sel};
-use objc2::{ffi, sel};
+use objc2::{ffi, msg_send, sel};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSMenu, NSUserInterfaceItemIdentification, NSView, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{ns_string, NSDictionary, NSString, NSURLQuarantinePropertiesKey, NSURL};
 use std::ffi::OsStr;
@@ -21,11 +24,12 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, Url, WebviewWindow};
 
 type WillOpenMenu = unsafe extern "C-unwind" fn(&NSView, Sel, &NSMenu, &NSEvent);
 type KeyDown = unsafe extern "C-unwind" fn(&NSView, Sel, &NSEvent);
+type MouseOver = unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject, *mut AnyObject, usize, *mut AnyObject);
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 /// WebKit's own implementations, which ours call after doing their part.
@@ -55,7 +59,16 @@ pub fn on_navigation(url: &Url) -> bool {
     match navigation(url) {
         Navigation::Allow => true,
         Navigation::OpenOutside => {
-            let _ = crate::open_external(url.to_string());
+            // The page opens it, or first asks when the link's text shows another site
+            // (`openEmailLink` in app.js).
+            match APP.get() {
+                Some(app) => {
+                    let _ = app.emit("email-link", url.to_string());
+                }
+                None => {
+                    let _ = crate::open_external(url.to_string());
+                }
+            }
             false
         }
         Navigation::Block => false,
@@ -63,7 +76,7 @@ pub fn on_navigation(url: &Url) -> bool {
 }
 
 /// Puts our `willOpenMenu:withEvent:` and `keyDown:` on the webview's class (wry's WKWebView
-/// subclass, which has neither), in front of WebKit's.
+/// subclass, which has neither), in front of WebKit's, and our `mouse_over` on its UI delegate.
 pub fn install(window: &WebviewWindow) {
     let _ = APP.set(window.app_handle().clone());
     let _ = window.with_webview(|webview| unsafe {
@@ -84,7 +97,57 @@ pub fn install(window: &WebviewWindow) {
                 ffi::class_addMethod(class, sel!(keyDown:), ours, c"v@:@".as_ptr());
             }
         }
+        // WebKit tells the UI delegate about the element under the pointer if the delegate answers
+        // this private call, which it checks when the delegate is set: so it's set again once
+        // the call is on the delegate's class (wry's, which doesn't have it).
+        let delegate: *mut AnyObject = msg_send![view, UIDelegate];
+        if let Some(delegate) = delegate.as_ref() {
+            let class = delegate.class() as *const _ as *mut _;
+            let ours = std::mem::transmute::<MouseOver, Imp>(mouse_over);
+            let call = sel!(_webView:mouseDidMoveOverElement:withFlags:userInfo:);
+            if ffi::class_addMethod(class, call, ours, c"v@:@@Q@".as_ptr()).as_bool() {
+                let _: () = msg_send![view, setUIDelegate: delegate];
+            }
+        }
     });
+}
+
+/// The link the pointer was last over, so the page hears only of changes.
+static HOVERED: Mutex<Option<String>> = Mutex::new(None);
+
+/// WebKit's `_webView:mouseDidMoveOverElement:withFlags:userInfo:`, on the UI delegate, for every
+/// move of the pointer: tells the page the link under it (`email-link-hover`, which
+/// `showLinkAddress` in app.js shows), or that there's none, when that changes. `hit` is a
+/// `_WKHitTestResult`.
+unsafe extern "C-unwind" fn mouse_over(
+    _delegate: &AnyObject,
+    _cmd: Sel,
+    _webview: *mut AnyObject,
+    hit: *mut AnyObject,
+    _flags: usize,
+    _info: *mut AnyObject,
+) {
+    let link = hit.as_ref().and_then(|hit| link_url(hit));
+    let Ok(mut hovered) = HOVERED.lock() else { return };
+    if *hovered == link {
+        return;
+    }
+    hovered.clone_from(&link);
+    drop(hovered);
+    if let Some(app) = APP.get() {
+        let _ = app.emit("email-link-hover", link);
+    }
+}
+
+/// The address of the link a hit test found, if any. Nothing if WebKit's private class no longer
+/// has `absoluteLinkURL`.
+unsafe fn link_url(hit: &AnyObject) -> Option<String> {
+    let answers: bool = msg_send![hit, respondsToSelector: sel!(absoluteLinkURL)];
+    if !answers {
+        return None;
+    }
+    let url: *mut NSURL = msg_send![hit, absoluteLinkURL];
+    url.as_ref()?.absoluteString().map(|address| address.to_string())
 }
 
 /// WebKit is about to show its menu, so the page didn't show its own: the click was in the email
