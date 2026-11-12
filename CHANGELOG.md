@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.2.8 (2026-11-12)
+
 - Write emails: click the pencil above the message list, or press C. The new message opens where you read mail, from the account chosen in the sidebar (From picks another), and waits as a Draft at the top of the list while you read other mail. Click it to go back.
 - Reply, Reply all and Forward: the buttons at the end of each email, the arrow and ⋮ next to its date, or R, A and F. You write your answer under the email, which stays whole above it, and its row shows a Draft tag until you send. Forwarding sends the email's files along; take off any you don't want.
 - Attach files with Attach, up to 25 MB as in Gmail. Send with the button, or ⌘Enter on a Mac (Ctrl+Enter on Windows). For 8 seconds Undo brings the message back unsent, and if you quit the app meanwhile, it's sent right away. Discard has Undo too.
