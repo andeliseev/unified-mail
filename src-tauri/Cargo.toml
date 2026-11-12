@@ -1,6 +1,6 @@
 [package]
 name = "unified-mail"
-version = "0.2.11"
+version = "0.2.12"
 description = "Unified inbox for Gmail accounts"
 license = "MIT"
 repository = "https://github.com/andeliseev/unified-mail"
