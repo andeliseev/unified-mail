@@ -2,7 +2,8 @@
 //!
 //! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (emails),
 //! `settings.json` (appearance), `<folder>-cache.json` (last snapshot of each folder).
-//! Refresh tokens live in the OS keychain.
+//! Refresh tokens live in the OS keychain (keychain.rs). On macOS an update passes them to the
+//! new version in `sign-ins-for-update.json`, for a moment (`AppState::hand_over_sign_ins`).
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -14,9 +15,14 @@ use futures_util::{future::join_all, stream, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::gmail::{self, FullMessage, MessageSummary};
+use crate::keychain::Keychain;
 use crate::{mime, oauth};
 
-const KEYRING_SERVICE: &str = "unified-mail";
+/// Sign-ins, under the service name every version has used.
+const KEYCHAIN: Keychain = Keychain::new("unified-mail");
+/// macOS: the sign-ins a version hands to the one its update installs (`AppState::hand_over_sign_ins`).
+#[cfg(target_os = "macos")]
+const HAND_OVER_FILE: &str = "sign-ins-for-update.json";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
 const SETTINGS_FILE: &str = "settings.json";
@@ -262,9 +268,9 @@ pub struct AppState {
     accounts: Mutex<Vec<String>>,
     settings: Mutex<Settings>,
     tokens: Mutex<HashMap<String, AccessToken>>,
-    /// Each account's refresh token once read from the keychain, so it's read once per launch.
-    /// On macOS a new build of the app (every update) asks for the keychain password on its
-    /// first read of each one.
+    /// Each account's refresh token once read from the keychain (or handed over by the version
+    /// before an update), so it's read once per launch: on macOS, reading one an earlier build
+    /// saved asks for the keychain password (keychain.rs).
     refresh_tokens: Mutex<HashMap<String, String>>,
     /// Accounts whose keychain read failed (on macOS: the password prompt was refused). They
     /// aren't read again until the app restarts or they sign in again, so the prompt doesn't
@@ -308,7 +314,7 @@ impl AppState {
                 (folder, cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect())
             })
             .collect();
-        Self {
+        let state = Self {
             http: reqwest::Client::builder()
                 .user_agent("UnifiedMail/0.1")
                 .timeout(Duration::from_secs(30))
@@ -328,7 +334,10 @@ impl AppState {
             parts: Mutex::new(HashMap::new()),
             reported_failures: Mutex::new(HashSet::new()),
             dir,
-        }
+        };
+        #[cfg(target_os = "macos")]
+        state.take_over_sign_ins();
+        state
     }
 
     pub fn setup(&self) -> Setup {
@@ -386,8 +395,8 @@ impl AppState {
                 "You signed in to {email}, not {expected}. To reconnect {expected}, choose it in Google's sign-in."
             ));
         }
-        keyring_entry(&email)?
-            .set_password(&refresh_token)
+        KEYCHAIN
+            .save(&email, &refresh_token)
             .map_err(|e| format!("Could not save the sign-in to the system keychain: {e}"))?;
         self.refresh_tokens.lock().unwrap().insert(email.clone(), refresh_token);
         self.unreadable.lock().unwrap().remove(&email);
@@ -408,12 +417,12 @@ impl AppState {
     pub fn remove_account(&self, email: &str) -> Result<(), String> {
         let known = self.refresh_tokens.lock().unwrap().remove(email);
         self.unreadable.lock().unwrap().remove(email);
-        if let Ok(entry) = keyring_entry(email) {
-            if let Some(refresh_token) = known.or_else(|| entry.get_password().ok()) {
-                let http = self.http.clone();
-                tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
-            }
-            let _ = entry.delete_credential();
+        if let Some(refresh_token) = known.or_else(|| KEYCHAIN.read(email).ok().flatten()) {
+            let http = self.http.clone();
+            tauri::async_runtime::spawn(async move { oauth::revoke(&http, &refresh_token).await });
+        }
+        if let Err(e) = KEYCHAIN.delete(email) {
+            eprintln!("[keychain] {email}: {e}");
         }
         self.tokens.lock().unwrap().remove(email);
         self.expired.lock().unwrap().remove(email);
@@ -428,6 +437,48 @@ impl AppState {
         }
         self.recent.lock().unwrap().retain(|_, m| m.account != email);
         Ok(())
+    }
+
+    /// macOS, just before an update installs: writes the sign-ins this launch has read to a file
+    /// only this user can read. The new version saves them to the keychain as its own and deletes
+    /// the file as it starts (`take_over_sign_ins`): it couldn't read the items this version saved
+    /// without asking for the password (keychain.rs). Sign-ins not read yet stay as they are.
+    #[cfg(target_os = "macos")]
+    pub fn hand_over_sign_ins(&self) {
+        let accounts = self.accounts.lock().unwrap().clone();
+        let tokens: HashMap<String, String> = {
+            let known = self.refresh_tokens.lock().unwrap();
+            accounts.into_iter().filter_map(|account| known.get(&account).cloned().map(|token| (account, token))).collect()
+        };
+        if tokens.is_empty() {
+            return;
+        }
+        if let Err(e) = write_private(&self.dir.join(HAND_OVER_FILE), &tokens) {
+            eprintln!("[keychain] couldn't hand the sign-ins over to the update: {e}");
+        }
+    }
+
+    /// The update didn't install after all: deletes what `hand_over_sign_ins` wrote.
+    #[cfg(target_os = "macos")]
+    pub fn cancel_hand_over(&self) {
+        let _ = fs::remove_file(self.dir.join(HAND_OVER_FILE));
+    }
+
+    /// macOS, at launch: saves the sign-ins the version before an update handed over
+    /// (`hand_over_sign_ins`) as this build's own keychain items, so reading them doesn't ask,
+    /// and keeps them in memory. The file is deleted first, whatever happens next.
+    #[cfg(target_os = "macos")]
+    fn take_over_sign_ins(&self) {
+        let Some(tokens) = take_private::<HashMap<String, String>>(&self.dir.join(HAND_OVER_FILE)) else {
+            return;
+        };
+        let accounts = self.accounts.lock().unwrap().clone();
+        for (account, token) in tokens.into_iter().filter(|(account, _)| accounts.contains(account)) {
+            if let Err(e) = KEYCHAIN.save(&account, &token) {
+                eprintln!("[keychain] {account}: {e}");
+            }
+            self.refresh_tokens.lock().unwrap().insert(account, token);
+        }
     }
 
     pub fn cached(&self, folder: Folder) -> Vec<MessageSummary> {
@@ -892,12 +943,12 @@ impl AppState {
         if self.unreadable.lock().unwrap().contains(account) {
             return Err(unreadable());
         }
-        match keyring_entry(account)?.get_password() {
-            Ok(token) => {
+        match KEYCHAIN.read(account) {
+            Ok(Some(token)) => {
                 self.refresh_tokens.lock().unwrap().insert(account.to_string(), token.clone());
                 Ok(token)
             }
-            Err(keyring::Error::NoEntry) => Err(self.mark_expired(account, "There's no saved sign-in for")),
+            Ok(None) => Err(self.mark_expired(account, "There's no saved sign-in for")),
             Err(e) => {
                 eprintln!("[keychain] {account}: {e}");
                 self.unreadable.lock().unwrap().insert(account.to_string());
@@ -931,10 +982,6 @@ fn sorted(cache: &FolderCache) -> Vec<MessageSummary> {
     messages
 }
 
-fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| format!("System keychain error: {e}"))
-}
-
 fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
@@ -946,6 +993,34 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     fs::write(&tmp, bytes)
         .and_then(|_| fs::rename(&tmp, path))
         .map_err(|e| format!("Could not save {}: {e}", path.display()))
+}
+
+/// Writes `value` as JSON to a file only this user can read, through a new temp file, which a
+/// failed write doesn't leave behind.
+#[cfg(target_os = "macos")]
+fn write_private<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = path.with_extension("tmp");
+    let _ = fs::remove_file(&tmp);
+    let written = (|| {
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        file.write_all(&serde_json::to_vec(value)?)?;
+        file.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Reads a file `write_private` wrote, and deletes it.
+#[cfg(target_os = "macos")]
+fn take_private<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = fs::read(path).ok()?;
+    let _ = fs::remove_file(path);
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// The identifiers of the app and the test app up to 0.1.11, by the ones they have now.
@@ -1028,6 +1103,43 @@ mod tests {
         move_earlier_data("org.example.other", &base.join("org.example.other"), &[]);
         assert!(!base.join("org.example.other").exists());
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn handed_over_sign_ins_are_private_and_read_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("hand-over-file");
+        let path = dir.join(HAND_OVER_FILE);
+        let tokens = HashMap::from([("a@example.com".to_string(), "token-a".to_string())]);
+        write_private(&path, &tokens).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!path.with_extension("tmp").exists());
+        assert_eq!(take_private::<HashMap<String, String>>(&path), Some(tokens));
+        assert!(!path.exists(), "the file is deleted once read");
+        assert_eq!(take_private::<HashMap<String, String>>(&path), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Only the file: taking the sign-ins over would save them to the real keychain.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_update_gets_the_sign_ins_this_launch_has_read() {
+        let dir = scratch("hand-over");
+        let state = AppState::load(dir.clone());
+        *state.accounts.lock().unwrap() = vec!["a@example.com".into(), "b@example.com".into()];
+        state.refresh_tokens.lock().unwrap().extend([
+            ("a@example.com".to_string(), "token-a".to_string()),
+            ("removed@example.com".to_string(), "token-removed".to_string()),
+        ]);
+        state.hand_over_sign_ins();
+        state.cancel_hand_over();
+        assert!(!dir.join(HAND_OVER_FILE).exists(), "a failed install deletes it");
+
+        state.hand_over_sign_ins();
+        let handed: HashMap<String, String> = take_private(&dir.join(HAND_OVER_FILE)).unwrap();
+        assert_eq!(handed, HashMap::from([("a@example.com".to_string(), "token-a".to_string())]));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

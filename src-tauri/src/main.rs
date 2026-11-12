@@ -4,6 +4,7 @@
 mod files;
 mod gmail;
 mod idle;
+mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mime;
@@ -380,8 +381,9 @@ async fn check_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Resu
 }
 
 /// Downloads the update `check_update` found, checks its signature and installs it. On Windows
-/// the app exits here and the installer starts it again. On macOS the app quits and is opened
-/// again once it's gone, so it comes back under its own Dock icon (`macos::relaunch_after_exit`);
+/// the app exits here and the installer starts it again. On macOS the app hands the sign-ins
+/// over to the new version first (`AppState::hand_over_sign_ins`), then quits and is opened again
+/// once it's gone, so it comes back under its own Dock icon (`macos::relaunch_after_exit`);
 /// elsewhere it restarts itself.
 #[tauri::command]
 async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
@@ -390,10 +392,15 @@ async fn install_update(app: AppHandle, pending: State<'_, PendingUpdate>) -> Re
     // Installing ends the app without the `Exit` event that sends what's waiting, so send it first.
     let handle = app.clone();
     let _ = tauri::async_runtime::spawn_blocking(move || handle.state::<Outbox>().flush(SEND_ON_QUIT)).await;
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| format!("Couldn't install the update: {e}"))?;
+    let fail = |e: tauri_plugin_updater::Error| format!("Couldn't install the update: {e}");
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(fail)?;
+    #[cfg(target_os = "macos")]
+    app.state::<AppState>().hand_over_sign_ins();
+    if let Err(e) = update.install(&bytes) {
+        #[cfg(target_os = "macos")]
+        app.state::<AppState>().cancel_hand_over();
+        return Err(fail(e));
+    }
     #[cfg(target_os = "macos")]
     if macos::relaunch_after_exit() {
         app.exit(0);

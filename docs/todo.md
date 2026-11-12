@@ -14,7 +14,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Drafts against real Gmail: creating and updating through the upload endpoint (`PUT …/drafts/{id}`), `drafts.send`, a draft opened here from one made in Gmail on the web (text above the quote, its answered email found by In-Reply-To), Sent and Drafts rows with their To, and whether `-in:drafts` keeps drafts out of All Mail and search
 - [ ] macOS: scrolling the reader with `Space`, `PageDown` and the arrows after clicking into the email. `scrollMessage` scrolls only if WebKit didn't (80 ms later); Chromium was checked in the browser pane, WebKit not yet. Also wheel and trackpad scrolling over the email, now that the frame itself doesn't scroll
 - [ ] Windows: the file picker (`<input type="file">`) in WebView2, and `Ctrl+Enter`
-- [ ] The Release workflow's Mac signing (rcodesign through the `codesign` stand-in) hasn't run on GitHub yet (see [development.md](development.md#mac-signing)). Checked locally with rcodesign 0.29.0: test apps signed as Tauri signs verify on a Mac that doesn't trust the certificate, and a second build read the first one's keychain item without a prompt. Not checked: the download and the stand-in on the runner, the real app, and a real update
+- [ ] macOS: the sign-in hand-over across a real update (see [auth.md](auth.md#macos-keychain)). Checked with two builds of a test program on the login keychain, not yet from one release to the next: the first release with the hand-over still asks once per account, and the update after it shouldn't
 
 ## Gaps in current features
 
@@ -75,7 +75,8 @@ Looked into on 2026-11-03, not started. A big feature: about as much work as the
 
 ## Distribution
 
-- [ ] Code signing: Windows (SmartScreen) and macOS notarization (Gatekeeper) need paid certificates, for macOS an Apple Developer ID. The Mac app's self-signed certificate already keeps the keychain and folder permissions across updates (see [development.md](development.md#mac-signing))
+- [ ] Code signing: Windows (SmartScreen) and macOS notarization (Gatekeeper) need paid certificates, for macOS an Apple Developer ID. With one, the keychain would list every release by its team ID, so a version installed from a `.dmg` wouldn't ask for the password either, and the sign-in hand-over could go (see [auth.md](auth.md#macos-keychain)). The Mac app's self-signed certificate keeps the folder permissions across updates (see [development.md](development.md#mac-signing))
+- [ ] The test app shares keychain items with the installed app (service `unified-mail`, keyed by email). A service of its own would keep a sign-in there from replacing the installed app's item
 - [ ] The first real update: installed apps get the updater only from the first release that has it, so the update after that one is the first end-to-end check (Windows NSIS and MSI, and macOS, which is untested). Locally checked so far: finding an update, downloading it, and refusing bad signatures
 - [ ] Third-party licenses: the MIT/Apache crates built into the app ask for their notices to ship with it. Generate a list (e.g. `cargo about`) and link it from Settings or include it in the installer
 - [ ] **Google verification**, so users don't see the "unverified app" warning and the user cap goes away. Steps from Google's [restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification):

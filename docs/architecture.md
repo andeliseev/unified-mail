@@ -31,7 +31,8 @@ flowchart LR
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
-| `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, keychain |
+| `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, and on macOS handing the sign-ins over to an update |
+| `keychain.rs` | Sign-ins in the system keychain: the macOS keychain through the Security framework, saving each as a new item so updates read it without asking, and Windows Credential Manager through `keyring` (see [auth.md](auth.md#macos-keychain)) |
 | `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
 | `mime.rs` | Writes the emails the app sends: headers (encoded words for text outside ASCII, nothing a field can turn into a header of its own), quoted-printable text and HTML, base64 files, and the parts they nest in (see [Sending](#sending)) |
 | `files.rs` | Saving attachments: safe file names, never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
@@ -112,7 +113,8 @@ The page hands `send_message` (and `save_draft`) a draft: `account`, `to`/`cc`/`
 
 | Data | Where | Format |
 | --- | --- | --- |
-| Refresh tokens | OS keychain, service `unified-mail`, user = email; read once per launch, then kept in memory | `keyring` crate |
+| Refresh tokens | OS keychain, service `unified-mail`, user = email; read once per launch, then kept in memory | keychain.rs |
+| Refresh tokens during an update (macOS) | `<app data>/sign-ins-for-update.json`, mode 0600, from just before the install until the new version starts (see [auth.md](auth.md#macos-keychain)) | JSON object, email → token |
 | Access tokens | Memory only | Expire 60 s early; wall clock, see below |
 | OAuth client (Settings fallback) | `<app data>/client.json` | JSON |
 | Account list | `<app data>/accounts.json` | JSON array of emails |

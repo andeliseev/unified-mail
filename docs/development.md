@@ -146,7 +146,7 @@ The workflow then:
 
 ## Mac signing
 
-The keychain and macOS's privacy permissions (such as the Downloads folder) trust an app by its designated requirement. An ad-hoc signature's requirement is the hash of its code, different in every build, so before releases were signed every update was a new app: the keychain asked for the password once per account, and the Downloads question could come back. Releases are signed with a self-signed certificate instead, which makes the requirement `identifier "com.andeliseev.unified-mail" and certificate root = H"<the certificate's SHA-1>"` (it's its own root), the same for every release.
+macOS's privacy permissions (such as the Downloads folder) and the keychain's access lists trust an app by its designated requirement. An ad-hoc signature's requirement is the hash of its code, different in every build, so before releases were signed every update was a new app, and the Downloads question could come back. Releases are signed with a self-signed certificate instead, which makes the requirement `identifier "com.andeliseev.unified-mail" and certificate root = H"<the certificate's SHA-1>"` (it's its own root), the same for every release. The keychain also lists each build by its hash, which only an Apple Developer ID would change, so updates hand the sign-ins over to the new version instead (see [auth.md](auth.md#macos-keychain)).
 
 **The certificate** (one time), on a Mac, from the repo, with the GitHub CLI signed in:
 
@@ -162,11 +162,11 @@ It makes the certificate "Unified Mail" (valid for 20 years) and saves it and it
 - `tauri.release.conf.json` names the certificate (`bundle.macOS.signingIdentity`). Local builds stay ad-hoc (`"-"` in `tauri.conf.json`), so an app built locally asks for the keychain password as before.
 - **Check the Mac app's signature** keeps the release a draft unless the app verifies and its requirement names the certificate's SHA-1.
 
-Macs that run the app don't trust the certificate, and don't need to: the signature still verifies, and the keychain only compares the requirement. The app isn't notarized, so Gatekeeper still asks on the first launch of a downloaded copy (that would take a paid Apple Developer ID). Updates the app installs itself aren't checked by Gatekeeper.
+Macs that run the app don't trust the certificate, and don't need to: the signature still verifies, and the permissions and the keychain's access lists only compare the requirement. The app isn't notarized, so Gatekeeper still asks on the first launch of a downloaded copy (that would take a paid Apple Developer ID). Updates the app installs itself aren't checked by Gatekeeper.
 
-The first signed release asks once more per account, since its requirement isn't on the keychain's list yet. After **Always Allow**, later releases don't ask.
+The certificate alone didn't stop the keychain asking: every signed release (0.2.6 to 0.2.8) still asked once per account, for its build (see [auth.md](auth.md#macos-keychain)).
 
-Checked locally with rcodesign 0.29.0 and a throwaway keychain: two different test apps signed through the stand-in as Tauri signs (the executable, then the app) had the same requirement and the hardened runtime, and passed `codesign --verify --strict --deep` on a Mac that doesn't trust the certificate. The second read a keychain item the first had saved, with no prompt; an ad-hoc build couldn't. A `.dmg` signed the same way verifies too.
+Checked locally with rcodesign 0.29.0 and a throwaway keychain: two different test apps signed through the stand-in as Tauri signs (the executable, then the app) had the same requirement and the hardened runtime, and passed `codesign --verify --strict --deep` on a Mac that doesn't trust the certificate. A `.dmg` signed the same way verifies too. The second test app also read a keychain item the first had saved without asking, but only because that keychain's items had no list of builds; the login keychain's do.
 
 ## Updates
 
@@ -244,7 +244,7 @@ When what the app accesses or stores changes, update `unified-mail/privacy.html`
 Never run a development build on your real Gmail accounts: a bug could archive, delete or mark real mail.
 
 - `npm run dev` merges [`src-tauri/tauri.dev.conf.json`](../src-tauri/tauri.dev.conf.json): identifier `com.andeliseev.unified-mail.devtest` (its own data folder, starting with no accounts) and the window title "Unified Mail (test)". It replaces the whole `windows` list, so it repeats `"create": false`. Without that, Tauri would create the window and so would `main.rs`, and the app wouldn't start.
-- Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both.
+- Sign in there only with test Gmail accounts. Saved sign-ins are keychain entries keyed by email address and shared with the installed app, so signing in or removing an account that the installed app also uses affects both. On macOS, signing in there replaces the item with one of the test app's, and the installed app then asks for the password for that account once.
 - Send only from test accounts, and only to addresses that are yours: the app really sends. Undo stops a message for 8 s, and quitting in that time sends it at once.
 - Release builds (`npm run build`, `npx tauri build`) use the real identity, `com.andeliseev.unified-mail`. On a computer where Unified Mail is installed and signed in, a release build opens those same accounts. To run one for testing, add `--config src-tauri/tauri.dev.conf.json`.
 - For the UI alone, use a fake backend, as described next.
@@ -285,7 +285,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts
 - [ ] macOS, with the app kept in the Dock: after an update it comes back under that icon, with no second Unified Mail icon next to it. Only an update from a version newer than 0.2.0 shows this
-- [ ] macOS: an update from one signed release to the next doesn't ask for the keychain password (after **Always Allow** once), and saving an attachment doesn't ask about the Downloads folder again
+- [ ] macOS: an update installed from the app, from a version that hands the sign-ins over, doesn't ask for the keychain password, and `sign-ins-for-update.json` is gone from the app data folder afterwards. Saving an attachment doesn't ask about the Downloads folder again
 - [ ] Read a message on the phone: it turns read in the app
 - [ ] Archive (`E`) and delete (`#`): row disappears, Gmail web agrees
 - [ ] `Z` right after Archive / Delete: the message comes back to the Inbox (check Gmail web)

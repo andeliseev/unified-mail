@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- macOS: updates you install from the app no longer ask for your keychain password. The signing in 0.2.6 was meant to do that but didn't. This update still asks one last time for each account: enter your password and click **Always Allow**.
+
 ## 0.2.8 (2026-11-12)
 
 - Write emails: click the pencil above the message list, or press C. The new message opens where you read mail, from the account chosen in the sidebar (From picks another), and waits as a Draft at the top of the list while you read other mail. Click it to go back.
