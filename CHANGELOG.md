@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Windows: the app's icon in the taskbar is now as big as other apps' icons.
+
 ## 0.2.12 (2026-11-12)
 
 - Pointing at a link in an email shows where it goes, at the bottom of the reader. A link whose text shows one site but goes to another, a common phishing trick, asks before it opens.

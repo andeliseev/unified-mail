@@ -7,6 +7,7 @@
 - `npm run dev`: run the app with hot reload, as the separate test app "Unified Mail (test)"
 - `cd src-tauri && cargo test`: unit tests (`-- --include-ignored` adds a live imap.gmail.com check)
 - `npx tauri build --no-bundle`: release exe only, for size checks
+- `node scripts/icons.mjs`: make `src-tauri/icons/` from `app-icon.svg` (the Windows icon scaled to fill its square)
 
 ## Working rules
 

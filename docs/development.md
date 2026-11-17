@@ -214,10 +214,15 @@ The icon is drawn in [`app-icon.svg`](../app-icon.svg): a white envelope outline
 To regenerate the app's icon files after changing it:
 
 ```bash
-npx tauri icon app-icon.svg -o <a temp folder>
+node scripts/icons.mjs
 ```
 
-Then copy only the files `src-tauri/icons/` already has: `32x32.png`, `64x64.png`, `128x128.png`, `128x128@2x.png`, `icon.png`, `icon.ico` and `icon.icns`. The tool also makes Android, iOS and Windows Store icons, which this app doesn't use.
+It runs the Tauri CLI's `icon` command twice and copies only the files `src-tauri/icons/` has (the CLI also makes Android, iOS and Windows Store icons, which this app doesn't use):
+
+- **macOS and the PNGs** (`icon.icns`, `32x32.png` … `icon.png`) from `app-icon.svg` as it is. macOS draws app icons on a grid with room around the tile, and the drawing's tile, 20 of its 24 units, fits that grid.
+- **Windows** (`icon.ico`: the taskbar, the window, the `.exe` and the installers) from the same drawing scaled 1.2 times, so the tile fills its square. Windows shows icons as they are, and with the room around it the icon looked smaller than other apps' in the taskbar (up to 0.2.12).
+
+`build.rs` tells Cargo to rebuild when `icons/icon.ico` changes: tauri-build embeds it in the `.exe` but watches only `tauri.conf.json` and `capabilities/`, so a new icon used to need a clean build. The macOS `.icns` encoder isn't byte-for-byte repeatable; when only the Windows icon changed, keep the committed `icon.icns` (`git checkout -- src-tauri/icons/icon.icns`).
 
 ## Website (home page and privacy policy)
 
