@@ -287,7 +287,10 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .msg.selected { background: var(--selected); }
 .msg.menu-target { box-shadow: inset 0 0 0 2px var(--accent); }
 .msg .row1 { display: flex; gap: 8px; align-items: baseline; }
-.msg .from { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg .from { flex: 1; min-width: 0; display: flex; align-items: baseline; }
+.msg .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How many emails a conversation has, after who wrote them (conversationRow). */
+.msg .count { flex: none; margin-left: 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .msg time { font-size: 12px; color: var(--muted); flex: none; }
 /* A message with files (`hasAttachments`): a paperclip next to the time. Under the mouse the
    row's buttons take that place, so it hides with the time. */
@@ -353,8 +356,6 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 }
 /* A message being written: a new one's row at the top of the list, or a reply's email. */
 .msg .tag.draft { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-.msg.draft .from { display: flex; align-items: baseline; }
-.msg.draft .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.unread .from, .msg.unread .subject { font-weight: 700; }
 .msg.unread .row1::before {
   content: "";
@@ -416,14 +417,15 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   border-bottom: 1px solid var(--border);
 }
 .reader-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.msg-head { padding: 14px 24px; border-bottom: 1px solid var(--border); user-select: text; }
+/* The conversation's subject, and the account it's in. */
+.msg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 16px 24px 6px; user-select: text; }
 .tool { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .tool.primary { padding-left: 18px; padding-right: 18px; }
 /* Original / Dark sits apart from the actions on the message, as Discard (after how saving went)
    does from Send. */
 #colors { margin-left: auto; }
 .tool.danger:hover { color: var(--danger); border-color: var(--danger); }
-#m-subject { font-size: 19px; margin: 0 0 10px; line-height: 1.3; overflow-wrap: anywhere; }
+#m-subject { font-size: 19px; margin: 0; line-height: 1.3; overflow-wrap: anywhere; }
 .meta { display: flex; flex-direction: column; gap: 3px; }
 .meta-row { display: flex; gap: 10px; justify-content: space-between; align-items: baseline; min-width: 0; }
 .meta-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -493,9 +495,37 @@ svg .dot { fill: currentColor; stroke: none; }
 .att.file .kind { color: var(--muted); }
 .save-all { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
 .save-all.saving { padding-right: 8px; }
+/* The conversation's emails (mailElement): a line each, with a line between them, or open in
+   full with their header (.mail-head), files and text. */
+.mail + .mail, .mail + .fold, .fold + .mail { border-top: 1px solid var(--border); }
+.mail-head { padding: 12px 24px 10px; user-select: text; }
+.mail-line { display: flex; align-items: baseline; gap: 12px; padding: 10px 24px; }
+.mail-line:hover { background: var(--hover); }
+.mail-line .from { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.mail-line .snippet { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.mail-line time { flex: none; font-size: 12.5px; color: var(--muted); }
+.mail.unread .mail-line .from::before {
+  content: "";
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin: 0 7px 1px 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+/* "3 more emails": the folded ones at the start of a long conversation (foldLine). */
+.fold {
+  display: block;
+  width: 100%;
+  padding: 7px 24px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  color: var(--accent);
+  font-size: 12.5px;
+}
 /* The frame is as tall as the email (fitHeight), so the reader scrolls it with the rest. */
-#m-body iframe { display: block; width: 100%; height: 0; border: 0; background: #fff; }
-#m-body .empty { min-height: 160px; background: var(--panel); }
+.mail-body iframe { display: block; width: 100%; height: 0; border: 0; background: #fff; }
+.mail-body .empty { min-height: 160px; background: var(--panel); }
 
 /* Writing: a new message (#compose) and a reply under the email (.reply-box) */
 

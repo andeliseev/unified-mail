@@ -12,7 +12,7 @@ mod oauth;
 mod state;
 
 use gmail::{FullMessage, MessageSummary};
-use state::{AppState, ClientCreds, Draft, Folder, FolderResult, OlderPage, Setup, Theme, Trashed};
+use state::{AppState, ClientCreds, Draft, Folder, FolderResult, OlderPage, PutBack, Setup, Theme, ThreadMoved};
 use futures_util::future::{AbortHandle, Abortable};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -124,6 +124,12 @@ fn cached_folder(state: State<'_, AppState>, folder: Folder) -> Vec<MessageSumma
     state.cached(folder)
 }
 
+/// The conversations saved with the folders, for the rows' first paint.
+#[tauri::command]
+fn cached_threads(state: State<'_, AppState>) -> Vec<gmail::Thread> {
+    state.cached_threads()
+}
+
 #[tauri::command]
 async fn refresh_folder(state: State<'_, AppState>, folder: Folder) -> Result<FolderResult, String> {
     Ok(state.refresh(folder).await)
@@ -155,6 +161,19 @@ async fn search_messages(
 #[tauri::command]
 async fn get_message(state: State<'_, AppState>, account: String, id: String) -> Result<FullMessage, String> {
     state.get_message(&account, &id).await
+}
+
+/// Conversation `thread`: its messages without their bodies, oldest first.
+#[tauri::command]
+async fn get_thread(state: State<'_, AppState>, account: String, thread: String) -> Result<gmail::Thread, String> {
+    state.get_thread(&account, &thread).await
+}
+
+/// Conversations `threads`, which a page of search results or older messages came without
+/// (`pending`); those that couldn't be loaded are left out.
+#[tauri::command]
+async fn load_threads(state: State<'_, AppState>, account: String, threads: Vec<String>) -> Result<Vec<gmail::Thread>, String> {
+    state.load_threads(&account, threads).await
 }
 
 /// Saves attachments `parts` of message `id` to the Downloads folder, each under a name no file
@@ -303,26 +322,36 @@ async fn set_unread(state: State<'_, AppState>, account: String, id: String, unr
     state.set_unread(&account, &id, unread).await
 }
 
+/// Archives a conversation; returns which of its messages were in the Inbox, for Undo.
 #[tauri::command]
-async fn archive_message(state: State<'_, AppState>, account: String, id: String) -> Result<(), String> {
-    state.archive(&account, &id).await
+async fn archive_thread(state: State<'_, AppState>, account: String, thread: String) -> Result<ThreadMoved, String> {
+    state.archive_thread(&account, &thread).await
 }
 
+/// Moves a conversation to Trash; returns which of its messages were in the Inbox and in Sent.
 #[tauri::command]
-async fn trash_message(state: State<'_, AppState>, account: String, id: String) -> Result<Trashed, String> {
-    state.trash(&account, &id).await
+async fn trash_thread(state: State<'_, AppState>, account: String, thread: String) -> Result<ThreadMoved, String> {
+    state.trash_thread(&account, &thread).await
 }
 
-/// Undo for Archive/Delete, and "Move to Inbox" in Trash.
+/// Move to Inbox in Trash: its messages in Trash go to the Inbox. Returns where they were, for Undo.
 #[tauri::command]
-async fn restore_message(
-    state: State<'_, AppState>,
-    account: String,
-    id: String,
-    from_trash: bool,
-    to_inbox: bool,
-) -> Result<(), String> {
-    state.restore(&account, &id, from_trash, to_inbox).await
+async fn untrash_thread(state: State<'_, AppState>, account: String, thread: String) -> Result<ThreadMoved, String> {
+    state.untrash_thread(&account, &thread).await
+}
+
+/// Move to Inbox in All Mail: the conversation's emails go to the Inbox. Returns where its
+/// messages were, for Undo.
+#[tauri::command]
+async fn unarchive_thread(state: State<'_, AppState>, account: String, thread: String) -> Result<ThreadMoved, String> {
+    state.unarchive_thread(&account, &thread).await
+}
+
+/// Undo of the actions: puts a conversation's messages back where they were (`to`: out of Trash,
+/// into Trash, into the Inbox, out of it).
+#[tauri::command]
+async fn restore_thread(state: State<'_, AppState>, account: String, thread: String, to: PutBack) -> Result<(), String> {
+    state.restore_thread(&account, &thread, to).await
 }
 
 /// Shows the Inbox's unread count on the app icon. macOS draws a Dock badge from the number.
@@ -547,10 +576,13 @@ fn main() {
             reconnect_account,
             remove_account,
             cached_folder,
+            cached_threads,
             refresh_folder,
             load_older,
             search_messages,
             get_message,
+            get_thread,
+            load_threads,
             save_attachments,
             inline_images,
             cancel_save,
@@ -561,9 +593,11 @@ fn main() {
             delete_draft,
             open_draft,
             set_unread,
-            archive_message,
-            trash_message,
-            restore_message,
+            archive_thread,
+            trash_thread,
+            untrash_thread,
+            unarchive_thread,
+            restore_thread,
             set_badge,
             notify,
             check_update,

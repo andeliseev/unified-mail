@@ -31,9 +31,9 @@ flowchart LR
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Tauri setup (it creates the window, in the saved theme), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
-| `state.rs` | `AppState`: OAuth client, account list, access-token cache, inbox cache, file persistence, and on macOS handing the sign-ins over to an update |
+| `state.rs` | `AppState`: OAuth client, account list, access-token cache, folder and conversation caches, file persistence, and on macOS handing the sign-ins over to an update |
 | `keychain.rs` | Sign-ins in the system keychain: the macOS keychain through the Security framework, saving each as a new item so updates read it without asking, and Windows Credential Manager through `keyring` (see [auth.md](auth.md#macos-keychain)) |
-| `gmail.rs` | Gmail REST calls (list, metadata, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
+| `gmail.rs` | Gmail REST calls (list, metadata, conversations, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
 | `mime.rs` | Writes the emails the app sends: headers (encoded words for text outside ASCII, nothing a field can turn into a header of its own), quoted-printable text and HTML, base64 files, and the parts they nest in (see [Sending](#sending)) |
 | `files.rs` | Saving attachments: safe file names (no characters that hide the extension), never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh |
@@ -53,10 +53,13 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `reconnect_account` | `email` | Email address; signs in again to an expired account (preselected in Google's chooser), restarts its push. Fails if another account is chosen |
 | `remove_account` | `email` | Stops push and deletes the sign-in from the keychain. It doesn't revoke it at Google, which would sign the account out on other computers too (see [auth.md](auth.md#tokens)) |
 | `cached_folder` | `folder` | Last saved snapshot of `inbox`, `sent`, `drafts`, `all` or `trash`, for instant first paint |
-| `refresh_folder` | `folder` | `{ messages, errors, more }`: each account's newest page; errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
-| `load_older` | `folder, account, before` | `{ messages, more, inbox, warning }`: the account's next 50 messages older than `before` (ms); `inbox` lists which are in the Inbox (All Mail only) |
+| `cached_threads` | | The conversations saved with the folders (`Thread`, below), for the rows' first paint |
+| `refresh_folder` | `folder` | `{ messages, threads, errors, more }`: each account's newest page, and the conversations its messages are in (not for Drafts); errors per account (`{ account, message, expired }`, `expired` for a sign-in Google no longer accepts); `more[account]` says whether older mail exists |
+| `load_older` | `folder, account, before` | `{ messages, threads, pending, more, inbox, warning }`: the account's next 50 messages older than `before` (ms), with their conversations as far as they're known and the ids of the others (`pending`), to ask `load_threads` for; `inbox` lists which are in the Inbox (All Mail only) |
 | `search_messages` | `account, query, before` | The same as `load_older`, for the account's All Mail messages matching `query` (Gmail's search syntax): the newest 50, or with `before` (ms) the next 50 older ones (see [sync.md](sync.md#search-appstatesearch)) |
 | `get_message` | `account, id` | Headers, HTML/text body and `attachments` (`{ part, name, mimeType, size, contentId }`). It doesn't change the message; the UI then calls `set_unread` |
+| `get_thread` | `account, thread` | Conversation `thread` (`Thread`): `{ account, id, historyId, messages }`, its messages oldest first, each `{ id, from, to, cc, subject, snippet, date, unread, labels }` without its body, `labels` being which of `INBOX`, `SENT`, `DRAFT`, `TRASH` and `SPAM` it has; `historyId` is Gmail's, new whenever the conversation changes (see [sync.md](sync.md#conversations)) |
+| `load_threads` | `account, threads` | The conversations with those ids (`Thread`), which a page of search results or older messages came without (`pending`); the UI asks for a few at a time. Those that couldn't be loaded are left out |
 | `inline_images` | `account, id, parts` | The pictures the email shows in place (`cid:` links): `[{ part, mimeType, data }]`, data as base64url (see [ui.md](ui.md#pictures-in-the-email-cid-links)) |
 | `save_attachments` | `account, id, parts, job, onProgress` | Saves those attachments (Gmail part IDs) to the Downloads folder under names no file there has, marked as coming from email; returns their paths, or none when cancelled. Meanwhile the `onProgress` channel gets the bytes arrived so far, up to ten times a second (see [ui.md](ui.md#attachments)) |
 | `cancel_save` | `job` | Stops that `save_attachments` if it's still downloading |
@@ -67,9 +70,11 @@ All return `Result<_, String>`. The string is shown to the user as is, so error 
 | `open_draft` | `account, id` | That Gmail draft to go on writing: `{ id, messageId, threadId, to, cc, bcc, subject, inReplyTo, references, text, html, files, answered }`, files with their data (base64) and `answered` the summary of the email it answers, when found |
 | `show_in_folder` | `paths` | Shows saved attachments in Finder or File Explorer; only files in the Downloads folder |
 | `set_unread` | `account, id, unread` | Marks the message read (on opening, Mark as read) or unread (Mark as unread) |
-| `archive_message` | `account, id` | Removes the `INBOX` label |
-| `trash_message` | `account, id` | Moves the message to Trash; returns `{ wasInInbox }` for Undo |
-| `restore_message` | `account, id, fromTrash, toInbox` | Takes it out of Trash and/or adds `INBOX`: Undo, and "Move to Inbox" |
+| `archive_thread` | `account, thread` | Removes the `INBOX` label from every message of the conversation; returns `{ ids, inbox, sent, trash }`: its messages, and which of them were in the Inbox, in Sent and in Trash, for Undo |
+| `trash_thread` | `account, thread` | Moves the whole conversation to Trash; returns `{ ids, inbox, sent, trash }` as above |
+| `untrash_thread` | `account, thread` | Move to Inbox in Trash: the conversation's messages in Trash leave it for the Inbox (a draft among them only leaves Trash); returns `{ ids, inbox, sent, trash }` as above |
+| `unarchive_thread` | `account, thread` | Move to Inbox in All Mail: every email of the conversation outside Trash and Spam goes to the Inbox, sent ones too, but not its drafts; returns `{ ids, inbox, sent, trash }` as above |
+| `restore_thread` | `account, thread, to` | Puts messages back (Undo), `to` being `{ untrash, trash, inbox, archive }`: ids to take out of Trash, to move to Trash, to put in the Inbox and to take out of it. A list left out moves nothing |
 | `set_theme` | `theme` | `system`, `light` or `dark`: sets the window's theme and saves it in `settings.json` |
 | `set_list_width` | `width` | The message list's width in px, dragged by the user, saved in `settings.json`; null goes back to the default |
 | `open_external` | `url` | Opens `http(s):`/`mailto:` links in the default app |
@@ -120,6 +125,7 @@ The page hands `send_message` (and `save_draft`) a draft: `account`, `to`/`cc`/`
 | Account list | `<app data>/accounts.json` | JSON array of emails |
 | Settings (appearance, list width) | `<app data>/settings.json` | `{ "theme": "system", "list_width": 320 }`; missing fields get defaults |
 | Folder snapshots | `<app data>/inbox-cache.json`, `sent-cache.json`, `drafts-cache.json`, `all-cache.json`, `trash-cache.json` | JSON array of `MessageSummary` |
+| Conversations of the folders' messages | `<app data>/threads-cache.json` | JSON array of `Thread` (see [sync.md](sync.md#conversations)) |
 
 `<app data>` is `%APPDATA%\com.andeliseev.unified-mail` on Windows and `~/Library/Application Support/com.andeliseev.unified-mail` on macOS. The test app (`npm run dev`) uses `com.andeliseev.unified-mail.devtest` instead (see [development.md](development.md#testing-without-your-own-mail)). Files are written to a temp file of their own (`<name>.<n>.tmp`) and then renamed, so a crash can't leave a half-written file, and two writes of the same file at once (a sync and an action saving a folder's cache) can't mix.
 

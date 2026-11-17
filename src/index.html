@@ -96,8 +96,8 @@
         </div>
       </div>
       <div id="reader-empty" class="empty"><p>Select a message to read</p></div>
-      <!-- The open email. Its buttons stay at the top; the header, the email and the reply under
-           it scroll together as one page (#m-scroll). -->
+      <!-- The open conversation. Its buttons stay at the top; the subject, the emails and the
+           reply under them scroll together as one page (#m-scroll). -->
       <article id="message" hidden>
         <div class="msg-actions">
           <button id="archive" class="tool" title="Archive (E)">
@@ -126,27 +126,11 @@
         <div id="m-scroll" class="reader-scroll">
           <header class="msg-head">
             <h1 id="m-subject"></h1>
-            <div class="meta">
-              <div class="meta-row">
-                <span id="m-from" class="from"></span>
-                <span class="meta-end">
-                  <time id="m-date" class="muted"></time>
-                  <button id="m-reply" class="icon-btn mini" title="Reply (R)" aria-label="Reply">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14l-4-4 4-4M5 10h11a4 4 0 0 1 0 8h-1"/></svg>
-                  </button>
-                  <button id="m-more" class="icon-btn mini" title="Reply all, Forward" aria-label="More ways to answer">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="dot" cx="12" cy="5" r="1"/><circle class="dot" cx="12" cy="12" r="1"/><circle class="dot" cx="12" cy="19" r="1"/></svg>
-                  </button>
-                </span>
-              </div>
-              <div class="meta-row muted"><span id="m-to"></span><span id="m-account" class="chip"></span></div>
-              <!-- Where a reply goes, when not to the sender (renderReplyTo). -->
-              <div id="m-replyto" class="reply-to" hidden></div>
-            </div>
-            <!-- The message's files (renderAttachments): a click saves one to Downloads. -->
-            <div id="m-attachments" class="attachments" hidden></div>
+            <span id="m-account" class="chip"></span>
           </header>
-          <div id="m-body"></div>
+          <!-- The conversation's emails, oldest first (showThread): a line each, the open ones in
+               full with their header, files and text (mailElement). -->
+          <div id="m-thread"></div>
           <!-- Reply, Reply all and Forward, or the reply being written (renderMessageEnd). -->
           <div id="m-end"></div>
         </div>

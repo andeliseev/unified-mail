@@ -10,7 +10,7 @@ Plain HTML/CSS/JS in `src/`, with no framework and no build step. `withGlobalTau
 
 ## Layout
 
-`#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, and for the message `#m-scroll`, which holds its header, the email and the reply under it (see [One scroll](#one-scroll)).
+`#app` is a three-column grid filling the window. Its single row is `minmax(0, 1fr)` on purpose: with the default `auto` row, a long message list makes the row as tall as the list. The panes then overflow the window (which has `overflow: hidden`), so neither the list nor the message can scroll and the reader's bottom is cut off. Each pane scrolls on its own: `#messages` for the list, and for the conversation `#m-scroll`, which holds its subject, its emails and the reply under them (see [One scroll](#one-scroll)).
 
 The columns are `230px minmax(250px, var(--list-width, 400px)) minmax(400px, 1fr)`:
 - **The list is as wide as it was dragged.** `#list-resize`, an 8px strip over its right border, drags it between `LIST_MIN` (250) and `LIST_MAX` (600) px (`initListResize`), never squeezing the reader below `READER_MIN`, so the saved width is the one seen. It's saved with `set_list_width` in `settings.json` and applied at launch. A double-click goes back to the default, 400px.
@@ -54,25 +54,43 @@ On Windows closing the window quits the app.
 
 ## State and rendering
 
-There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first) plus the search's results (`state.lists.search`, see [Search](#search)), the folder chosen in the sidebar, and the account filter (`null` = all accounts). It also holds the selected/open message, the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, the messages being written (`drafts`, `composing`, `replies`, see [Writing](#writing)), and sync flags.
+There is one `state` object in `app.js`. It holds the accounts, one message list per folder (`state.lists.inbox` / `all` / `trash`, unified, newest first) plus the search's results (`state.lists.search`, see [Search](#search)), the folder chosen in the sidebar, and the account filter (`null` = all accounts). It also holds the selected/open conversation (`selected`, `current`, and `thread` for its emails), Gmail's conversations (`threads`), the in-flight moves (`pending`) and read/unread changes (`pendingRead`), the current Undo, the messages being written (`drafts`, `composing`, `replies`, see [Writing](#writing)), and sync flags.
 
-The sidebar lists the folders (Inbox, Sent, Drafts, All Mail, Trash), then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list, as in Gmail; Drafts shows how many drafts there are. Sent rows show whom each email went to ("To: Anna Petrova"), from its To header (`recipientNames`).
+The sidebar lists the folders (Inbox, Sent, Drafts, All Mail, Trash), then the accounts. The two combine: "Trash · work@…" is that account's Trash. Unread counts always come from the Inbox list and count conversations, as in Gmail; Drafts shows how many drafts there are.
+
+### Conversations
+
+The lists hold messages, but every list except Drafts shows a row per conversation, as Gmail does: Gmail's thread, so a reply and the answers to it are one row. Picked on 2026-11-17 over grouping only in the reader, which would have left two rows for two emails of one conversation in the Inbox.
+
+- `conversations(messages)` groups a list's messages by `threadKey` (`t:account/threadId`, apart from message keys), each conversation where its newest message in the list is: `{ key, account, threadId, messages, latest, date, unread, hasFiles }`. `rows()` does this for the visible messages, `rowByKey` for one conversation of the list on screen, and `openConversation()` gives the open one as the list has it now.
+- A row says who wrote the conversation, Gmail's way (`writers`): one name in full, else first names in the order they first wrote, "me" for the account ("Anna, me"), past three the first and the last two. Then how many emails it has (grey), the time of its newest email in the folder, the subject of its first email, and the start of its newest email in the folder. It's unread while any of its emails in the folder is. Sent rows show whom the newest email went to ("To: Anna Petrova"), from its To header (`recipientNames`).
+- Those counts and names come from Gmail's copy of the conversation (`state.threads`, from each sync, page and search: see [sync.md](sync.md#conversations)), which has the emails the folder hasn't, such as the answers sent from the account (`threadMessages`: its emails that show, plus what the list has that the copy doesn't yet). Without a copy, the row shows what the list has. In Trash only the conversation's emails in Trash count; elsewhere those in Trash and Spam don't, and drafts never do (`shownMessages`).
+- A folder's rows come with their copies. Search results and older pages show first, with the copies there are, and `loadThreads` asks for the others a few at a time (`THREADS_AT_ONCE`, 8), drawing each row again as its copy arrives (`redrawRow`): "me" becomes "Bob, me 2". A search that was closed or typed over stops asking.
+- A row stays where its newest email in the folder is, so the paging and the cut-off of [Older mail](#older-mail) stay per message. In Gmail an answer sent from the Inbox moves its conversation up; here it stays until an answer arrives.
 
 Rendering is direct DOM work: `renderSidebar()` and `renderList()` rebuild their parts from `state`, using a `DocumentFragment` for the list. That's fast at this size (a few hundred rows). Untrusted text (sender, subject, snippet) is always set with `textContent`, never `innerHTML`. Each account gets a color from `PALETTE` by its position in the account list; the color is used for the row stripe, sidebar dot and chip.
 
-A row whose message has files the reader will list (`hasFiles`, from its parts: see [sync.md](sync.md#sync-appstaterefresh)) shows a paperclip (`CLIP_ICON`) next to its time. Under the mouse the row's buttons take that place, so the paperclip hides with the time.
+A row with an email that has files the reader will list (`hasFiles`, from its parts: see [sync.md](sync.md#sync-appstaterefresh)) shows a paperclip (`CLIP_ICON`) next to its time. Under the mouse the row's buttons take that place, so the paperclip hides with the time.
 
 Dates are formatted in English (`en-US`), like the rest of the UI. The system's locale would mix in its language ("4 нояб."). The clock follows the system's hour cycle, 24-hour or AM/PM. The list shows a time for today, "Nov 4" for this year and "Nov 4, 2024" for older mail; the reader shows "Nov 4, 2026, 15:31".
 
-## Reading a message
+## Reading a conversation
 
-`select(key)` shows the headers right away from the summary, then calls `get_message`. A sequence counter (`openSeq`) discards answers that arrive after the user has already moved to another message. Once the body is shown, an unread message is marked read (see [Read and unread](#read-and-unread)).
+`select(key)` opens a conversation: its subject (its first email's) with the account's chip, then its emails, oldest first (`showThread`, `#m-thread`). They show at once from what's known (`threadMessages`: Gmail's copy from the last sync, plus the list's emails), and again when `get_thread` brings the latest copy.
+
+- **Open and closed** (`mailElement`): the newest email, the unread ones and the one an answer being written answers show in full: sender, date, Reply and ⋮, whom it went to, where replies go, its files and its text. The others are a line each: who wrote it, its start and its date. A click on the line opens it, and a click on an open email's header closes it again (not when text was selected, and not the only email).
+- **Long conversations:** more than `FOLD_OVER` (4) closed emails in a row at the start fold into one "N more emails" line, as in Gmail: the first stays, and the two before the first open email (`foldEarlier`, `foldLine`). The fold follows each whole list (Gmail's copy can bring many more emails than the folder had) until a click shows them.
+- **Loading** (`loadMail`): each open email is fetched in full (`get_message`) as it opens, kept in `state.thread.fulls`, and shown again from there when it's closed and opened. The last email, which Reply answers, and an email whose answer is being written load even when they aren't open, for the quote.
+- **Read state** comes from the list's emails (`threadMessages`), which every sync keeps current; Gmail's copy is fetched again only for new emails.
+- **Read:** an unread email is marked read once its text shows (`fillMail`), so opening a conversation marks its unread emails read, and so does opening one of its emails later (see [Read and unread](#read-and-unread)).
+- **New emails while reading:** after each sync the open conversation gets the emails that arrived in it, and the answer just sent (`showThread(…, true)`). Cards on screen stay as they are, since moving a frame loads it again; new ones go in their place. A new email opens only while the window is in front, since opening marks it read; it loads anyway, so Reply answers it. Until it's opened, or answered, it stays a line, unread.
+- `state.openSeq` and `state.thread` drop answers that arrive after another conversation was opened.
 
 ### One scroll
 
-The message's buttons (`.msg-actions`: Archive, Delete…) stay at the top. Under them `#m-scroll` scrolls the rest as one page, as on the Gmail website: the subject and sender, the attachments, the email, and at its end Reply / Reply all / Forward or the reply being written (`#m-end`, see [Writing](#writing)). So the whole email stays readable above a reply.
+The conversation's buttons (`.msg-actions`: Archive, Delete…) stay at the top. Under them `#m-scroll` scrolls the rest as one page, as on the Gmail website: the subject, the emails with their headers and files, and at the end Reply / Reply all / Forward or the reply being written (`#m-end`, see [Writing](#writing)). So the whole conversation stays readable above a reply.
 
-- **The frame is as tall as the email** (`fitHeight`). An email's height can't be read in a frame taller than it: `scrollHeight` is then the frame's. So the frame is squeezed to nothing, measured and set again in one go, before anything is drawn, and the reader keeps its scroll position. That runs with every fit (`fitToFrame`: once the email is parsed, as images arrive on Windows, at the frame's `load`, and when the reader's width changes).
+- **Each email's frame is as tall as the email** (`fitHeight`). An email's height can't be read in a frame taller than it: `scrollHeight` is then the frame's. So the frame is squeezed to nothing, measured and set again in one go, before anything is drawn, and the reader keeps its scroll position. That runs with every fit (`fitToFrame`: once the email is parsed, as images arrive on Windows, at the frame's `load`, and when the reader's width changes, for every open email).
 - **Pictures arriving** make an email taller, and on macOS their `load` events don't reach the page (see [Sandbox](#sandbox)). `watchHeight` checks every 250 ms until a second after the frame's `load` (30 s at most) and grows the frame when the email overflows it, which needs no squeeze.
 - A sideways scroll bar, on an email too wide to shrink, takes room at the frame's bottom; the height includes it.
 - **Keys:** `Space`, `PageUp`/`PageDown`, the arrows and `Home`/`End` in the email scroll the reader (`scrollMessage`), since the frame has nothing to scroll and Chromium doesn't pass a frame's key scrolling on to the page around it (checked in the browser pane). On macOS WebKit gets the key as well (`email-key`, see [Sandbox](#sandbox)); it may scroll the reader itself, so `scrollMessage` only scrolls if the reader hasn't moved 80 ms later. Outside the email, `Space` and `PageUp`/`PageDown` scroll the reader too, and the arrows go through the list.
@@ -105,7 +123,7 @@ Email HTML is untrusted, so it renders in an iframe built with `srcdoc` and:
   - once the email is parsed;
   - again after each image arrives, since an image can widen the layout (`load` captured on the document, coalesced by `scheduleFit`);
   - once more on the frame's `load`;
-  - when the window is resized (a `ResizeObserver` on `#m-body`). `zoom` changes the layout size, unlike `transform`, so the scroll bar really goes away, and clicks, link targets and the right-click menu's position stay correct.
+  - when the window is resized (a `ResizeObserver` on `#m-thread`, refitting every open email). `zoom` changes the layout size, unlike `transform`, so the scroll bar really goes away, and clicks, link targets and the right-click menu's position stay correct.
 - HTML emails bring their own margins, so the frame adds only 8 px at the sides. Plain text gets 24 px, through `pre.plain`'s padding.
 
 ### Dark mode for emails
@@ -123,9 +141,9 @@ How an email is darkened:
    - saturated mid tones (buttons, banners) and images stay as they are.
    
    "Light" and "dark" go by luminance, not HSL lightness, so a strong blue like `#1a73e8` counts as a color to keep. New values are set inline with `!important`, which beats the email's CSS.
-3. **Original / Dark** (`#colors`, shown only in dark mode) redraws the email in its original light colors and back (`state.originalColors`, reset for each message). The frame can't be told to prefer light, since its `prefers-color-scheme` follows the app whatever its `color-scheme` says. So Original rewrites the email's own rules instead: `prefers-color-scheme: dark` becomes `max-width: 0px` (never) and `light` becomes `min-width: 0px` (always). Only the email's CSS changes, never its text.
+3. **Original / Dark** (`#colors`, shown only in dark mode) redraws the open emails in their original light colors and back (`state.originalColors`, reset for each conversation). The frame can't be told to prefer light, since its `prefers-color-scheme` follows the app whatever its `color-scheme` says. So Original rewrites the email's own rules instead: `prefers-color-scheme: dark` becomes `max-width: 0px` (never) and `light` becomes `min-width: 0px` (always). Only the email's CSS changes, never its text.
 
-A theme change (Appearance, or the system with System) redraws the open email.
+A theme change (Appearance, or the system with System) redraws the open emails (`redrawEmails`).
 
 Known weak spot: a dark logo on a transparent background (a black wordmark PNG) stays dark on the darkened background. Original is the way out.
 
@@ -142,7 +160,7 @@ An email can carry its pictures inside the message, with `<img src="cid:…">` n
 Phishing email dresses one thing up as another. The reader shows what's really there, and asks only where something doesn't match. Picked as option O in mockups on 2026-11-13, over only showing (N) and asking before every link (P).
 
 - **Where a link goes:** pointing at a link in the email shows its address in a line at the bottom of the reader (`#link-address`, `showLinkAddress`), its site in bold, as a browser does. On Windows the frame's `mouseover` handler finds the link; on macOS it comes from `macos.rs` (see [Sandbox](#sandbox)). Leaving the frame (`mouseleave` on the frame itself, which runs on macOS too) or opening another email hides it. Senders' own tooltips on links are taken off, so they can't say something else.
-- **A link that shows another site asks first.** When the email is set up, `checkLinks` notes each link whose text reads as a site or an email address (`shownElsewhere`: `www.paypal.com`, `https://paypal.com/x`, `support@paypal.com`) that isn't where the link goes. Text in words ("Sign in") has nothing to compare. Sites count as one when one is the other or a part of it (`sameSite`: `email.paypal.com` and `paypal.com`), with `www.` aside, and a name in Unicode is compared in its `xn--` form, so a look-alike from another alphabet doesn't pass. Opening such a link, by click or the right-click menu, shows a box (`askLink`): "This link may not go where it says", "It shows www.paypal.com but goes to paypa1-secure.com.", the address with its site in bold, and **Copy address**, **Cancel** (which has the focus, as does `Esc` or a click beside the box) and **Open anyway**. Other links open at once, as before. Links through a newsletter's click tracker that show the company's site ask too; Open anyway is one click.
+- **A link that shows another site asks first.** When an email is set up, `checkLinks` notes each link (the open emails' together, in `state.emailLinks`) whose text reads as a site or an email address (`shownElsewhere`: `www.paypal.com`, `https://paypal.com/x`, `support@paypal.com`) that isn't where the link goes. Text in words ("Sign in") has nothing to compare. Sites count as one when one is the other or a part of it (`sameSite`: `email.paypal.com` and `paypal.com`), with `www.` aside, and a name in Unicode is compared in its `xn--` form, so a look-alike from another alphabet doesn't pass. Opening such a link, by click or the right-click menu, shows a box (`askLink`): "This link may not go where it says", "It shows www.paypal.com but goes to paypa1-secure.com.", the address with its site in bold, and **Copy address**, **Cancel** (which has the focus, as does `Esc` or a click beside the box) and **Open anyway**. Other links open at once, as before. Links through a newsletter's click tracker that show the company's site ask too; Open anyway is one click.
 - **File names:** characters that show nothing (zero-width spaces and joiners, soft hyphens, fillers, the blank Braille pattern) and direction marks are taken out, and runs of blank characters show as one space (`cleanFileName`), so `Invoice-4821.pdf⠀⠀⠀…⠀.html` shows as `Invoice-4821.pdf.html`. A saved file gets the same name (`files::safe_file_name`). The extension is a part of its own in the chip (`fillFileName`), so a long name is cut short before it, never the extension.
 - **Icons by extension:** the icon follows the extension (`attachmentKind`), not the type the sender gave: an `.html` sent as `application/pdf` gets the plain file icon.
 - **Risky files** get an orange tag (`attachmentRisk`): **Opens in your browser** for web pages and SVG, **Runs programs** for programs, scripts, installers, shortcuts and disk images, **Can run macros** for Office files with macros. Saving them works as before. Chips with a tag may be wider.
@@ -152,7 +170,7 @@ Phishing email dresses one thing up as another. The reader shows what's really t
 
 `get_message` also lists the message's files (`attachments`, each `{ part, name, mimeType, size, contentId }`): every part with a file name, and every picture with a Content-ID (named `image.png` and the like when it has no name), depth first. A forwarded email attached as a message counts as one file, without the files inside it. The pictures the email shows in place leave this list (see [Pictures in the email](#pictures-in-the-email-cid-links)).
 
-`renderAttachments` puts a chip per file under the header (`#m-attachments`): an icon by kind, the name and the size in units of 1024. The kind (image, PDF, archive, document or other) comes from the extension, which decides how the system opens the file, and from the type Gmail gives only for a name without one (see [Links and files that aren't what they say](#links-and-files-that-arent-what-they-say)). A save icon shows on hover; its room is kept while it's hidden, so the chips don't move under the mouse. With two or more files, **Save all** follows them.
+`renderAttachments` puts a chip per file under the email's header (its card's `.attachments`): an icon by kind, the name and the size in units of 1024. The kind (image, PDF, archive, document or other) comes from the extension, which decides how the system opens the file, and from the type Gmail gives only for a name without one (see [Links and files that aren't what they say](#links-and-files-that-arent-what-they-say)). A save icon shows on hover; its room is kept while it's hidden, so the chips don't move under the mouse. With two or more files, **Save all** follows them.
 
 A click calls `save_attachments` with the files' Gmail part IDs, a job number and a channel (`onProgress`). While it runs, the chip shows how much has arrived in place of its size, such as "1.2 of 3.4 MB" (`formatProgress`, in the unit and precision of the total), and a 2 px line fills up along its bottom (`--progress`); Save all shows the same for all the files. A cross takes the place of the save icon (`CANCEL_ICON`; Save all gets one while it saves), and under the mouse the button turns red: a click there calls `cancel_save` with the job number. That drops the download, which also ends its request to Gmail, and `save_attachments` returns no paths, so no toast follows. Files are only written once every one has arrived, so a cancelled save leaves nothing in Downloads.
 - The size and the progress share one grid cell (`.save-label`). While saving it's as wide as the finished progress text, which sits in it unseen (`.sizer`), and digits are tabular, so the button keeps one width as the numbers grow. The mouse changes only its colors: when the word Cancel replaced the progress there (0.2.4), a button held at its right edge could narrow, lose the mouse, widen and flicker, and you couldn't see the progress while about to cancel.
@@ -167,39 +185,39 @@ The toast then says what was saved, with **Show in Finder** (**Show in folder** 
 
 ## Actions
 
-Which actions an open message offers depends on the folder, and in All Mail on whether the message is in the Inbox (`actionsFor`):
+Actions take the whole conversation, as Gmail's do: Archive takes all of it out of the Inbox, Delete moves all of it to Trash, the answers sent from the account included (see [sync.md](sync.md#actions-and-undo-on-gmail)). Which actions an open conversation offers depends on the folder, and in All Mail on whether any of its emails is in the Inbox (`actionsFor`):
 
 | Folder | Actions |
 | --- | --- |
 | Inbox | Archive, Delete |
-| All Mail, message in the Inbox (shown with an **Inbox** tag) | Archive, Delete |
-| All Mail, archived message | Move to Inbox, Delete |
+| All Mail, conversation in the Inbox (shown with an **Inbox** tag) | Archive, Delete |
+| All Mail, archived conversation | Move to Inbox, Delete |
 | Sent | Delete |
 | Drafts | None: a click opens the draft to write (see [Writing](#writing)) |
 | Trash | Move to Inbox |
 
-Whether an All Mail message is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox. Older All Mail pages loaded by scrolling report their Inbox messages themselves (`inboxExtra`, see [Older mail](#older-mail)).
+Whether an All Mail conversation is in the Inbox comes from the Inbox list (`inInbox`), with no extra requests. Both lists hold each account's newest 50 messages, and every Inbox message is also in All Mail. So a message among an account's newest 50 in All Mail that's in the Inbox is always among its newest 50 in the Inbox. Older All Mail pages loaded by scrolling report their Inbox messages themselves (`inboxExtra`, see [Older mail](#older-mail)).
 
-When an action leaves the message in the folder on screen (Archive and Move to Inbox in All Mail), it stays open and only its tag and buttons change. Otherwise the next message opens. `render()` also redraws the buttons, so they stay right after Undo or a failed action.
+When an action leaves the conversation in the folder on screen (Archive and Move to Inbox in All Mail), it stays open and only its tag and buttons change. Otherwise the next conversation opens. `render()` also redraws the buttons, so they stay right after Undo or a failed action.
 
-`ACTIONS` in `app.js` describes each action: the folder lists the message **leaves** and **joins**, the Gmail command, and how to **undo** it, given that command's result (Delete returns `wasInInbox`).
+`ACTIONS` in `app.js` describes each action: the folder lists the conversation's messages **leave** and **join** (`join` can also say per message), the Gmail command, and how to **undo** it, given that command's result (Archive and Delete return which messages were in the Inbox and in Sent).
 
 All actions are **optimistic** (`perform`):
-1. The move is applied to the folder lists at once, the next message opens, and the command runs.
-2. Until Gmail answers, the move sits in `state.pending` and is re-applied to every sync result.
-3. On failure the move is reversed, into only the lists that held the message (`held`: Delete leaves the Inbox, Sent and All Mail, but an archived message was never in the Inbox), and an error toast replaces the Undo toast.
+1. The move is applied to the folder lists at once, for every message of the conversation the app knows of (`conversationMessages`: in the lists or in Gmail's copy; in Trash those in Trash, elsewhere the others), the next conversation opens, and the command runs. The same messages go back with Undo, each where it was.
+2. Until Gmail answers, the move sits in `state.pending`, per message, and is re-applied to every sync result.
+3. On failure the move is reversed, into only the lists that held each message (`held`: Delete leaves the Inbox, Sent and All Mail, but an archived message was never in the Inbox), and an error toast replaces the Undo toast.
 
-A message only joins lists that are already loaded; other lists pick it up at their next sync.
+A message only joins lists that are already loaded; other lists pick it up at their next sync. Gmail's copy of the conversation notes the move in the labels it has for each message (`relabel`: in Trash or not, in the Inbox or not), as the lists do, so its rows go on counting its emails ("Anna, me 4" after Archive and Undo, and in Trash after Delete); a failed move takes that back too. The next sync fetches the copy again, and `keepThreads` applies to it the moves Gmail hasn't confirmed yet.
 
 A list with nothing to show says why when loading failed, rather than its empty text ("Inbox zero"): `state.listErrors` keeps each folder's last sync errors (the accounts that failed, or the whole sync), and `listFailure` names the first for the account on screen. A search does the same with `search.failed` (`searchFailure`), and its line above the results says "Couldn't search" when every account on screen failed.
 
-**Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way. If the message was open and is back in the folder on screen, it opens again. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
+**Undo:** after an action, the toast shows an **Undo** button for 8 s (`UNDO_MS`), and `Z` presses it. Undo waits for the original command to finish, then performs the reverse move the same optimistic way. If the conversation was open and is back in the folder on screen, it opens again. Only the last action can be undone. Sync error toasts never replace an Undo toast; they show at the next sync instead.
 
-Actions from the [right-click menu](#right-click-menu) and the [row buttons](#row-buttons) work on that row's message (`act(kind, m)`), even if another message is open. The open message stays open, and Undo doesn't open the row's message. If the row is the open message, the next one opens, as with the reader's buttons.
+Actions from the [right-click menu](#right-click-menu) and the [row buttons](#row-buttons) work on that row's conversation (`act(kind, c)`), even if another one is open. The open conversation stays open, and Undo doesn't open the row's. If the row is the open conversation, the next one opens, as with the reader's buttons.
 
 ### Row buttons
 
-The row under the mouse shows small icon buttons in place of its time: the folder's actions, then Mark as read / unread, in the reader's order. A click acts on that row's message without opening it (`onRowAction`).
+The row under the mouse shows small icon buttons in place of its time: the folder's actions, then Mark as read / unread, in the reader's order. A click acts on that row's conversation without opening it (`onRowAction`).
 
 - `renderList` clones them from `<template id="row-actions">` for each row (`rowActions`) and keeps the folder's actions. Move to Inbox stands for both `restore` (Trash) and `unarchive` (All Mail), like the reader's button. In All Mail it passes the Inbox keys it already built for the tags, so `actionsFor` doesn't search the Inbox list once per row.
 - The read button shows an open envelope for Mark as read and a closed one for Mark as unread, switched by the row's `unread` class. `showUnread` updates its tooltip.
@@ -208,7 +226,7 @@ The row under the mouse shows small icon buttons in place of its time: the folde
 
 ## Read and unread
 
-Opening a message marks it read, as in Gmail. **Mark as unread** (button in the reader, `Shift+U`, right-click menu) marks it unread again. It stays open, and stays unread until it's opened again. The button switches to **Mark as read** (`Shift+I`).
+Opening a conversation marks its unread emails read as they show, as in Gmail. **Mark as unread** (button in the reader, `Shift+U`, right-click menu) marks the email to come back to: the conversation's newest email in the folder that isn't your own, else its newest there (`newestReceived`), so the row turns unread. A row is unread by its emails in its own folder, so when that email isn't in the Inbox while the conversation is (in Sent, or in search results that hold only an answer you sent), its newest email in the Inbox is marked too, and the conversation counts there, as an unread one does in Gmail. In Trash only its part there is marked. It stays open, and stays unread until it's opened again. The button switches to **Mark as read** (`Shift+I`), which marks every unread email of it read (`setConversationUnread`). Read state itself stays per message (`setUnread`), and a row shows its conversation's (`showUnread` redraws it, `redrawRow`).
 
 `setUnread` works like the actions: the new state shows at once, `set_unread` runs, and until Gmail answers the change sits in `state.pendingRead` and is re-applied to every sync result. If Gmail fails, the old state comes back with an error toast. Changes to one message are chained, so they reach Gmail in order. Without that, opening a message and quickly marking it unread could end up read.
 
@@ -218,7 +236,7 @@ Right-click shows the app's own menu (`onContextMenu`, `#menu`). The webview's m
 
 | Where | Items |
 | --- | --- |
-| Message row | Mark as read / unread, then the folder's actions (as in [Actions](#actions)). The row is outlined while the menu is open |
+| Conversation row | Mark as read / unread, then the folder's actions (as in [Actions](#actions)). The row is outlined while the menu is open |
 | A draft written here (its row) | Open draft, Discard draft |
 | One of Gmail's drafts in the Drafts folder | Open draft |
 | Link in an email | Open link (`openEmailLink`, which asks first for a link that shows another site), Copy link |
@@ -226,7 +244,7 @@ Right-click shows the app's own menu (`onContextMenu`, `#menu`). The webview's m
 | Text fields | The system's own Cut/Copy/Paste menu, as in every app |
 | Anywhere else | Nothing |
 
-Right-clicks in the email arrive at the frame's document, or on macOS through `email-context-menu` (see [Sandbox](#sandbox)); the frame's position is added to place the menu. The menu closes on any click, key, scroll, resize, or focus moving into the email. Copy uses `navigator.clipboard.writeText`, which needs the real click.
+Right-clicks in an email arrive at its frame's document, or on macOS through `email-context-menu`, where the open email under the click is found by position (see [Sandbox](#sandbox)); the frame's position is added to place the menu. The menu closes on any click, key, scroll, resize, or focus moving into the email. Copy uses `navigator.clipboard.writeText`, which needs the real click.
 
 ## Older mail
 
@@ -244,7 +262,7 @@ Each folder starts with every account's newest 50 messages. Older ones load as y
 
 The magnifier in the list's header, `/`, or `Cmd+F` (`Ctrl+F` on Windows) opens the search field in the header's place (`openSearch`), at the header's height, so nothing moves. A line under the header (`#search-scope`) says where it searches, then what it found: "12 results in all accounts", or "50+ results" while more can load.
 
-- **What it searches:** every account's All Mail, with Gmail's own search (`search_messages`, see [sync.md](sync.md#search-appstatesearch)). Gmail's search words work: `from:`, `has:attachment`, `before:`, `"exact words"`, `OR`… As in Gmail, Spam and Trash are left out. Results come newest first, 50 per account, merged like a folder's pages, and more load as you scroll (`loadOlder`, with the cut-off from [Older mail](#older-mail)).
+- **What it searches:** every account's All Mail, with Gmail's own search (`search_messages`, see [sync.md](sync.md#search-appstatesearch)). Gmail's search words work: `from:`, `has:attachment`, `before:`, `"exact words"`, `OR`… As in Gmail, Spam and Trash are left out. Results come newest first, 50 per account, merged like a folder's pages and shown as conversations like a folder's rows (the scope line counts conversations; a row's count and names can follow a moment after the row, see [Conversations](#conversations)), and more load as you scroll (`loadOlder`, with the cut-off from [Older mail](#older-mail)).
 - **When:** once typing pauses for `SEARCH_DELAY_MS` (500 ms), or at once on Enter. Enter also searches again when the field hasn't changed, for mail that arrived since: results don't update by themselves. A counter (`state.search.seq`) drops answers for an earlier query.
 - **Accounts:** an account chosen in the sidebar narrows the results shown, and the scope line names it. The search itself covers every account, so switching accounts doesn't search again. Accounts whose sign-in expired are skipped. An account whose search fails is named in a toast, and the other accounts' results still show.
 - **The list:** once a search has run, `listName()` says `search` instead of the folder, and everything that works on the list on screen (`visible`, `byKey`, `loadOlder`, `actionsFor`…) uses `state.lists.search`. Results are All Mail's messages:
@@ -265,10 +283,10 @@ A pencil in the list's header (or `C`) writes a **new message**, and Reply / Rep
 - While it's written it's a row at the top of the list (`draftRow`): a red **Draft** tag, whom it's to, its subject and its start, in the From account's color. It stays at the top of every folder and of search results. Opening another email leaves it there, and a click on the row (or the pencil, or `C`) brings it back. Leaving one with nothing in it at all drops it. `Esc` leaves it too.
 - `state.drafts` holds new messages written or opened here, newest first. The pencil brings back the newest; Undo, a failed send, or opening one from Drafts can add others.
 
-**Answering** (`startReply`): the buttons at the end of the email, the Reply arrow and the ⋮ menu next to its date, or `R` / `A` / `F`. They wait for the email to load, since the answer quotes it. The answer opens under the email (`replyBox`, in `#m-end`), and the reader scrolls down to it:
+**Answering** (`startReply`): the buttons at the end of the conversation and `R` / `A` / `F` answer its last email; the Reply arrow and the ⋮ menu next to an open email's date answer that one. They wait for the email to load, since the answer quotes it. The email being answered shows in full: one that's still a line (it arrived while the window was behind another, or was closed by hand) opens, which marks it read. The answer opens under the conversation (`replyBox`, in `#m-end`), and the reader scrolls down to it, and once more when an email just opened has its height. A conversation has one answer being written: answering again goes back to it, and answering another email of it moves the answer there, keeping its text (its recipients and quote follow the email):
 - First the kind of answer, its icon with a ▾ menu to switch; switching keeps the text. Then the recipients, `Cc Bcc`, the files, and the text, which grows as it's written (`growText`) while the reader follows the cursor down. `···` shows the email as the answer quotes it. The footer has Send, attach, `···`, the account it goes from (the one the email came to, not a menu), and discard.
 - **Recipients** (`setKind`): Reply goes to the sender, or to Reply-To when the email has one. Reply all adds the email's To and Cc. Answering one's own email goes to whom it went to, as Gmail does. The account itself is never a recipient. Forward starts with none, and with the email's files as chips; any can be taken off. The subject gets `Re:` or `Fwd:` unless it has one.
-- An answer waits in `state.replies`, by its email's key, and the email's row shows a red **Draft** tag. Opening another email drops an answer with nothing written in it, except one opened from Gmail's Drafts (`fromGmail`): what was written in it may be where the editor doesn't show it, or only in its recipients, and dropping it would delete it from Gmail.
+- An answer waits in `state.replies`, by its email's key (`replyIn` finds a conversation's), and the conversation's row shows a red **Draft** tag. Opening another conversation drops an answer with nothing written in it, except one opened from Gmail's Drafts (`fromGmail`): what was written in it may be where the editor doesn't show it, or only in its recipients, and dropping it would delete it from Gmail.
 - Clicking Attach, a file's cross or `···` redraws the answer, which replaces the button clicked, so the text gets the focus back. Typed next on the page, letters would be shortcuts (`E` archives the email, `R`/`A`/`F` change the answer and its recipients). While a button of the message being written has the focus, shortcuts don't run at all.
 
 **Fields** (`recipientRow`): each recipient is a chip, its name shown and its address under the mouse. Enter, a comma or a semicolon turns what's typed into chips, and so does leaving the field or sending. Pasting a list adds each address (`parseAddresses`, which reads `Name <a@b.c>`, quoted names and lists as headers write them). Backspace in the empty field removes the last chip. A chip that isn't an email address (`isAddress`, the same rule as `check_address` in `mime.rs`) is red, and sending names it.
@@ -288,6 +306,8 @@ The quoted email keeps its inline styles, but not its `<style>` rules: in the re
 
 **Discard** takes the message away and deletes its Gmail draft, with Undo in the toast too, which saves it as a new draft.
 
+An answer brought back by Undo (of Send or Discard, or a failed send) goes back under its conversation, unless another answer was started there meanwhile: then it comes back as a new message, still in the conversation (`thread`), without the quote (`reopenDraft`).
+
 ### Drafts in Gmail
 
 What's written is saved in the account's Gmail Drafts, as Gmail does, so a draft is also in Gmail on the web and on a phone, and drafts started there can be finished here. Picked as option G in mockups on 2026-11-12, over keeping drafts on this computer.
@@ -296,23 +316,23 @@ What's written is saved in the account's Gmail Drafts, as Gmail does, so a draft
 - **How** (`save_draft`): the first save creates a Gmail draft (`gmailId`, in `gmailAccount`), later ones update it. Saves run one after another (`draft.saving`, a promise chain), so a draft is never created twice, and each sends what's written when it starts. The email is written as for sending (`outgoing`): an answer with its quote, the quoted email's pictures and its threading, so the draft is complete in Gmail too. Recipients still being typed are left out if they'd break a header (`mime::Email::write`). A draft whose From changed is deleted from the other account and made anew. The account a save went to is the one in what it sent (`payload.account`), so From changed while a save is on its way still moves the draft at the next save. A failed save shows **Not saved** (its title says why) and tries again after `DRAFT_RETRY_MS` (30 s).
 - **What the editor says** (`renderSaveState`): "Saving…", then "Saved to Gmail" in a new message's button row, or "Saved" in an answer's footer.
 - **The Drafts folder** lists the drafts written here first (with what's written now), then Gmail's others (`gmailDraftRow`, rows of the `drafts` folder, which carry their draft id), leaving out the ones written or being sent here. Its count in the sidebar adds up both. The account chosen in the sidebar narrows it as in other folders. `J`/`K` don't walk through it.
-- **Opening one of Gmail's drafts** (`openGmailDraft`, `open_draft`): Rust returns its recipients, subject, text and HTML, its files with their data (each save sends them again), and the email it answers, found in its conversation by its In-Reply-To (`gmail::find_in_thread`). An answer opens under that email (`select` with the email's summary, since it isn't in the Drafts list), and the email's full text arrives with it for the quote; when that email is already open, the draft takes its full text from the reader. Its text is what was written above the quote (`typedText`: cut at "On …, … wrote:" or "Forwarded message" in the plain text, or `.gmail_quote` removed from the HTML), plus, in an answer, the lines without `>` after that first line: some mail apps answer under the quote or between its lines. The pictures of its quote are left out, since saving makes the quote again. If another email or a new message was opened while it loaded, the draft goes to the list without taking the reader. Anything else opens in the editor, keeping its threading (`thread`) when the email it answered isn't found. A draft already open here isn't opened twice.
+- **Opening one of Gmail's drafts** (`openGmailDraft`, `open_draft`): Rust returns its recipients, subject, text and HTML, its files with their data (each save sends them again), and the email it answers, found in its conversation by its In-Reply-To (`gmail::find_in_thread`). An answer opens under that email's conversation, with that email open (`select` with a conversation made from the email's summary when it isn't in the list on screen), and gets the cursor once the email's full text has loaded for the quote; when the conversation is already open, the draft takes the email's full text from the reader. Its text is what was written above the quote (`typedText`: cut at "On …, … wrote:" or "Forwarded message" in the plain text, or `.gmail_quote` removed from the HTML), plus, in an answer, the lines without `>` after that first line: some mail apps answer under the quote or between its lines. The pictures of its quote are left out, since saving makes the quote again. If another email or a new message was opened while it loaded, the draft goes to the list without taking the reader. Anything else opens in the editor, keeping its threading (`thread`) when the email it answered isn't found. A draft already open here isn't opened twice.
 - Formatting from Gmail (bold, links, pasted pictures) doesn't survive the plain-text editor: pictures become attachments, and the rest is plain text once the draft is saved here.
 
 ## Keyboard
 
 | Key | Action |
 | --- | --- |
-| `J` / `↓` | Next message |
-| `K` / `↑` | Previous message |
-| `Space` / `PageDown` | Scroll the open message down (`Shift+Space` / `PageUp`: up) |
+| `J` / `↓` | Next conversation |
+| `K` / `↑` | Previous conversation |
+| `Space` / `PageDown` | Scroll the open conversation down (`Shift+Space` / `PageUp`: up) |
 | `E` | Archive (Inbox only) |
 | `#` / `Delete` | Delete, i.e. move to Trash (Inbox and All Mail) |
 | `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo the last action, while its toast shows (also Send and Discard) |
 | `/`, `Cmd+F` (`Ctrl+F` on Windows) | Search (see [Search](#search)) |
 | `C` | New message (see [Writing](#writing)) |
-| `R` / `A` / `F` | Reply / Reply all / Forward the open message |
+| `R` / `A` / `F` | Reply / Reply all / Forward the open conversation's last email |
 | `Cmd+Enter` (`Ctrl+Enter` on Windows) | Send, while writing |
 | `Esc` | Close Settings, the right-click menu or the search. While writing: leave a new message (it waits in the list), or leave the reply's field |
 
@@ -334,7 +354,7 @@ The same handler is attached inside the email iframe (`onKey(e, true)`), so the 
 - Each message gets its own notification: the sender as title, the subject as body, plus the account when there are several. More than `MAX_NOTIFICATIONS` (3) at once become one "N new messages" summary listing the senders.
 - They play a sound, which `notify` in `main.rs` has to name: the system's Mail sound on Windows, the default notification sound on macOS. Both systems let people turn it off per app.
 
-Clicking a notification while it's on screen brings the window forward and sends `open-message`. `openFromNotification` then switches to the Inbox, drops an account filter that would hide the message, and opens it. On Windows, a click on an old notification in the Action Center isn't reported to the app. It launches the app instead, and the single-instance plugin turns that into bringing the window forward.
+Clicking a notification while it's on screen brings the window forward and sends `open-message`. `openFromNotification` then switches to the Inbox, drops an account filter that would hide the message, and opens its conversation. On Windows, a click on an old notification in the Action Center isn't reported to the app. It launches the app instead, and the single-instance plugin turns that into bringing the window forward.
 
 **Badge** (`renderBadge`, from `renderSidebar`): the Inbox's unread count across all accounts, the same number as the sidebar's Inbox with no filter. It's sent only when it changes.
 - macOS shows it as a Dock badge.

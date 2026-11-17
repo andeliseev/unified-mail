@@ -64,27 +64,30 @@ const FOLDERS = {
   trash: { name: 'Trash', empty: 'Trash is empty.', icon: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14' },
 };
 const ids = (m) => ({ account: m.account, id: m.id });
+/** What the conversation commands (`archive_thread`…) take: the account and Gmail's thread id. */
+const thread = (c) => ({ account: c.account, thread: c.threadId });
 
 /**
- * Whether the message is in its Inbox. Both lists hold each account's newest messages,
- * so a recent All Mail message that's in the Inbox is always in the Inbox list too.
+ * Whether any message of conversation `c` is in its Inbox. Both lists hold each account's newest
+ * messages, so a recent All Mail message that's in the Inbox is always in the Inbox list too.
  * Older All Mail pages report their Inbox messages separately (`inboxExtra`).
  */
-const inInbox = (m) => state.inboxExtra.has(keyOf(m)) || state.lists.inbox.some((x) => keyOf(x) === keyOf(m));
+const inInbox = (c) => state.lists.inbox.some((m) => threadKey(m) === c.key) ||
+  [...state.inboxExtra.values()].some((m) => threadKey(m) === c.key);
 
 /**
- * Actions offered on a message. `inboxKeys`: the keys of everything in the Inbox, when the
- * caller already has them (renderList asks for every row, and `inInbox` searches a list).
- * Search results come from All Mail, so they get All Mail's actions.
+ * Actions offered on a conversation. `inboxKeys`: the keys of every conversation in the Inbox,
+ * when the caller already has them (renderList asks for every row, and `inInbox` searches a
+ * list). Search results come from All Mail, so they get All Mail's actions.
  */
-function actionsFor(m, inboxKeys = null) {
+function actionsFor(c, inboxKeys = null) {
   switch (listName()) {
     case 'inbox': return ['archive', 'trash'];
     case 'sent': return ['trash'];
     // Drafts are written, sent or discarded (see Writing), not moved.
     case 'drafts': return [];
     case 'all': case 'search': {
-      const inbox = inboxKeys ? inboxKeys.has(keyOf(m)) : inInbox(m);
+      const inbox = inboxKeys ? inboxKeys.has(c.key) : inInbox(c);
       return inbox ? ['archive', 'trash'] : ['unarchive', 'trash'];
     }
     default: return ['restore'];
@@ -92,8 +95,11 @@ function actionsFor(m, inboxKeys = null) {
 }
 
 /**
- * For each action: its button label, the folder lists the message leaves and joins (applied
- * right away, before Gmail answers), the Gmail call, and how to undo it given that call's result.
+ * For each action on a conversation: its button label, the folder lists its messages leave and
+ * join (applied right away, before Gmail answers; `join` can also say per message), the Gmail
+ * call, and how to undo it given that call's result: where each message was (`ThreadMoved`). As
+ * in Gmail, an action takes the whole conversation: Archive takes all of it out of the Inbox,
+ * Delete moves all of it to Trash. In Trash, a conversation is the part of it that's there.
  */
 const ACTIONS = {
   archive: {
@@ -102,11 +108,12 @@ const ACTIONS = {
     verb: 'archive',
     leave: ['inbox'],
     join: [],
-    run: (m) => invoke('archive_message', ids(m)),
-    undo: (m) => ({
+    run: (c) => invoke('archive_thread', thread(c)),
+    // Back to the Inbox go the messages that were there.
+    undo: (c, { inbox }) => ({
       leave: [],
-      join: ['inbox'],
-      run: () => invoke('restore_message', { ...ids(m), fromTrash: false, toInbox: true }),
+      join: (m) => (inbox.includes(m.id) ? ['inbox'] : []),
+      run: () => invoke('restore_thread', { ...thread(c), to: { inbox } }),
     }),
   },
   trash: {
@@ -115,39 +122,42 @@ const ACTIONS = {
     verb: 'delete',
     leave: ['inbox', 'sent', 'all'],
     join: ['trash'],
-    run: (m) => invoke('trash_message', ids(m)),
-    undo: (m, { wasInInbox, wasSent }) => ({
+    run: (c) => invoke('trash_thread', thread(c)),
+    // Out of Trash come the messages that weren't there before.
+    undo: (c, { ids, inbox, sent, trash }) => ({
       leave: ['trash'],
-      join: [...(wasInInbox ? ['inbox'] : []), ...(wasSent ? ['sent'] : []), 'all'],
-      run: () => invoke('restore_message', { ...ids(m), fromTrash: true, toInbox: wasInInbox }),
+      join: (m) => (trash.includes(m.id) ? []
+        : [...(inbox.includes(m.id) ? ['inbox'] : []), ...(sent.includes(m.id) ? ['sent'] : []), 'all']),
+      run: () => invoke('restore_thread', { ...thread(c), to: { untrash: ids.filter((id) => !trash.includes(id)), inbox } }),
     }),
   },
-  // "Move to Inbox" on an archived message in All Mail.
+  // "Move to Inbox" on an archived conversation in All Mail: all of it, as in Gmail.
   unarchive: {
     label: 'Move to Inbox',
     done: 'Moved to Inbox',
     verb: 'move',
     leave: [],
     join: ['inbox'],
-    run: (m) => invoke('restore_message', { ...ids(m), fromTrash: false, toInbox: true }),
-    undo: (m) => ({
+    run: (c) => invoke('unarchive_thread', thread(c)),
+    // Out of the Inbox go the messages this put there.
+    undo: (c, { ids, inbox }) => ({
       leave: ['inbox'],
       join: [],
-      run: () => invoke('archive_message', ids(m)),
+      run: () => invoke('restore_thread', { ...thread(c), to: { archive: ids.filter((id) => !inbox.includes(id)) } }),
     }),
   },
-  // "Move to Inbox" in Trash.
+  // "Move to Inbox" in Trash: the conversation's messages there.
   restore: {
     label: 'Move to Inbox',
     done: 'Moved to Inbox',
     verb: 'move',
     leave: ['trash'],
     join: ['inbox', 'all'],
-    run: (m) => invoke('restore_message', { ...ids(m), fromTrash: true, toInbox: true }),
-    undo: (m) => ({
+    run: (c) => invoke('untrash_thread', thread(c)),
+    undo: (c, { inbox, trash }) => ({
       leave: ['inbox', 'all'],
       join: ['trash'],
-      run: () => invoke('trash_message', ids(m)),
+      run: () => invoke('restore_thread', { ...thread(c), to: { trash, archive: trash.filter((id) => !inbox.includes(id)) } }),
     }),
   },
 };
@@ -156,8 +166,8 @@ const state = {
   builtInClient: false,  // OAuth client compiled into the app; Settings hides that section
   configured: false,
   theme: 'system',       // Settings → Appearance: system, light or dark
-  full: null,            // the open message's body, to show it again with other colors
-  originalColors: false, // dark mode: show the open email in its original light colors
+  full: null,            // the open conversation's last email in full, once loaded: what Reply answers
+  originalColors: false, // dark mode: show the open emails in their original light colors
   accounts: [],
   expired: new Set(),    // accounts whose sign-in Google no longer accepts: they offer Reconnect
   folder: 'inbox',       // folder chosen in the sidebar
@@ -173,8 +183,14 @@ const state = {
   search: null,
   searchLeft: new Set(), // keys of results an action took out of the search; Undo puts them back
   filter: null,          // account email, or null for all accounts
-  selected: null,        // key of the highlighted row
-  current: null,         // message shown in the reader
+  selected: null,        // key of the highlighted row: a conversation's (threadKey)
+  current: null,         // conversation shown in the reader (see `conversations`)
+  // The open conversation's emails (see `select`): `key`, `messages` (oldest first), `fulls` (id →
+  // the email in full, once loaded), `open` (ids shown in full), `folded` (ids behind "N more").
+  thread: null,
+  // Gmail's conversations, by threadKey: `{ account, id, messages }`, its messages oldest first
+  // (each with its account, threadId and Gmail `labels`). Rows count them and name who wrote.
+  threads: new Map(),
   pending: new Map(),    // key → move Gmail hasn't confirmed yet; re-applied to sync results
   pendingRead: new Map(), // key → read/unread change Gmail hasn't confirmed yet; same idea
   undo: null,            // what the toast's Undo button does, while it shows
@@ -189,7 +205,7 @@ const state = {
   // Per folder (and the search) and account: `frontier`, the oldest date loaded so far without
   // gaps, and `more`, whether older mail exists. Scrolling pushes the frontier back.
   paging: { inbox: {}, sent: {}, drafts: {}, all: {}, trash: {}, search: {} },
-  inboxExtra: new Map(), // key → date: Inbox messages found on older All Mail pages and in search results
+  inboxExtra: new Map(), // key → message: Inbox messages found on older All Mail pages and in search results
   newestSeen: {},        // account → date of its newest Inbox message so far; newer unread mail notifies
   badge: null,           // unread count shown on the app icon
   update: null,          // a newer version on GitHub, offered in Settings
@@ -199,13 +215,15 @@ const state = {
   syncQueued: false,
   lastSync: 0,
   openSeq: 0,
-  emailLinks: new Map(),  // the open email's links, by address: what its text shows instead, or '' (checkLinks)
+  emailLinks: new Map(),  // the open emails' links, by address: what its text shows instead, or '' (checkLinks)
   linkCheck: null,        // the address `askLink` asks about
   authSeq: 0,
 };
 
 const $ = (sel) => document.querySelector(sel);
 const keyOf = (m) => `${m.account}/${m.id}`;
+/** The key of the conversation a message is in: its row's, apart from message keys. */
+const threadKey = (m) => `t:${m.account}/${m.threadId || m.id}`;
 const colorOf = (account) => PALETTE[Math.max(0, state.accounts.indexOf(account)) % PALETTE.length];
 const byDate = (a, b) => b.date - a.date;
 
@@ -232,8 +250,165 @@ const byKey = (key) => state.lists[listName()].find((m) => keyOf(m) === key);
  * leaves All Mail leaves them too.
  */
 const leaves = (move, list) => move.leave.includes(list) || (list === 'search' && move.leave.includes('all'));
-/** The open message as the folder list has it now; syncs replace the list's objects. */
-const openMessage = () => state.current && (byKey(keyOf(state.current)) || state.current);
+
+/**
+ * A list's messages (newest first) as conversations, each where its newest message is:
+ * `{ key, account, threadId, messages, latest, date, unread, hasFiles }`, with `messages` the
+ * list's messages of it, newest first. Rows, the reader and actions work on these.
+ */
+function conversations(messages) {
+  const found = new Map();
+  for (const m of messages) {
+    const key = threadKey(m);
+    let c = found.get(key);
+    if (!c) {
+      c = { key, account: m.account, threadId: m.threadId || m.id, messages: [], latest: m, date: m.date, unread: false, hasFiles: false };
+      found.set(key, c);
+    }
+    c.messages.push(m);
+    c.unread ||= Boolean(m.unread);
+    c.hasFiles ||= Boolean(m.hasFiles);
+  }
+  return [...found.values()];
+}
+
+/** The rows on screen: the visible messages' conversations. */
+const rows = () => conversations(visible());
+/**
+ * Conversation `key` as the list on screen has it now; syncs replace the list's objects. Drafts
+ * has no conversations: its rows are drafts, which are messages of the conversations they answer.
+ */
+const rowByKey = (key) => (key && listName() !== 'drafts' &&
+  conversations(state.lists[listName()].filter((m) => threadKey(m) === key))[0]) || null;
+/** The open conversation as the list has it now. */
+const openConversation = () => state.current && (rowByKey(state.current.key) || state.current);
+
+/**
+ * A conversation's messages that show, oldest first: in Trash those in Trash, elsewhere the
+ * others, and never drafts (an answer being written shows under the conversation instead).
+ */
+function shownMessages(thread, folder = listName()) {
+  const trash = folder === 'trash';
+  return thread.messages.filter((m) => !m.labels.includes('DRAFT') &&
+    (trash ? m.labels.includes('TRASH') : !m.labels.includes('TRASH') && !m.labels.includes('SPAM')));
+}
+
+/**
+ * Conversation `c`'s messages, oldest first: Gmail's copy of it, plus what the list has that the
+ * copy doesn't yet (a message that just arrived). Without a copy, the list's messages alone.
+ */
+function threadMessages(c) {
+  const found = new Map();
+  const listed = new Map(c.messages.map((m) => [m.id, m]));
+  const known = state.threads.get(c.key);
+  for (const m of known ? shownMessages(known) : []) {
+    // The list's read state is the current one: the copy is fetched again only for new emails.
+    if (listed.has(m.id)) m.unread = listed.get(m.id).unread;
+    found.set(m.id, m);
+  }
+  for (const m of c.messages) if (!found.has(m.id)) found.set(m.id, m);
+  return [...found.values()].sort((a, b) => a.date - b.date);
+}
+
+/**
+ * Every message of conversation `c` the app knows of, in the lists or in Gmail's copy of it, as
+ * the list on screen sees it: in Trash those in Trash, elsewhere the others, never drafts. What
+ * an action on it moves.
+ */
+function conversationMessages(c) {
+  const found = new Map();
+  const trash = listName() === 'trash';
+  for (const [folder, list] of Object.entries(state.lists)) {
+    if (folder === 'drafts' || (folder === 'trash') !== trash) continue;
+    for (const m of list) if (threadKey(m) === c.key) found.set(keyOf(m), m);
+  }
+  const known = state.threads.get(c.key);
+  if (known) for (const m of shownMessages(known)) if (!found.has(keyOf(m))) found.set(keyOf(m), m);
+  return [...found.values()];
+}
+
+/**
+ * Keeps Gmail's conversations from a sync, a page or the reader, for the rows and the reader,
+ * re-applying to them the changes Gmail hasn't confirmed yet, as `setList` does to the lists.
+ */
+function keepThreads(threads) {
+  for (const t of threads || []) {
+    for (const m of t.messages) {
+      Object.assign(m, { account: t.account, threadId: t.id });
+      const change = state.pendingRead.get(keyOf(m));
+      if (change) m.unread = change.unread;
+      const move = state.pending.get(keyOf(m));
+      if (move) relabel(m, move.leave, move.join);
+    }
+    state.threads.set(`t:${t.account}/${t.id}`, t);
+  }
+}
+
+/** Message `m` as Gmail's copy of its conversation has it, if it does. */
+const inCopy = (m) => state.threads.get(threadKey(m))?.messages.find((x) => x.id === m.id);
+
+/**
+ * Notes a move between folders in the labels that Gmail's copy of a conversation has for message
+ * `m` (`inCopy`): what's in Trash and what isn't, which the rows and the reader go by
+ * (`shownMessages`), and the Inbox. So the copy stays good after an action, and a row goes on
+ * counting its emails; the next sync fetches it again, since Gmail has it as changed.
+ */
+function relabel(m, leave, join) {
+  if (!m?.labels) return;
+  const labels = new Set(m.labels);
+  for (const [folder, label] of [['trash', 'TRASH'], ['inbox', 'INBOX']]) {
+    if (leave.includes(folder)) labels.delete(label);
+    if (join.includes(folder)) labels.add(label);
+  }
+  m.labels = [...labels];
+}
+
+// Conversations asked for at a time for a page that came without them (loadThreads): few, so a
+// search that was typed over stops asking for its results' soon.
+const THREADS_AT_ONCE = 8;
+
+/**
+ * Fetches the conversations that a page of search results or of older mail came without
+ * (`pending`: its rows don't wait for them), a few at a time, and draws their rows again as
+ * they arrive, with their counts and who wrote them. `wanted` says whether the page is still
+ * needed: a search that was closed or typed over stops asking.
+ */
+async function loadThreads(account, pending, wanted) {
+  for (let i = 0; i < (pending || []).length && wanted(); i += THREADS_AT_ONCE) {
+    let threads;
+    try {
+      threads = await invoke('load_threads', { account, threads: pending.slice(i, i + THREADS_AT_ONCE) });
+    } catch (e) {
+      // The rows show what the list has of them, and opening one fetches its conversation.
+      console.warn(`Couldn't load conversations: ${e}`);
+      return;
+    }
+    keepThreads(threads);
+    for (const t of threads) redrawRow(`t:${t.account}/${t.id}`);
+  }
+}
+
+/** Whether `m` was written by its own account: Gmail's SENT label, or the account's address in From. */
+const fromMe = (m) => Boolean(m.labels?.includes('SENT')) ||
+  parseAddresses(m.from || '').some((r) => r.email.toLowerCase() === m.account.toLowerCase());
+/** Of `messages` (newest first), the newest one their account didn't write, else the newest. */
+const newestReceived = (messages) => messages.find((m) => !fromMe(m)) || messages[0];
+
+/**
+ * Who wrote a conversation, for its row, as Gmail says it: the name when one person did, else
+ * first names in the order they first wrote, "me" for the account ("Anna, me"), and past three
+ * the first and the last two ("Anna … Mark, me").
+ */
+function writers(messages) {
+  const names = [];
+  for (const m of messages) {
+    const name = fromMe(m) ? 'me' : senderName(m.from);
+    if (!names.includes(name)) names.push(name);
+  }
+  if (names.length < 2) return names[0] || '';
+  const short = names.map((n) => (n === 'me' ? n : n.includes('@') && !n.includes(' ') ? n.split('@')[0] : n.split(/\s+/)[0]));
+  return short.length > 3 ? `${short[0]} … ${short.slice(-2).join(', ')}` : short.join(', ');
+}
 
 // ---------- Startup ----------
 
@@ -251,6 +426,7 @@ async function init() {
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
   getVersion().then((version) => { $('#app-version').textContent = version; });
+  keepThreads(await invoke('cached_threads'));
   setList('inbox', await invoke('cached_folder', { folder: 'inbox' }));
   // The sidebar counts the drafts.
   setList('drafts', await invoke('cached_folder', { folder: 'drafts' }));
@@ -404,8 +580,6 @@ function bindEvents() {
   $('#search-input').addEventListener('keydown', onSearchKey);
   $('#compose-open').title = 'New message (C)';
   $('#compose-open').addEventListener('click', () => openCompose());
-  $('#m-reply').addEventListener('click', () => startReply('reply'));
-  $('#m-more').addEventListener('click', (e) => showAnswerMenu(e.currentTarget, (kind) => startReply(kind)));
   $('#c-send').title = `Send (${IS_MAC ? '⌘' : 'Ctrl+'}Enter)`;
   $('#c-send').addEventListener('click', () => state.composing && sendDraft(state.composing, $('#compose')));
   $('#c-attach').addEventListener('click', () => state.composing && pickFiles(state.composing, () => {
@@ -421,18 +595,18 @@ function bindEvents() {
   $('#compose').addEventListener('keydown', (e) => onEditorKey(e, state.composing, $('#compose')));
   $('#file-picker').addEventListener('change', onFilesPicked);
   $('#toggle-read').addEventListener('click', () => {
-    const m = openMessage();
-    if (m) setUnread(m, !m.unread);
+    const c = openConversation();
+    if (c) setConversationUnread(c, !c.unread);
   });
   $('#colors').addEventListener('click', () => {
     state.originalColors = !state.originalColors;
     renderActions();
-    if (state.full) showBody(state.full);
+    redrawEmails();
   });
-  // Appearance (or the system) switched between light and dark: redraw the open email.
+  // Appearance (or the system) switched between light and dark: redraw the open emails.
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     renderActions();
-    if (state.full) showBody(state.full);
+    redrawEmails();
   });
   $('#toast-action').addEventListener('click', runToastAction);
   // "This link may not go where it says" (askLink): a click beside the box cancels, as Cancel does.
@@ -479,15 +653,14 @@ function bindEvents() {
   window.addEventListener('blur', hideMenu);
   window.addEventListener('resize', hideMenu);
   // A wider or narrower reader (resizing the window) changes how much an email must shrink, and
-  // so how tall it is. Only the width counts: the frame's own height changes #m-body's.
+  // so how tall it is. Only the width counts: the frames' own heights change #m-thread's.
   let readerWidth = 0;
   new ResizeObserver(() => {
-    const width = $('#m-body').clientWidth;
+    const width = $('#m-thread').clientWidth;
     if (width === readerWidth) return;
     readerWidth = width;
-    const frame = $('#m-body iframe');
-    if (frame) fitToFrame(frame);
-  }).observe($('#m-body'));
+    for (const frame of $('#m-thread').querySelectorAll('iframe')) fitToFrame(frame);
+  }).observe($('#m-thread'));
 }
 
 // ---------- Sync ----------
@@ -503,6 +676,7 @@ async function refresh() {
   try {
     const results = await Promise.all(folders.map((folder) => invoke('refresh_folder', { folder })));
     folders.forEach((folder, i) => {
+      keepThreads(results[i].threads);
       applySync(folder, results[i]);
       state.synced[folder] = true;
       state.listErrors[folder] = results[i].errors;
@@ -513,6 +687,8 @@ async function refresh() {
     const errors = results.flatMap((r) => r.errors);
     state.expired = new Set(errors.filter((e) => e.expired).map((e) => e.account));
     render();
+    // An answer that arrived in the open conversation (or one sent) shows under it.
+    if (state.thread) showThread(threadMessages(openConversation()), true);
     setStatus('');
     // An expired sign-in shows as Reconnect above the list. Other problems come from each
     // folder synced; show them once, and never over Undo.
@@ -574,9 +750,9 @@ function applySync(folder, result) {
 /** Drops `inboxExtra` entries that an Inbox sync shows aren't in the Inbox any more. */
 function forgetLeftInbox(account, page, pageOldest, more) {
   const inPage = new Set(page.map(keyOf));
-  for (const [key, date] of state.inboxExtra) {
+  for (const [key, m] of state.inboxExtra) {
     // The page covers everything down to its oldest message, or all of the Inbox if no more.
-    if (key.startsWith(account + '/') && (date >= pageOldest || !more) && !inPage.has(key)) {
+    if (key.startsWith(account + '/') && (m.date >= pageOldest || !more) && !inPage.has(key)) {
       state.inboxExtra.delete(key);
     }
   }
@@ -601,7 +777,11 @@ async function loadOlder() {
       : invoke('load_older', { folder, account, before: frontier })));
     // The search was closed or changed while these loaded.
     if (folder === 'search' && (state.search !== search || search.seq !== seq)) return;
+    for (const page of pages) keepThreads(page.threads);
     targets.forEach((account, i) => mergeOlder(folder, account, pages[i]));
+    // The page shows at once; the conversations it came without follow.
+    const wanted = () => folder !== 'search' || (state.search === search && search.seq === seq);
+    targets.forEach((account, i) => loadThreads(account, pages[i].pending, wanted));
     const warnings = pages.map((p) => p.warning).filter(Boolean);
     if (warnings.length && !state.undo) toast(warnings.join('\n'), 8000);
   } catch (e) {
@@ -630,7 +810,7 @@ function mergeOlder(folder, account, page) {
 /** Notes which of an All Mail page's messages (or search results) are in the Inbox. */
 function noteInInbox(page) {
   const inInboxIds = new Set(page.inbox);
-  for (const m of page.messages) if (inInboxIds.has(m.id)) state.inboxExtra.set(keyOf(m), m.date);
+  for (const m of page.messages) if (inInboxIds.has(m.id)) state.inboxExtra.set(keyOf(m), m);
 }
 
 /** Starts loading older mail when the list is scrolled (or short enough) to its end. */
@@ -672,12 +852,13 @@ function notifyNewMail(result) {
   for (const note of notes) invoke('notify', note).catch((e) => console.warn(e));
 }
 
-/** A click on a notification: show the Inbox, and open the message if it names one. */
+/** A click on a notification: show the Inbox, and open the message's conversation if it names one. */
 async function openFromNotification(message) {
   closeSearch();
   if (state.folder !== 'inbox') await openFolder('inbox');
   if (state.filter && (!message || state.filter !== message.account)) setFilter(null);
-  if (message && byKey(keyOf(message))) select(keyOf(message));
+  const m = message && byKey(keyOf(message));
+  if (m) select(threadKey(m));
 }
 
 /** Shows the Inbox's unread count, all accounts together, on the taskbar / Dock icon. */
@@ -731,8 +912,14 @@ function render() {
 }
 
 function renderSidebar() {
+  // Unread conversations in the Inbox, per account, as Gmail counts them.
   const unread = new Map();
-  for (const m of state.lists.inbox) if (m.unread) unread.set(m.account, (unread.get(m.account) || 0) + 1);
+  const counted = new Set();
+  for (const m of state.lists.inbox) {
+    if (!m.unread || counted.has(threadKey(m))) continue;
+    counted.add(threadKey(m));
+    unread.set(m.account, (unread.get(m.account) || 0) + 1);
+  }
   const inboxUnread = state.filter
     ? unread.get(state.filter) || 0
     : [...unread.values()].reduce((a, b) => a + b, 0);
@@ -808,11 +995,12 @@ function renderList() {
   const folder = listName();
   // The Drafts folder: drafts being written here, then Gmail's other drafts.
   const drafts = folder === 'drafts';
-  const messages = drafts ? gmailDrafts() : visible();
+  // A row per conversation, except in Drafts, where each draft is one.
+  const messages = drafts ? gmailDrafts() : rows();
   // In All Mail and search results, tag what's still in the Inbox (everything else there is
   // archived or sent).
   const inboxKeys = folder === 'all' || folder === 'search'
-    ? new Set([...state.lists.inbox.map(keyOf), ...state.inboxExtra.keys()])
+    ? new Set([...state.lists.inbox.map(threadKey), ...[...state.inboxExtra.values()].map(threadKey)])
     : null;
   const marks = folder === 'search' ? searchPattern(state.search.query) : null;
   const fragment = document.createDocumentFragment();
@@ -820,29 +1008,12 @@ function renderList() {
   // too, once something is written in them, and narrows them to the account chosen.
   const written = (d) => (d.gmailId || hasContent(d) || d === state.composing) && (!state.filter || d.from === state.filter);
   for (const draft of drafts ? localDrafts().filter(written) : state.drafts) fragment.append(draftRow(draft));
-  for (const m of messages) {
+  for (const c of messages) {
     if (drafts) {
-      fragment.append(gmailDraftRow(m));
+      fragment.append(gmailDraftRow(c));
       continue;
     }
-    const li = document.createElement('li');
-    li.className = 'msg' + (m.unread ? ' unread' : '') + (keyOf(m) === state.selected ? ' selected' : '');
-    li.dataset.key = keyOf(m);
-    li.style.setProperty('--acc', colorOf(m.account));
-    li.innerHTML = `<div class="row1"><span class="from"></span>${m.hasFiles ? CLIP_ICON : ''}<time></time></div>` +
-      '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
-    // Sent mail shows whom it went to, as in Gmail.
-    if (folder === 'sent') li.querySelector('.from').textContent = `To: ${recipientNames(m.to) || '(no recipients)'}`;
-    else setMarkedText(li.querySelector('.from'), senderName(m.from), marks);
-    li.querySelector('time').textContent = shortDate(m.date);
-    setMarkedText(li.querySelector('.subject .text'), m.subject || '(no subject)', marks);
-    if (inboxKeys && inboxKeys.has(keyOf(m))) li.querySelector('.subject').prepend(tag('Inbox'));
-    // A reply to it is being written.
-    if (state.replies.has(keyOf(m))) li.querySelector('.subject').prepend(tag('Draft', 'draft'));
-    setMarkedText(li.querySelector('.snippet'), m.snippet, marks);
-    li.title = m.account;
-    li.append(rowActions(m, inboxKeys));
-    fragment.append(li);
+    fragment.append(conversationRow(c, folder, inboxKeys, marks));
   }
   if (messages.length && accountsWithMore(folder).length) {
     const more = document.createElement('li');
@@ -888,6 +1059,35 @@ function searchFailure() {
   return `Couldn't search ${account}${others}: ${error}`;
 }
 
+/**
+ * A conversation's row: who wrote it and how many emails it has ("Anna, me 3"; in Sent, whom its
+ * newest email went to), the time of its newest email in the folder, its subject (its first
+ * email's) and the start of that newest email.
+ */
+function conversationRow(c, folder, inboxKeys, marks) {
+  const m = c.latest;
+  const all = threadMessages(c);
+  const li = document.createElement('li');
+  li.className = 'msg' + (c.unread ? ' unread' : '') + (c.key === state.selected ? ' selected' : '');
+  li.dataset.key = c.key;
+  li.style.setProperty('--acc', colorOf(c.account));
+  li.innerHTML = `<div class="row1"><span class="from"><span class="who"></span><span class="count"></span></span>${c.hasFiles ? CLIP_ICON : ''}<time></time></div>` +
+    '<div class="subject"><span class="text"></span></div><div class="snippet"></div>';
+  // Sent mail shows whom it went to, as in Gmail.
+  if (folder === 'sent') li.querySelector('.who').textContent = `To: ${recipientNames(m.to) || '(no recipients)'}`;
+  else setMarkedText(li.querySelector('.who'), writers(all), marks);
+  if (all.length > 1) li.querySelector('.count').textContent = all.length;
+  li.querySelector('time').textContent = shortDate(c.date);
+  setMarkedText(li.querySelector('.subject .text'), all[0].subject || m.subject || '(no subject)', marks);
+  if (inboxKeys && inboxKeys.has(c.key)) li.querySelector('.subject').prepend(tag('Inbox'));
+  // An answer in it is being written.
+  if (replyIn(c.key)) li.querySelector('.subject').prepend(tag('Draft', 'draft'));
+  setMarkedText(li.querySelector('.snippet'), m.snippet, marks);
+  li.title = c.account;
+  li.append(rowActions(c, inboxKeys));
+  return li;
+}
+
 function tag(text, kind = '') {
   const span = document.createElement('span');
   span.className = `tag ${kind}`.trim();
@@ -898,7 +1098,7 @@ function tag(text, kind = '') {
 /** The row of a new message being written: whom it's to, its subject and its start. */
 function draftRow(draft) {
   const li = document.createElement('li');
-  const open = state.composing === draft || (draft.message && state.current && keyOf(state.current) === keyOf(draft.message));
+  const open = state.composing === draft || (draft.message && state.current && state.current.key === threadKey(draft.message));
   li.className = 'msg draft' + (open ? ' selected' : '');
   li.dataset.draft = draft.id;
   li.innerHTML = '<div class="row1"><span class="from"><span class="who"></span></span></div>' +
@@ -972,16 +1172,16 @@ function setMarkedText(el, text, marks) {
 }
 
 /** The buttons a row shows under the mouse: the folder's actions, then Mark as read/unread. */
-function rowActions(m, inboxKeys) {
+function rowActions(c, inboxKeys) {
   const actions = $('#row-actions').content.firstElementChild.cloneNode(true);
-  const allowed = actionsFor(m, inboxKeys);
+  const allowed = actionsFor(c, inboxKeys);
   for (const button of [...actions.children]) {
     const kind = button.dataset.kind;
     const offered = kind === 'read' ||
       allowed.includes(kind) || (kind === 'restore' && allowed.includes('unarchive'));
     if (!offered) button.remove();
   }
-  setReadButton(actions.querySelector('[data-kind="read"]'), m.unread);
+  setReadButton(actions.querySelector('[data-kind="read"]'), c.unread);
   return actions;
 }
 
@@ -991,12 +1191,12 @@ function setReadButton(button, unread) {
   button.setAttribute('aria-label', title.replace(/ \(.*/, ''));
 }
 
-/** A click on one of a row's buttons acts on that row's message, as its right-click menu does. */
+/** A click on one of a row's buttons acts on that row's conversation, as its right-click menu does. */
 function onRowAction(row, kind) {
-  const m = byKey(row.dataset.key);
-  if (!m) return;
-  if (kind === 'read') setUnread(m, !m.unread);
-  else act(kind === 'restore' && listName() !== 'trash' ? 'unarchive' : kind, m);
+  const c = rowByKey(row.dataset.key);
+  if (!c) return;
+  if (kind === 'read') setConversationUnread(c, !c.unread);
+  else act(kind === 'restore' && listName() !== 'trash' ? 'unarchive' : kind, c);
 }
 
 function markRow(key) {
@@ -1007,23 +1207,36 @@ function markRow(key) {
   if (row) row.scrollIntoView({ block: 'nearest' });
 }
 
+/** Draws conversation `key`'s row again, if it's on screen: it was read, or Gmail's copy changed. */
+function redrawRow(key) {
+  const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
+  const c = rowByKey(key);
+  const folder = listName();
+  if (!row || !c || folder === 'drafts') return;
+  const inboxKeys = folder === 'all' || folder === 'search' ? new Set(inInbox(c) ? [c.key] : []) : null;
+  const marks = folder === 'search' ? searchPattern(state.search.query) : null;
+  const fresh = conversationRow(c, folder, inboxKeys, marks);
+  fresh.classList.toggle('menu-target', row.classList.contains('menu-target'));
+  row.replaceWith(fresh);
+}
+
 function renderActions() {
-  const m = openMessage();
-  const allowed = m ? actionsFor(m) : [];
+  const c = openConversation();
+  const allowed = c ? actionsFor(c) : [];
   $('#archive').hidden = !allowed.includes('archive');
   $('#trash').hidden = !allowed.includes('trash');
   $('#restore').hidden = !allowed.includes('restore') && !allowed.includes('unarchive');
-  const unread = Boolean(m && m.unread);
+  const unread = Boolean(c && c.unread);
   $('#toggle-read .label').textContent = unread ? 'Mark as read' : 'Mark as unread';
   $('#toggle-read').title = unread ? 'Mark as read (Shift+I)' : 'Mark as unread (Shift+U)';
   const original = state.originalColors;
-  $('#colors').hidden = !m || !appIsDark();
+  $('#colors').hidden = !c || !appIsDark();
   $('#colors .sun').style.display = original ? 'none' : '';
   $('#colors .moon').style.display = original ? '' : 'none';
   $('#colors .label').textContent = original ? 'Dark' : 'Original';
-  $('#colors').title = original ? 'Show this email in dark colors' : "Show this email's original colors";
-  // Answering quotes the email, so it waits for the email to load.
-  $('#m-reply').disabled = $('#m-more').disabled = !state.full;
+  const several = (state.thread?.messages.length || 0) > 1;
+  $('#colors').title = original ? `Show ${several ? 'these emails' : 'this email'} in dark colors`
+    : several ? "Show these emails' original colors" : "Show this email's original colors";
 }
 
 // ---------- Search ----------
@@ -1048,7 +1261,7 @@ function closeSearch() {
   state.search = null;
   clearSearchResults();
   // A result that isn't in the folder closes with the search.
-  if (state.current && !byKey(keyOf(state.current))) clearReader();
+  if (state.current && !rowByKey(state.current.key)) clearReader();
   if (document.activeElement === $('#search-input')) $('#search-input').blur();
   render();
   $('#messages').scrollTop = search.scroll;
@@ -1097,6 +1310,7 @@ async function runSearch(again = false) {
       continue;
     }
     messages.push(...page.messages);
+    keepThreads(page.threads);
     state.paging.search[account] = { frontier: Math.min(...page.messages.map((m) => m.date)), more: page.more };
     noteInInbox(page);
     if (page.warning) problems.push(`${account}: ${page.warning}`);
@@ -1104,6 +1318,9 @@ async function runSearch(again = false) {
   setList('search', messages.sort(byDate));
   search.done = true;
   render();
+  // The results show at once; the conversations they came without follow (their counts, "me").
+  const wanted = () => state.search === search && search.seq === seq;
+  for (const { account, page } of answers) if (page) loadThreads(account, page.pending, wanted);
   if (problems.length && !state.undo) toast(problems.join('\n'), 8000);
 }
 
@@ -1119,7 +1336,7 @@ function onSearchKey(e) {
   } else if (e.key === 'ArrowDown' && visible().length) {
     e.preventDefault();
     $('#search-input').blur();
-    if (!visible().some((m) => keyOf(m) === state.selected)) move(1);
+    if (!rows().some((c) => c.key === state.selected)) move(1);
   }
 }
 
@@ -1135,7 +1352,7 @@ function renderSearch() {
   if (!search.query) text = `Search All Mail ${where}`;
   else if (!search.done) text = `Searching ${where}…`;
   else {
-    const count = visible().length;
+    const count = rows().length;
     const more = accountsWithMore('search').length > 0;
     const shown = state.filter ? [state.filter] : state.accounts.filter((account) => !state.expired.has(account));
     const failed = shown.length > 0 && shown.every((account) => search.failed.has(account));
@@ -1147,69 +1364,282 @@ function renderSearch() {
 
 // ---------- Reading ----------
 
-/** Opens message `key` in the reader; `given` is its summary when it isn't in the list on screen. */
+// Emails that aren't open, more than this many in a row at the start of a conversation, fold
+// into one "N more emails" line, as in Gmail: the first stays, and the two before the open one.
+const FOLD_OVER = 4;
+// The ⋮ next to an open email's date: Reply all and Forward.
+const MORE_DOTS = '<circle class="dot" cx="12" cy="5" r="1"/><circle class="dot" cx="12" cy="12" r="1"/><circle class="dot" cx="12" cy="19" r="1"/>';
+
+/**
+ * Opens conversation `key` in the reader; `given` is its row when it isn't in the list on screen.
+ * Its emails show at once from what's known of it (Gmail's copy from the last sync, else the
+ * list's emails), then from the copy `get_thread` brings.
+ */
 async function select(key, given = null) {
-  const m = given || byKey(key);
-  if (!m) return;
+  const c = given || rowByKey(key);
+  if (!c) return;
   leaveMessage(key);
   const wasComposing = Boolean(state.composing);
   leaveCompose();
   state.selected = key;
-  state.current = m;
+  state.current = c;
   state.full = null;
   state.originalColors = false;  // each email starts dark in dark mode
   if (wasComposing) renderList();  // the draft's row isn't the one selected any more (or is gone)
   markRow(key);
-  renderActions();
-
+  const seq = ++state.openSeq;
+  state.thread = { key, seq, messages: [], fulls: new Map(), open: new Set(), folded: new Set(), unfolded: false, loading: new Set() };
+  state.emailLinks = new Map();
+  showLinkAddress(null);
   renderReaderViews();
   $('#m-scroll').scrollTop = 0;
   $('#m-end').replaceChildren();
-  $('#m-subject').textContent = m.subject || '(no subject)';
-  $('#m-from').textContent = m.from;
-  $('#m-date').textContent = longDate(m.date);
-  $('#m-to').textContent = '';
-  $('#m-replyto').hidden = true;
-  $('#m-account').textContent = m.account;
-  $('#m-account').style.setProperty('--acc', colorOf(m.account));
-  renderAttachments(m, []);
-  showBodyMessage('Loading…');
-
-  const seq = ++state.openSeq;
+  $('#m-thread').replaceChildren();
+  $('#m-account').textContent = c.account;
+  $('#m-account').style.setProperty('--acc', colorOf(c.account));
+  showThread(threadMessages(c));
+  renderActions();
   try {
-    const full = await invoke('get_message', { account: m.account, id: m.id });
+    const fresh = await invoke('get_thread', thread(c));
     if (seq !== state.openSeq) return;
-    $('#m-to').textContent = 'to ' + [full.to, full.cc].filter(Boolean).join(', ');
-    renderReplyTo(full);
-    full.inline = inlinePictures(full);
-    renderAttachments(m, (full.attachments || []).filter((a) => !full.inline.includes(a)));
-    showBody(full);
-    renderActions();
-    // An answer opened from Drafts quotes the email once it's here.
-    const reply = state.replies.get(key);
-    if (reply && !reply.full) reply.full = full;
-    renderMessageEnd();
-    if (full.inline.length) loadInlinePictures(m, full, seq);
-    // Opening marks it read, as in Gmail.
-    if ((byKey(key) || m).unread) setUnread(m, false);
+    keepThreads([fresh]);
+    showThread(threadMessages(openConversation()));
+    redrawRow(key);  // its count and who wrote it may have changed
   } catch (e) {
-    if (seq === state.openSeq) showBodyMessage(`Couldn't load this message: ${e}`);
+    // The emails known already still show, and each says so if it can't load.
+    console.warn(`Couldn't load the conversation: ${e}`);
   }
 }
 
-/** Closes the open email. A new message being written stays in the reader. */
+/** The open conversation's card for email `id`. */
+const mailCard = (id) => $('#m-thread').querySelector(`.mail[data-id="${CSS.escape(id)}"]`);
+
+/**
+ * Shows the open conversation's emails, `messages`, oldest first: in full the newest, the unread
+ * ones and the one an answer being written answers; the others a line each. Emails already on
+ * screen stay as they are, since a frame that moves loads again; new ones go in their place.
+ * `additive` (after a sync): emails are only added, and open only while the window is in front,
+ * since opening one marks it read.
+ */
+function showThread(messages, additive = false) {
+  const t = state.thread;
+  if (!t || !messages.length) return;
+  const first = !t.messages.length;
+  const known = new Set(t.messages.map((m) => m.id));
+  if (additive) {
+    if (messages.every((m) => known.has(m.id))) return;
+    messages = [...t.messages, ...messages.filter((m) => !known.has(m.id))].sort((a, b) => a.date - b.date);
+  }
+  const last = messages[messages.length - 1];
+  const reply = replyIn(t.key);
+  for (const m of messages) {
+    if (known.has(m.id)) continue;
+    const answered = reply && reply.message.id === m.id;
+    if (answered || ((m.unread || m === last) && (!additive || document.hasFocus()))) t.open.add(m.id);
+  }
+  t.messages = messages;
+  // The fold follows each whole list (Gmail's copy can bring many more emails), until it's opened.
+  if (!additive && !t.unfolded) foldEarlier();
+  $('#m-subject').textContent = messages[0].subject || last.subject || '(no subject)';
+
+  const box = $('#m-thread');
+  // Only closed emails fold, and those cards hold no frame, so they can go and come back.
+  box.querySelector('.fold')?.remove();
+  const ids = new Set(messages.filter((m) => !t.folded.has(m.id)).map((m) => m.id));
+  for (const card of [...box.querySelectorAll('.mail')]) if (!ids.has(card.dataset.id)) card.remove();
+  // From the end, so each new card goes in before the one after it.
+  let next = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (t.folded.has(m.id)) {
+      let fold = box.querySelector('.fold');
+      if (!fold) box.insertBefore(fold = foldLine(), next);
+      next = fold;
+      continue;
+    }
+    let card = mailCard(m.id);
+    if (!card) box.insertBefore(card = mailElement(m), next);
+    next = card;
+  }
+  // An answer opened from Drafts may answer an email that isn't open: it loads for the quote.
+  if (reply && !reply.full) loadMail(reply.message);
+  // Reply answers the last email, so it loads even when it stays closed (one that arrived while
+  // the window was behind another): loadMail shows the buttons then. The answer being written
+  // stays as it is.
+  const full = t.fulls.get(last.id) || null;
+  if (!full) loadMail(last);
+  if (first || (full && full !== state.full)) {
+    state.full = full;
+    if (first || !reply) renderMessageEnd();
+  }
+}
+
+/**
+ * Folds a long run of closed emails at the start of the open conversation into one line, as
+ * Gmail does: the first stays, and the two before the first open email.
+ */
+function foldEarlier() {
+  const t = state.thread;
+  t.folded = new Set();
+  const firstOpen = t.messages.findIndex((m) => t.open.has(m.id));
+  const closed = firstOpen < 0 ? t.messages.length : firstOpen;
+  if (closed <= FOLD_OVER) return;
+  for (const m of t.messages.slice(1, closed - 2)) t.folded.add(m.id);
+}
+
+/** "3 more emails" in place of the folded ones; a click shows them, for as long as it's open. */
+function foldLine() {
+  const t = state.thread;
+  const button = document.createElement('button');
+  button.className = 'fold';
+  button.textContent = `${t.folded.size} more emails`;
+  button.addEventListener('click', () => {
+    const folded = t.messages.filter((m) => t.folded.has(m.id));
+    t.folded.clear();
+    t.unfolded = true;
+    button.replaceWith(...folded.map(mailElement));
+  });
+  return button;
+}
+
+/**
+ * Email `m` of the open conversation: in full, or as a line (who wrote it, its start, when). A
+ * click on the line opens it, and a click on an open email's header closes it again.
+ */
+function mailElement(m) {
+  const t = state.thread;
+  const card = document.createElement('section');
+  card.dataset.id = m.id;
+  if (!t.open.has(m.id)) {
+    card.className = 'mail closed' + (m.unread ? ' unread' : '');
+    card.innerHTML = '<div class="mail-line"><span class="from"></span><span class="snippet"></span><time></time></div>';
+    card.querySelector('.from').textContent = senderName(m.from);
+    card.querySelector('.snippet').textContent = m.snippet || '';
+    card.querySelector('time').textContent = shortDate(m.date);
+    card.querySelector('time').title = longDate(m.date);
+    card.addEventListener('click', () => toggleMail(m.id));
+    return card;
+  }
+  card.className = 'mail open';
+  card.innerHTML = '<header class="mail-head"><div class="meta">' +
+    '<div class="meta-row"><span class="from"></span><span class="meta-end"><time class="muted"></time></span></div>' +
+    '<div class="meta-row muted"><span class="to"></span></div><div class="reply-to" hidden></div></div>' +
+    '<div class="attachments" hidden></div></header><div class="mail-body"></div>';
+  card.querySelector('.from').textContent = m.from;
+  card.querySelector('time').textContent = longDate(m.date);
+  const to = [m.to, m.cc].filter(Boolean).join(', ');
+  card.querySelector('.to').textContent = to ? `to ${to}` : '';
+  // Answering quotes the email, so these wait for it to load. R, A and F answer the last one.
+  const last = m.id === t.messages[t.messages.length - 1]?.id;
+  const answer = iconButton(KINDS.reply.icon, last ? 'Reply (R)' : 'Reply', () => startReply('reply', m));
+  const more = iconButton(MORE_DOTS, 'Reply all, Forward', () => showAnswerMenu(more, (kind) => startReply(kind, m)));
+  answer.setAttribute('aria-label', 'Reply');
+  more.setAttribute('aria-label', 'More ways to answer');
+  for (const button of [answer, more]) {
+    button.classList.add('mini');
+    button.disabled = !t.fulls.has(m.id);
+  }
+  card.querySelector('.meta-end').append(answer, more);
+  // A click on the header closes the email, unless it's the only one, or text was selected.
+  card.querySelector('.mail-head').addEventListener('click', (e) => {
+    if (e.target.closest('button, a') || String(getSelection()) || t.messages.length < 2) return;
+    toggleMail(m.id);
+  });
+  const full = t.fulls.get(m.id);
+  if (full) fillMail(card, m, full);
+  else {
+    showBodyMessage('Loading…', card.querySelector('.mail-body'));
+    loadMail(m);
+  }
+  return card;
+}
+
+/** Opens or closes email `id` of the open conversation. */
+function toggleMail(id) {
+  const t = state.thread;
+  const m = t && t.messages.find((x) => x.id === id);
+  const card = mailCard(id);
+  if (!m || !card) return;
+  if (t.open.has(id)) t.open.delete(id);
+  else t.open.add(id);
+  card.replaceWith(mailElement(m));
+}
+
+/**
+ * Fills an open email's card once it's loaded: whom it went to, where replies go, its files and
+ * its text. Showing it marks it read, as in Gmail: also one that loaded while it was closed (it
+ * arrived while the window was behind another) and is opened now.
+ */
+function fillMail(card, m, full) {
+  const to = [full.to, full.cc].filter(Boolean).join(', ');
+  card.querySelector('.to').textContent = to ? `to ${to}` : '';
+  renderReplyTo(full, card.querySelector('.reply-to'));
+  renderAttachments(m, (full.attachments || []).filter((a) => !full.inline.includes(a)), card.querySelector('.attachments'));
+  showBody(full, card.querySelector('.mail-body'));
+  for (const button of card.querySelectorAll('.meta-end button')) button.disabled = false;
+  if (full.inline.length && !full.pictures) loadInlinePictures(m, full);
+  // The list's read state is the current one; Gmail's copy can be behind it.
+  const listed = (rowByKey(state.thread.key)?.messages || []).find((x) => x.id === m.id);
+  if (m.unread || listed?.unread) setUnread(m, false);
+}
+
+/** Loads email `m` of the open conversation (`get_message`) and shows it if it's open (`fillMail`). */
+async function loadMail(m) {
+  const t = state.thread;
+  if (!t || t.loading.has(m.id) || t.fulls.has(m.id)) return;
+  t.loading.add(m.id);
+  try {
+    const full = await invoke('get_message', ids(m));
+    if (state.thread !== t) return;
+    // An answer quoting it carries these, whether or not it's open.
+    full.inline = inlinePictures(full);
+    t.fulls.set(m.id, full);
+    const card = mailCard(m.id);
+    if (card && t.open.has(m.id)) fillMail(card, m, full);
+    // An answer opened from Drafts quotes its email once that's here; Reply answers the last one.
+    const reply = replyIn(t.key);
+    let end = false;
+    if (reply && !reply.full && reply.message.id === m.id) {
+      reply.full = full;
+      end = true;
+    }
+    if (m.id === t.messages[t.messages.length - 1]?.id) {
+      state.full = full;
+      end ||= !reply;
+    }
+    if (end) renderMessageEnd();
+  } catch (e) {
+    const card = state.thread === t && mailCard(m.id);
+    if (card && t.open.has(m.id)) showBodyMessage(`Couldn't load this message: ${e}`, card.querySelector('.mail-body'));
+  } finally {
+    t.loading.delete(m.id);
+  }
+}
+
+/** Draws the open emails again, in other colors: Original / Dark, or a theme change. */
+function redrawEmails() {
+  const t = state.thread;
+  if (!t) return;
+  for (const card of $('#m-thread').querySelectorAll('.mail.open')) {
+    const full = t.fulls.get(card.dataset.id);
+    if (full) showBody(full, card.querySelector('.mail-body'));
+  }
+}
+
+/** Closes the open conversation. A new message being written stays in the reader. */
 function clearReader() {
   leaveMessage();
   state.selected = null;
   state.current = null;
+  state.thread = null;
   state.full = null;
   state.openSeq++;
-  $('#m-body').replaceChildren();
+  $('#m-thread').replaceChildren();
   $('#m-end').replaceChildren();
   renderReaderViews();
 }
 
-/** The reader shows a new message being written, else the open email, else "Select a message". */
+/** The reader shows a new message being written, else the open conversation, else "Select a message". */
 function renderReaderViews() {
   const composing = Boolean(state.composing);
   $('#compose').hidden = !composing;
@@ -1257,6 +1687,8 @@ function newDraft(kind, from, message = null, full = null) {
 
 /** Messages being written here: new ones, then answers. */
 const localDrafts = () => [...state.drafts, ...state.replies.values()];
+/** The answer being written in conversation `key`, if any: one per conversation. */
+const replyIn = (key) => [...state.replies.values()].find((d) => d.message && threadKey(d.message) === key) || null;
 const draftById = (id) => localDrafts().find((d) => d.id === id) || null;
 /** A reply with nothing written in it yet: leaving its email drops it. */
 const isEmptyDraft = (draft) => !draft.body.trim() && !draft.files.length;
@@ -1283,14 +1715,14 @@ const draftCount = () =>
   localDrafts().filter((d) => (d.gmailId || hasContent(d)) && (!state.filter || d.from === state.filter)).length + gmailDrafts().length;
 
 /**
- * Leaving the open email: a reply to it with nothing written yet is dropped, else it's saved.
- * One opened from Gmail's Drafts is never dropped: what was written in it may be where the
+ * Leaving the open conversation: an answer in it with nothing written yet is dropped, else it's
+ * saved. One opened from Gmail's Drafts is never dropped: what was written in it may be where the
  * editor doesn't show it, or only in its recipients, and dropping it deletes it from Gmail.
  */
 function leaveMessage(nextKey = null) {
-  const m = state.current;
-  if (!m || keyOf(m) === nextKey) return;
-  const draft = state.replies.get(keyOf(m));
+  const c = state.current;
+  if (!c || c.key === nextKey) return;
+  const draft = replyIn(c.key);
   if (!draft) return;
   if (isEmptyDraft(draft) && !draft.fromGmail) {
     dropDraft(draft);
@@ -1416,7 +1848,7 @@ function setSaveState(draft, saveState) {
 /** What the editor says about saving: "Saving…", "Saved to Gmail", or "Not saved" with why. */
 function renderSaveState(draft) {
   const open = state.composing === draft ? $('#c-saved')
-    : draft.message && state.current && keyOf(state.current) === keyOf(draft.message) ? $('#m-end .save-state') : null;
+    : draft.message && state.current && state.current.key === threadKey(draft.message) ? $('#m-end .save-state') : null;
   if (!open) return;
   const [text, title] = {
     saving: ['Saving…', ''],
@@ -1436,17 +1868,25 @@ function openDraft(draft) {
   else openCompose(draft);
 }
 
-/** Shows the email an answer being written belongs to, with the answer under it. */
+/**
+ * Shows the conversation an answer being written belongs to, with the answer under it. It shows
+ * once the email it answers has loaded, for the quote, and then gets the cursor.
+ */
 async function openReplyDraft(draft) {
-  const key = keyOf(draft.message);
-  if (state.current && keyOf(state.current) === key && state.full) {
-    // Its email is already open, so `select` won't give it the email to quote and thread with.
-    draft.full ||= state.full;
-    renderMessageEnd();
-  } else {
-    await select(key, byKey(key) || draft.message);
+  const key = threadKey(draft.message);
+  if (state.current && state.current.key === key && state.thread) {
+    draft.full ||= state.thread.fulls.get(draft.message.id) || null;
+    if (draft.full) {
+      renderMessageEnd();
+      focusReply(draft);
+    } else {
+      draft.focusOnShow = true;
+      loadMail(draft.message);
+    }
+    return;
   }
-  focusReply(draft);
+  draft.focusOnShow = true;
+  await select(key, rowByKey(key) || conversations([draft.message])[0]);
 }
 
 /**
@@ -1488,7 +1928,7 @@ async function openGmailDraft(m) {
  * when it's saved, so the draft's own quote and the pictures in it are left out.
  */
 function draftFromGmail(account, o) {
-  const answered = o.answered && !state.replies.has(keyOf(o.answered)) ? o.answered : null;
+  const answered = o.answered && !replyIn(threadKey(o.answered)) ? o.answered : null;
   const to = parseAddresses(o.to);
   const cc = parseAddresses(o.cc);
   const forward = /^(fwd?|fw):/i.test(o.subject || '');
@@ -1544,9 +1984,10 @@ function openCompose(draft = null) {
   leaveMessage();
   state.selected = null;
   state.current = null;
+  state.thread = null;
   state.full = null;
   state.openSeq++;
-  $('#m-body').replaceChildren();
+  $('#m-thread').replaceChildren();
   $('#m-end').replaceChildren();
   state.composing = draft;
   renderCompose();
@@ -1873,22 +2314,44 @@ function onEditorKey(e, draft, container) {
   }
 }
 
-/** Starts answering the open email (or goes back to the answer already started) as `kind`. */
-function startReply(kind) {
-  const m = openMessage();
-  if (!m || !state.full || state.composing) return;
-  const key = keyOf(m);
-  let draft = state.replies.get(key);
+/**
+ * Starts answering an email of the open conversation as `kind`: `target`, else its last one, which
+ * R, A and F answer. A conversation has one answer being written: answering goes back to it, and
+ * answering another email of it moves the answer there, keeping what's written. The email shows
+ * in full while it's answered, as when its conversation opens: one that's still a line (it
+ * arrived while the window was behind another) opens, which marks it read.
+ */
+function startReply(kind, target = null) {
+  const c = openConversation();
+  const t = state.thread;
+  if (!c || !t || !t.messages.length || state.composing) return;
+  const m = target || t.messages[t.messages.length - 1];
+  const full = t.fulls.get(m.id);
+  if (!full) return;  // answering quotes the email, so it waits for it to load
+  const line = !t.open.has(m.id);
+  if (line) toggleMail(m.id);
+  let draft = replyIn(c.key);
   if (!draft) {
-    draft = newDraft(kind, m.account, { ...m }, state.full);
+    draft = newDraft(kind, c.account, { ...m }, full);
     setKind(draft, kind);
-    state.replies.set(key, draft);
+    state.replies.set(keyOf(m), draft);
     renderList();
+  } else if (draft.message.id !== m.id) {
+    state.replies.delete(keyOf(draft.message));
+    draft.message = { ...m };
+    draft.full = full;
+    setKind(draft, kind);
+    state.replies.set(keyOf(m), draft);
+    draftChanged(draft);
   } else if (draft.kind !== kind) {
     setKind(draft, kind);
   }
   renderMessageEnd();
   focusReply(draft);
+  // An email just opened gets its height a moment later (showBody), which moves the answer
+  // under it down: once it has, the reader goes down to the answer again.
+  const frame = line && mailCard(m.id)?.querySelector('iframe');
+  if (frame) whenParsed(frame, () => { if (state.thread === t && replyIn(t.key) === draft) focusReply(draft); });
 }
 
 /**
@@ -1933,19 +2396,28 @@ function subjectFor(kind, subject) {
   return /^re:/i.test(s) ? s : `Re: ${s}`;
 }
 
-/** Under the open email: Reply, Reply all and Forward, or the answer being written. */
+/**
+ * Under the open conversation: Reply, Reply all and Forward, once its last email has loaded, or
+ * the answer being written, once the email it answers has (it quotes it).
+ */
 function renderMessageEnd() {
-  const m = openMessage();
+  const c = openConversation();
   const end = $('#m-end');
-  if (!m || !state.full) {
+  const draft = c && replyIn(c.key);
+  if (draft && draft.full) end.replaceChildren(replyBox(draft));
+  else if (c && !draft && state.full) end.replaceChildren(answerButtons());
+  else {
     end.replaceChildren();
     return;
   }
-  const draft = state.replies.get(keyOf(m));
-  end.replaceChildren(draft ? replyBox(draft) : answerButtons());
   const text = end.querySelector('textarea');
   if (text) growText(text);
-  if (draft) renderSaveState(draft);
+  if (!draft) return;
+  renderSaveState(draft);
+  if (draft.focusOnShow) {
+    draft.focusOnShow = false;
+    focusReply(draft);
+  }
 }
 
 function answerButtons() {
@@ -2176,7 +2648,7 @@ function closeDraft(draft) {
   if (draft.message) {
     const key = keyOf(draft.message);
     if (state.replies.get(key) === draft) state.replies.delete(key);
-    if (state.current && keyOf(state.current) === key) renderMessageEnd();
+    if (state.current && state.current.key === threadKey(draft.message)) renderMessageEnd();
   } else {
     state.drafts = state.drafts.filter((d) => d !== draft);
     if (state.composing === draft) {
@@ -2201,15 +2673,25 @@ function reopenDraft(draft) {
     draftChanged(draft);
     return;
   }
-  const key = keyOf(draft.message);
-  state.replies.set(key, draft);
+  // Another answer was started in its conversation meanwhile: this one comes back as a message
+  // of its own, still in the conversation, without the quote.
+  const other = replyIn(threadKey(draft.message));
+  if (other && other !== draft) {
+    const { message, full } = draft;
+    draft.thread = { threadId: message.threadId, messageId: full?.messageId || '', references: full?.references || '' };
+    Object.assign(draft, { kind: 'new', message: null, full: null, carried: [] });
+    reopenDraft(draft);
+    return;
+  }
+  state.replies.set(keyOf(draft.message), draft);
   draftChanged(draft);
   renderList();
-  if (state.current && keyOf(state.current) === key) {
+  const conversation = threadKey(draft.message);
+  if (state.current && state.current.key === conversation) {
     renderMessageEnd();
     focusReply(draft);
-  } else if (byKey(key)) {
-    select(key);
+  } else if (rowByKey(conversation)) {
+    select(conversation);
   }
 }
 
@@ -2362,9 +2844,8 @@ const CANCEL_ICON = '<svg class="cancel" viewBox="0 0 24 24" aria-hidden="true">
 const SAVING_LABELS = '<span class="progress"></span><span class="sizer" aria-hidden="true"></span>';
 let lastSaveJob = 0;
 
-/** The open message's files, under its header: a chip each, and Save all for two or more. */
-function renderAttachments(m, attachments) {
-  const box = $('#m-attachments');
+/** An open email's files, under its header (`box`): a chip each, and Save all for two or more. */
+function renderAttachments(m, attachments, box) {
   box.replaceChildren(...attachments.map((a) => attachmentChip(m, a)));
   if (attachments.length > 1) {
     const all = document.createElement('button');
@@ -2573,14 +3054,16 @@ function cidKey(id) {
 }
 
 /**
- * Fetches the pictures the email shows in place (`inline_images`) once its text is on screen,
- * and points its `cid:` links at them: in the open email, and in later redraws (`full.pictures`,
+ * Fetches the pictures email `m` shows in place (`inline_images`) once its text is on screen,
+ * and points its `cid:` links at them: in its frame, and in later redraws (`full.pictures`,
  * which showBody uses).
  */
-async function loadInlinePictures(m, full, seq) {
+async function loadInlinePictures(m, full) {
+  const t = state.thread;
+  if (full.loadingPictures) return;
+  full.loadingPictures = true;
   try {
     const parts = await invoke('inline_images', { account: m.account, id: m.id, parts: full.inline.map((a) => a.part) });
-    if (seq !== state.openSeq) return;
     const pictures = new Map();
     for (const p of parts) {
       const a = full.inline.find((x) => x.part === p.part);
@@ -2589,10 +3072,13 @@ async function loadInlinePictures(m, full, seq) {
       if (a) pictures.set(cidKey(a.contentId), `data:${p.mimeType};base64,${data}`);
     }
     full.pictures = pictures;
-    const doc = $('#m-body iframe')?.contentDocument;
+    if (state.thread !== t) return;
+    const doc = mailCard(m.id)?.querySelector('iframe')?.contentDocument;
     if (doc && doc.URL === 'about:srcdoc') showInlinePictures(doc, pictures);
   } catch (e) {
-    if (seq === state.openSeq) toast(`Couldn't load the pictures in this email: ${e}`, 6000);
+    if (state.thread === t) toast(`Couldn't load the pictures in this email: ${e}`, 6000);
+  } finally {
+    full.loadingPictures = false;
   }
 }
 
@@ -2621,8 +3107,7 @@ function showInlinePictures(doc, pictures) {
  * (Reply-To), as Reply does: in grey at the sender's own site, in orange anywhere else, where a
  * phishing email collects the answers its sender's name invites.
  */
-function renderReplyTo(full) {
-  const line = $('#m-replyto');
+function renderReplyTo(full, line) {
   const sender = parseAddresses(full.from || '')[0];
   const same = (r) => sender && r.email.toLowerCase() === sender.email.toLowerCase();
   const others = parseAddresses(full.replyTo || '').filter((r) => r.email && !same(r));
@@ -2638,7 +3123,7 @@ function renderReplyTo(full) {
 // ---------- Links in the email ----------
 
 /**
- * The open email's links, by address, each with what its text shows instead when that's
+ * An email's links, by address, each with what its text shows instead when that's
  * another site or address than where it goes: "www.paypal.com" on a link to paypa1-secure.com.
  * Opening one of those asks first (`openEmailLink`). Senders' own tooltips on links go, so only
  * the line at the bottom of the reader (`showLinkAddress`) says where a link goes.
@@ -2699,7 +3184,7 @@ function addressParts(href) {
 
 /**
  * The line at the bottom of the reader saying where the link under the pointer goes, as a
- * browser's does. `url` is null off a link; links that aren't the open email's show nothing.
+ * browser's does. `url` is null off a link; links that aren't the open emails' show nothing.
  */
 function showLinkAddress(url) {
   const line = $('#link-address');
@@ -2742,22 +3227,21 @@ function closeLinkCheck() {
   state.linkCheck = null;
 }
 
-function showBodyMessage(text) {
+/** In an open email's place (`container`): "Loading…", or why it couldn't load. */
+function showBodyMessage(text, container) {
   const div = document.createElement('div');
   div.className = 'empty';
   div.textContent = text;
-  $('#m-body').replaceChildren(div);
+  container.replaceChildren(div);
 }
 
-/** Renders email HTML in a sandboxed iframe: no scripts, forms or popups. */
-function showBody(full) {
+/** Renders email HTML in a sandboxed iframe in `container`: no scripts, forms or popups. */
+function showBody(full, container) {
   let html;
   if (full.html) html = decodeBody(full.html);
   else if (full.text) html = `<pre class="plain">${linkify(escapeHtml(decodeBody(full.text)))}</pre>`;
   else html = '<p style="color:#888">(This message has no text.)</p>';
 
-  state.full = full;  // to show it again with other colors (Original / Dark, a theme change)
-  state.emailLinks = new Map();
   showLinkAddress(null);
   const dark = appIsDark() && !state.originalColors;
   const frame = document.createElement('iframe');
@@ -2788,7 +3272,8 @@ function showBody(full) {
     // Every link opens through <base target="_blank">, which the click handler below (or on
     // macOS, macos.rs) catches. A link's own target, such as _top, would get around that.
     for (const link of doc.querySelectorAll('a[target], area[target]')) link.removeAttribute('target');
-    state.emailLinks = checkLinks(doc);
+    // The conversation's links, all its open emails' together.
+    for (const [href, shown] of checkLinks(doc)) if (shown || !state.emailLinks.has(href)) state.emailLinks.set(href, shown);
     // Images can widen the layout as they arrive. Their `load` events don't bubble, so capture them.
     doc.addEventListener('load', () => scheduleFit(frame), true);
     doc.addEventListener('click', (e) => {
@@ -2815,7 +3300,7 @@ function showBody(full) {
     scheduleFit(frame);
     frame.loaded = true;
   });
-  $('#m-body').replaceChildren(frame);
+  container.replaceChildren(frame);
   watchHeight(frame);
 }
 
@@ -3031,23 +3516,25 @@ function decodeBody(body) {
 // ---------- Actions ----------
 
 /**
- * Runs an action on a message (the open one, or a row's from the right-click menu) and
- * offers Undo. If the open message left the folder on screen, the next one opens;
+ * Runs an action on a conversation (the open one, or a row's from its buttons or right-click
+ * menu) and offers Undo. If the open conversation left the folder on screen, the next one opens;
  * otherwise (e.g. Archive in All Mail) it stays open.
  */
-function act(kind, m = openMessage()) {
-  if (!m || !actionsFor(m).includes(kind)) return;
+function act(kind, c = openConversation()) {
+  if (!c || !actionsFor(c).includes(kind)) return;
   const action = ACTIONS[kind];
-  const wasOpen = Boolean(state.current) && keyOf(state.current) === keyOf(m);
-  const list = visible();
-  const index = list.findIndex((x) => keyOf(x) === keyOf(m));
+  const wasOpen = Boolean(state.current) && state.current.key === c.key;
+  const list = rows();
+  const index = list.findIndex((x) => x.key === c.key);
   const next = index >= 0 ? list[index + 1] || list[index - 1] : null;
+  // The same emails go back with Undo: by then some have left the lists.
+  const messages = conversationMessages(c);
 
-  const done = perform(m, action, () => action.run(m));
-  if (wasOpen && !byKey(keyOf(m))) {
-    if (next) select(keyOf(next)); else clearReader();
+  const done = perform(messages, action, () => action.run(c));
+  if (wasOpen && !rowByKey(c.key)) {
+    if (next) select(next.key); else clearReader();
   }
-  done.catch((e) => toast(`Couldn't ${action.verb} the message: ${e}`, 6000));
+  done.catch((e) => toast(`Couldn't ${action.verb} the conversation: ${e}`, 6000));
 
   toast(action.done, UNDO_MS, {
     label: 'Undo',
@@ -3055,11 +3542,11 @@ function act(kind, m = openMessage()) {
     run: async () => {
       let result;
       try { result = await done; } catch { return; }  // it failed and was already put back
-      const undo = action.undo(m, result);
+      const undo = action.undo(c, result);
       try {
-        await perform(m, undo, undo.run);
-        // Reopen the message if it was open and is back in the folder on screen.
-        if (wasOpen && byKey(keyOf(m))) select(keyOf(m));
+        await perform(messages, undo, undo.run);
+        // Reopen the conversation if it was open and is back in the folder on screen.
+        if (wasOpen && rowByKey(c.key)) select(c.key);
       } catch (e) {
         toast(`Couldn't undo: ${e}`, 6000);
       }
@@ -3068,29 +3555,38 @@ function act(kind, m = openMessage()) {
 }
 
 /**
- * Moves the message between folder lists right away, then runs `run` on Gmail.
- * Until Gmail answers, syncs keep the move applied; if Gmail fails, the move is reverted.
+ * Moves a conversation's `messages` between folder lists right away, and in the labels Gmail's
+ * copy of it has for them (`relabel`), then runs `run` on Gmail. Until Gmail answers, syncs keep
+ * the move applied; if Gmail fails, the move is reverted.
  */
-async function perform(m, move, run) {
-  const key = keyOf(m);
-  // The lists it's in now: a failed move puts it back in these only (Delete leaves the Inbox,
-  // Sent and All Mail, but an archived message was never in the Inbox).
-  const has = (list) => list.some((x) => keyOf(x) === key);
-  const held = move.leave.filter((folder) => has(state.lists[folder])
-    || (folder === 'inbox' && state.inboxExtra.has(key))
-    || (folder === 'all' && has(state.lists.search)));
-  const entry = { message: m, leave: move.leave, join: move.join };
-  state.pending.set(key, entry);
-  shift(m, move.leave, move.join);
+async function perform(messages, move, run) {
+  const moved = messages.map((m) => {
+    const key = keyOf(m);
+    // The lists it's in now: a failed move puts it back in these only (Delete leaves the Inbox,
+    // Sent and All Mail, but an archived message was never in the Inbox).
+    const has = (list) => list.some((x) => keyOf(x) === key);
+    const held = move.leave.filter((folder) => has(state.lists[folder])
+      || (folder === 'inbox' && state.inboxExtra.has(key))
+      || (folder === 'all' && has(state.lists.search)));
+    const join = typeof move.join === 'function' ? move.join(m) : move.join;
+    const entry = { message: m, leave: move.leave, join };
+    state.pending.set(key, entry);
+    shift(m, move.leave, join);
+    relabel(inCopy(m), move.leave, join);
+    return { m, key, held, join, entry };
+  });
   render();
   try {
     return await run();
   } catch (e) {
-    shift(m, move.join, held);
+    for (const { m, held, join } of moved) {
+      shift(m, join, held);
+      relabel(inCopy(m), join, held);
+    }
     render();
     throw e;
   } finally {
-    if (state.pending.get(key) === entry) state.pending.delete(key);
+    for (const { key, entry } of moved) if (state.pending.get(key) === entry) state.pending.delete(key);
   }
 }
 
@@ -3103,7 +3599,7 @@ async function perform(m, move, run) {
 function shift(m, leave, join) {
   const key = keyOf(m);
   if (leave.includes('inbox')) state.inboxExtra.delete(key);
-  if (join.includes('inbox')) state.inboxExtra.set(key, m.date);
+  if (join.includes('inbox')) state.inboxExtra.set(key, m);
   for (const folder of leave) state.lists[folder] = state.lists[folder].filter((x) => keyOf(x) !== key);
   for (const folder of join) {
     if (state.loaded[folder] && !state.lists[folder].some((x) => keyOf(x) === key)) {
@@ -3115,6 +3611,25 @@ function shift(m, leave, join) {
     state.searchLeft.add(key);
   }
   if (join.includes('all') && state.searchLeft.delete(key)) state.lists.search = withMessage(state.lists.search, m);
+}
+
+/**
+ * Marks conversation `c` read, every unread email of it, or unread: the email to come back to,
+ * its newest one in the list that the account didn't write (else its newest there), so its row
+ * turns unread. A row is unread by its emails in its own folder, so if that email isn't in the
+ * Inbox while the conversation is (the list is Sent, or search results that hold only an answer
+ * sent), its newest email there is marked too: an unread conversation counts in the Inbox, as in
+ * Gmail. In Trash a conversation is its part there, and the rest stays as it is.
+ */
+function setConversationUnread(c, unread) {
+  if (!unread) {
+    for (const m of conversationMessages(c)) if (m.unread) setUnread(m, false);
+    return;
+  }
+  setUnread(newestReceived(c.messages), true);
+  if (listName() === 'trash') return;
+  const inbox = state.lists.inbox.filter((m) => threadKey(m) === c.key);
+  if (inbox.length && !inbox.some((m) => m.unread)) setUnread(newestReceived(inbox), true);
 }
 
 /**
@@ -3138,17 +3653,27 @@ function setUnread(m, unread) {
     .finally(() => { if (state.pendingRead.get(key) === change) state.pendingRead.delete(key); });
 }
 
-/** Shows a message as read or unread in every list it's in (Inbox and All Mail, say). */
+/**
+ * Shows a message as read or unread in every list it's in (Inbox and All Mail, say), in Gmail's
+ * copy of its conversation, and on its conversation's row.
+ */
 function showUnread(key, unread) {
+  let conversation = null;
   for (const list of Object.values(state.lists)) {
-    for (const x of list) if (keyOf(x) === key) x.unread = unread;
+    for (const x of list) {
+      if (keyOf(x) !== key) continue;
+      x.unread = unread;
+      conversation = threadKey(x);
+    }
   }
-  if (state.current && keyOf(state.current) === key) state.current.unread = unread;
-  const row = $('#messages').querySelector(`li[data-key="${CSS.escape(key)}"]`);
-  if (row) {
-    row.classList.toggle('unread', unread);
-    setReadButton(row.querySelector('.row-actions [data-kind="read"]'), unread);
+  for (const t of [state.thread, state.threads.get(conversation)]) {
+    for (const x of t?.messages || []) {
+      if (keyOf(x) !== key) continue;
+      x.unread = unread;
+      conversation ||= threadKey(x);
+    }
   }
+  if (conversation) redrawRow(conversation);
   renderSidebar();
   renderActions();
 }
@@ -3166,17 +3691,18 @@ function runUndo() {
   if (state.undo) runToastAction();
 }
 
+/** J/K and the arrows: the next or previous conversation. */
 function move(delta) {
   if (listName() === 'drafts') return;
-  const list = visible();
+  const list = rows();
   if (!list.length) return;
-  const index = list.findIndex((m) => keyOf(m) === state.selected);
+  const index = list.findIndex((c) => c.key === state.selected);
   const nextIndex = index < 0 ? 0 : Math.min(list.length - 1, Math.max(0, index + delta));
-  if (nextIndex !== index) select(keyOf(list[nextIndex]));
+  if (nextIndex !== index) select(list[nextIndex].key);
 }
 
 /**
- * Scrolls the open message by about a screen, or `amount` px; `direction` is 1 (down) or -1 (up).
+ * Scrolls the open conversation by about a screen, or `amount` px; `direction` is 1 (down) or -1 (up).
  * The email's frame doesn't scroll (fitHeight), and Chromium doesn't pass its keys' scrolling on
  * to the reader, so keys in the email scroll the reader here. `native`: the key also went to
  * WebKit (macOS, in the email), which may scroll the reader itself; then this only scrolls if
@@ -3267,8 +3793,8 @@ function onKey(e, inMessage = false) {
     case '#': case 'Delete': act('trash'); break;
     case 'u': case 'U': case 'i': case 'I': {  // Shift+U / Shift+I, as in Gmail
       if (!e.shiftKey) return;
-      const m = openMessage();
-      if (m) setUnread(m, key.toLowerCase() === 'u');
+      const c = openConversation();
+      if (c) setConversationUnread(c, key.toLowerCase() === 'u');
       break;
     }
     case 'z': runUndo(); break;
@@ -3307,11 +3833,11 @@ function onContextMenu(e, frame = null) {
   }
   const gmailDraft = row && row.dataset.gmailDraft && byKey(row.dataset.gmailDraft);
   if (gmailDraft) groups.push([{ label: 'Open draft', run: () => openGmailDraft(gmailDraft) }]);
-  const m = row && byKey(row.dataset.key);
-  if (m) {
+  const c = row && row.dataset.key && rowByKey(row.dataset.key);
+  if (c) {
     groups.push(
-      [{ label: m.unread ? 'Mark as read' : 'Mark as unread', run: () => setUnread(m, !m.unread) }],
-      actionsFor(m).map((kind) => ({ label: ACTIONS[kind].label, danger: kind === 'trash', run: () => act(kind, m) })),
+      [{ label: c.unread ? 'Mark as read' : 'Mark as unread', run: () => setConversationUnread(c, !c.unread) }],
+      actionsFor(c).map((kind) => ({ label: ACTIONS[kind].label, danger: kind === 'trash', run: () => act(kind, c) })),
     );
   }
   const link = frame && e.target.closest && e.target.closest('a[href]');
@@ -3335,7 +3861,12 @@ function onContextMenu(e, frame = null) {
  * handlers inside the sandboxed frame, so macos.rs empties WebKit's menu and passes the click on.
  */
 function onEmailContextMenu(x, y) {
-  const frame = $('#m-body iframe');
+  // The open email under the click: a conversation can show several.
+  const inside = (f) => {
+    const b = f.getBoundingClientRect();
+    return x >= b.left && x < b.right && y >= b.top && y < b.bottom;
+  };
+  const frame = [...$('#m-thread').querySelectorAll('iframe')].find(inside);
   const doc = frame && frame.contentDocument;
   if (!doc) return;
   const box = frame.getBoundingClientRect();
@@ -3348,8 +3879,8 @@ function onEmailContextMenu(x, y) {
 
 /** macOS: a key pressed while the email has focus (see onEmailContextMenu). */
 function onEmailKey(key, code, shiftKey) {
-  const frame = $('#m-body iframe');
-  if (!frame || document.activeElement !== frame) return;
+  const frame = document.activeElement;
+  if (!frame || frame.tagName !== 'IFRAME' || !frame.closest('#m-thread')) return;
   const target = (frame.contentDocument && frame.contentDocument.activeElement) || frame;
   onKey({ key, code, shiftKey, target, preventDefault() {} }, true);
 }

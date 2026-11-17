@@ -3,6 +3,7 @@
 A small, fast desktop email app for Gmail on Windows and macOS: one inbox for all your Gmail accounts.
 
 - **Inbox, Sent, Drafts, All Mail and Trash** for all your accounts together, or for one account at a time
+- **Conversations** as in Gmail: an email and the answers to it, yours included, are one row in the list and read as one thread
 - **Search** all your accounts at once, with Gmail's search words such as `from:` and `has:attachment`
 - **Write, reply and forward** from any of your accounts, with attachments, and **Undo** for a few seconds after you click Send. Drafts are saved to your Gmail Drafts as you type
 - **New mail appears within seconds**, with no need to refresh, and a **notification** tells you about it when the app is in the background
@@ -10,9 +11,9 @@ A small, fast desktop email app for Gmail on Windows and macOS: one inbox for al
 - **Updates itself:** when a new version is out, Settings shows an **Update** button, and one click installs it
 - Light or dark look, or follow the system (Settings → Appearance). In dark mode emails are dark too, with one click back to their original colors
 - **Archive**, **Delete** (to Trash) and **Move to Inbox**, each with **Undo**
-- **Mark as unread** to come back to a message later
+- **Mark as unread** to come back to a conversation later
 - **Phishing checks:** point at a link to see where it goes, and a link that shows one site but goes to another asks before it opens. Attachments show their real type, and the reader says when replies would go to someone other than the sender
-- Point at a message in the list for quick **Archive**, **Delete** and **Mark as unread** buttons, or right-click it for its actions
+- Point at a conversation in the list for quick **Archive**, **Delete** and **Mark as unread** buttons, or right-click it for its actions
 - Older mail loads as you scroll
 - The installer is about 1.5 MB, and the app starts instantly
 
@@ -49,15 +50,15 @@ Click **Add account**, choose your Google account in the browser window that ope
 
 | Key | Action |
 | --- | --- |
-| `J` / `K` or `↓` / `↑` | Next / previous message |
-| `Space` / `PageDown`, `PageUp` | Scroll the open message |
+| `J` / `K` or `↓` / `↑` | Next / previous conversation |
+| `Space` / `PageDown`, `PageUp` | Scroll the open conversation |
 | `E` | Archive |
 | `#` or `Delete` | Delete (move to Trash) |
 | `Shift+U` / `Shift+I` | Mark as unread / read |
 | `Z` | Undo |
 | `/`, or `Cmd+F` on a Mac and `Ctrl+F` on Windows | Search |
 | `C` | New message |
-| `R` / `A` / `F` | Reply / Reply all / Forward |
+| `R` / `A` / `F` | Reply / Reply all / Forward the last email of the conversation |
 | `Cmd+Enter` on a Mac, `Ctrl+Enter` on Windows | Send, while writing |
 | `Esc` | Close the search |
 
@@ -66,7 +67,7 @@ Click **Add account**, choose your Google account in the browser window that ope
 Unified Mail runs entirely on your computer and talks only to Google, plus GitHub to check for updates. There are no servers of ours, no analytics and no tracking.
 
 - **Sign-ins** are kept in your system's secure storage: Windows Credential Manager or macOS Keychain. While an update installs on a Mac, they're passed to the new version in a file only your user account can read, which the new version deletes as it starts.
-- **Message lists** are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save, which go to your Downloads folder. Pictures an email loads from the internet stay in the system web view's cache, as in a browser.
+- **Message lists**, and the conversations their messages are in, are cached in the app's data folder so the app opens instantly. Message content isn't saved, except attachments you save, which go to your Downloads folder. Pictures an email loads from the internet stay in the system web view's cache, as in a browser.
 - **Emails you write** are saved as drafts in the account's Gmail Drafts as you type, and sent from Gmail when you click Send. They're not saved on your computer.
 - **Updates:** when it starts, every few hours, and when you open Settings, the app downloads a small file from GitHub to see whether a new version is out. GitHub sees your IP address, nothing else. An update installs only when you click **Update** in Settings, and only if it's signed by the developer.
 - **Notifications** show the sender and subject of new mail. Windows and macOS keep recent notifications in their notification center until you clear them.

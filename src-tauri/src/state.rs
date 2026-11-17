@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 use futures_util::{future::join_all, stream, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::gmail::{self, FullMessage, MessageSummary};
+use crate::gmail::{self, FullMessage, MessageSummary, Thread};
 use crate::keychain::Keychain;
 use crate::{mime, oauth};
 
@@ -26,6 +26,8 @@ const HAND_OVER_FILE: &str = "sign-ins-for-update.json";
 const CLIENT_FILE: &str = "client.json";
 const ACCOUNTS_FILE: &str = "accounts.json";
 const SETTINGS_FILE: &str = "settings.json";
+/// The conversations of the folders' messages (`AppState::threads`), for the rows' first paint.
+const THREADS_FILE: &str = "threads-cache.json";
 /// Newest messages shown per account in each folder.
 const PAGE_SIZE: u32 = 50;
 /// Parallel metadata requests per account (Gmail allows ~50/s per user).
@@ -33,6 +35,18 @@ const FETCH_CONCURRENCY: usize = 8;
 /// Summaries kept in memory for pages the caches don't hold (`AppState::recent`); past this
 /// many, they're all dropped and collected again.
 const RECENT_MAX: usize = 2000;
+/// Parallel conversation requests per account: each costs Gmail twice a message's metadata.
+const THREAD_CONCURRENCY: usize = 4;
+/// Conversations listed with their history ids at a folder's sync (`gmail::thread_history`):
+/// more than a page of messages can be in, since Gmail may order conversations by their newest
+/// message anywhere, not their newest in the folder.
+const HISTORY_SIZE: u32 = 2 * PAGE_SIZE;
+/// Parallel requests when a conversation's messages go to Trash or leave it one by one
+/// (`AppState::move_trash`).
+const MOVE_CONCURRENCY: usize = 8;
+/// Conversations kept in memory (`AppState::threads`); past this many, those the folders don't
+/// show are dropped.
+const THREADS_MAX: usize = 3000;
 /// Bytes of parts kept for emails being written (`AppState::parts`); past this, they're dropped.
 const PARTS_MAX: usize = 64 * 1024 * 1024;
 
@@ -159,6 +173,8 @@ type CarriedFile = (String, String, Arc<Vec<u8>>);
 #[derive(Serialize)]
 pub struct FolderResult {
     pub messages: Vec<MessageSummary>,
+    /// The conversations the messages are in, for their rows; one that couldn't be loaded is missing.
+    pub threads: Vec<Thread>,
     pub errors: Vec<AccountError>,
     /// For each account that synced: whether it has older messages than its newest page.
     pub more: HashMap<String, bool>,
@@ -173,15 +189,37 @@ pub struct OlderPage {
     pub more: bool,
     /// All Mail only: ids of these messages that are in the Inbox.
     pub inbox: Vec<String>,
+    /// The conversations the messages are in, as far as they're known already.
+    pub threads: Vec<Thread>,
+    /// The ids of the others, and of those known that are behind: the rows don't wait for them,
+    /// and the UI asks for them next (`AppState::load_threads`).
+    pub pending: Vec<String>,
     pub warning: Option<String>,
 }
 
-/// What Undo needs to know about a message moved to Trash.
+/// What Undo needs to know about a conversation an action moved: its messages (`ids`), and
+/// which of them were in the Inbox, in Sent and in Trash before.
 #[derive(Serialize)]
+pub struct ThreadMoved {
+    pub ids: Vec<String>,
+    pub inbox: Vec<String>,
+    pub sent: Vec<String>,
+    pub trash: Vec<String>,
+}
+
+/// Where Undo puts a conversation's messages back (`AppState::restore_thread`): out of Trash,
+/// into Trash, into the Inbox and out of it. A list left out moves nothing.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Trashed {
-    pub was_in_inbox: bool,
-    pub was_sent: bool,
+pub struct PutBack {
+    #[serde(default)]
+    pub untrash: Vec<String>,
+    #[serde(default)]
+    pub trash: Vec<String>,
+    #[serde(default)]
+    pub inbox: Vec<String>,
+    #[serde(default)]
+    pub archive: Vec<String>,
 }
 
 /// An email written in the app, to send from `account` (`AppState::send`).
@@ -284,6 +322,9 @@ pub struct AppState {
     expired: Mutex<HashSet<String>>,
     /// Current contents of each folder, for every account.
     cache: Mutex<HashMap<Folder, FolderCache>>,
+    /// The conversations of messages listed, keyed by `account/thread id`, so a sync fetches
+    /// only those that changed (`threads_of`). Locked after `cache`, never before it.
+    threads: Mutex<HashMap<String, Thread>>,
     /// Summaries of messages on pages the caches don't hold (search results, older pages), so
     /// searching again or scrolling back doesn't fetch them again. In memory only, keyed by
     /// `account/id`. Locked after `cache` or `reported_failures`, never before them.
@@ -300,8 +341,23 @@ pub struct AppState {
 /// One page of an account's folder: its messages, plus a warning if some couldn't be loaded.
 struct AccountSync {
     messages: Vec<MessageSummary>,
+    threads: Vec<Thread>,
+    /// Some of `threads` were fetched, so the conversations on disk are behind.
+    threads_changed: bool,
+    /// Conversations left to fetch (`OlderPage::pending`).
+    pending: Vec<String>,
     warning: Option<String>,
     more: bool,
+}
+
+/// The conversations of a page's messages (`AppState::threads_of`).
+struct PageThreads {
+    /// The copies there are, in the messages' order.
+    threads: Vec<Thread>,
+    /// Some were fetched just now.
+    fetched: bool,
+    /// The ids of those still to fetch, when the page didn't wait for them.
+    pending: Vec<String>,
 }
 
 impl AppState {
@@ -314,6 +370,7 @@ impl AppState {
                 (folder, cached.into_iter().map(|m| (cache_key(&m.account, &m.id), m)).collect())
             })
             .collect();
+        let threads: Vec<Thread> = read_json(&dir.join(THREADS_FILE)).unwrap_or_default();
         let state = Self {
             http: reqwest::Client::builder()
                 .user_agent("UnifiedMail/0.1")
@@ -329,6 +386,7 @@ impl AppState {
             refreshing: Mutex::new(HashMap::new()),
             expired: Mutex::new(HashSet::new()),
             cache: Mutex::new(cache),
+            threads: Mutex::new(threads.into_iter().map(|t| (cache_key(&t.account, &t.id), t)).collect()),
             recent: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
             parts: Mutex::new(HashMap::new()),
@@ -434,6 +492,8 @@ impl AppState {
             self.edit_cache(folder, |cache| cache.retain(|_, m| m.account != email));
         }
         self.recent.lock().unwrap().retain(|_, m| m.account != email);
+        self.threads.lock().unwrap().retain(|_, t| t.account != email);
+        self.save_threads();
         Ok(())
     }
 
@@ -483,6 +543,11 @@ impl AppState {
         sorted(&self.cache.lock().unwrap()[&folder])
     }
 
+    /// The conversations saved with the folders, for the rows' first paint.
+    pub fn cached_threads(&self) -> Vec<Thread> {
+        self.threads.lock().unwrap().values().cloned().collect()
+    }
+
     /// Syncs one folder of every account in parallel. An account that fails keeps its
     /// cached messages and is reported in `errors`.
     pub async fn refresh(&self, folder: Folder) -> FolderResult {
@@ -492,6 +557,8 @@ impl AppState {
 
         let mut errors = Vec::new();
         let mut more = HashMap::new();
+        let mut threads = Vec::new();
+        let mut threads_changed = false;
         let messages = {
             let mut caches = self.cache.lock().unwrap();
             let cache = caches.get_mut(&folder).expect("every folder has a cache");
@@ -500,6 +567,8 @@ impl AppState {
                 match result {
                     Ok(page) => {
                         more.insert(account.clone(), page.more);
+                        threads.extend(page.threads);
+                        threads_changed |= page.threads_changed;
                         cache.retain(|_, m| &m.account != account);
                         cache.extend(page.messages.into_iter().map(|m| (cache_key(&m.account, &m.id), m)));
                         if let Some(message) = page.warning {
@@ -516,7 +585,10 @@ impl AppState {
             sorted(cache)
         };
         let _ = write_json(&self.dir.join(folder.cache_file()), &messages);
-        FolderResult { messages, errors, more }
+        if threads_changed {
+            self.save_threads();
+        }
+        FolderResult { messages, threads, errors, more }
     }
 
     /// The account's next page of messages older than `before` (ms), for scrolling.
@@ -548,7 +620,14 @@ impl AppState {
             Ok(gmail::list_ids(&self.http, &token, &["INBOX"], false, Some(q), PAGE_SIZE).await?.ids)
         };
         let (page, inbox) = tokio::try_join!(self.sync_account(account, folder, Some(q)), inbox_ids)?;
-        Ok(OlderPage { messages: page.messages, more: page.more, inbox, warning: page.warning })
+        Ok(OlderPage {
+            messages: page.messages,
+            more: page.more,
+            inbox,
+            threads: page.threads,
+            pending: page.pending,
+            warning: page.warning,
+        })
     }
 
     /// Lists one page of the account's folder (the newest, or those matching `q`) and fetches
@@ -566,9 +645,20 @@ impl AppState {
                 None => Ok(gmail::Page { ids: Vec::new(), more: false }),
             }
         };
-        let (page, unread) = tokio::try_join!(
+        // A folder's newest page also asks which of its conversations changed since their copies
+        // were made, by anything, anywhere (`behind`). Without an answer they're still fetched
+        // for the messages the page lists, so a failure here doesn't fail the sync.
+        let history = async {
+            if q.is_some() || folder == Folder::Drafts {
+                return Ok(None);
+            }
+            let listed = gmail::thread_history(&self.http, &token, folder.labels(), trash, query.as_deref(), HISTORY_SIZE).await;
+            Ok::<_, String>(listed.ok())
+        };
+        let (page, unread, history) = tokio::try_join!(
             gmail::list_ids(&self.http, &token, folder.labels(), trash, query.as_deref(), PAGE_SIZE),
             unread_ids,
+            history,
         )?;
         let unread: HashSet<String> = unread.ids.into_iter().collect();
         let ids = page.ids;
@@ -648,8 +738,125 @@ impl AppState {
             for m in &mut messages {
                 m.draft = drafts.get(&m.id).cloned();
             }
+            return Ok(AccountSync {
+                messages,
+                threads: Vec::new(),
+                threads_changed: false,
+                pending: Vec::new(),
+                warning,
+                more: page.more,
+            });
         }
-        Ok(AccountSync { messages, warning, more: page.more })
+        // A folder's newest page waits for its conversations: after the first sync, only those
+        // that changed. Search results and older pages don't (`threads_of`).
+        let found = self.threads_of(account, token, &messages, history.as_ref(), q.is_none()).await;
+        leave_out_drafts(&mut messages, &found.threads);
+        Ok(AccountSync {
+            messages,
+            threads: found.threads,
+            threads_changed: found.fetched,
+            pending: found.pending,
+            warning,
+            more: page.more,
+        })
+    }
+
+    /// The conversations `messages` are in, for their rows. One needs fetching when it isn't
+    /// known yet, or when it's behind (`behind`): Gmail lists it with another history id than
+    /// its copy's (`history`, a folder's newest page: something in it changed), or the page has
+    /// a message it didn't have, or one it has as a draft. With `wait` they're fetched now; one
+    /// that can't be loaded is left out, or kept as it was, and tried again at the next sync,
+    /// and its row shows what the folder has of it. Without, the page would wait for up to
+    /// PAGE_SIZE requests, so it comes with the copies there are, and says which are `pending`.
+    async fn threads_of(
+        &self,
+        account: &str,
+        token: &str,
+        messages: &[MessageSummary],
+        history: Option<&HashMap<String, String>>,
+        wait: bool,
+    ) -> PageThreads {
+        let mut order: Vec<&str> = Vec::new();
+        let mut listed: HashMap<&str, Vec<&str>> = HashMap::new();
+        for m in messages.iter().filter(|m| !m.thread_id.is_empty()) {
+            let ids = listed.entry(m.thread_id.as_str()).or_default();
+            if ids.is_empty() {
+                order.push(&m.thread_id);
+            }
+            ids.push(&m.id);
+        }
+        let (mut found, stale) = {
+            let threads = self.threads.lock().unwrap();
+            let mut found = HashMap::new();
+            let mut stale = Vec::new();
+            for &id in &order {
+                let Some(thread) = threads.get(&cache_key(account, id)) else {
+                    stale.push(id.to_string());
+                    continue;
+                };
+                if behind(thread, &listed[id], history.and_then(|h| h.get(id)).map(String::as_str)) {
+                    stale.push(id.to_string());
+                }
+                found.insert(id.to_string(), thread.clone());
+            }
+            (found, stale)
+        };
+        let (fetched, pending) = match wait {
+            true => (self.fetch_threads(account, token, stale, history).await, Vec::new()),
+            false => (Vec::new(), stale),
+        };
+        let any = !fetched.is_empty();
+        for thread in fetched {
+            found.insert(thread.id.clone(), thread);
+        }
+        PageThreads { threads: order.iter().filter_map(|id| found.remove(*id)).collect(), fetched: any, pending }
+    }
+
+    /// Fetches conversations `ids` of `account`, a few at a time, and keeps them; one that can't
+    /// be loaded is left out. A copy is noted with the history id a listing just gave for it
+    /// (`history`), not the one it came with, so it's behind only once the listing says
+    /// something else: if the two ever disagree, that costs one more fetch, not one at every sync.
+    async fn fetch_threads(
+        &self,
+        account: &str,
+        token: &str,
+        ids: Vec<String>,
+        history: Option<&HashMap<String, String>>,
+    ) -> Vec<Thread> {
+        let http = &self.http;
+        let fetched: Vec<Option<Thread>> = stream::iter(ids)
+            .map(|id| async move { gmail::get_thread(http, token, account, &id).await.ok() })
+            .buffer_unordered(THREAD_CONCURRENCY)
+            .collect()
+            .await;
+        let mut fetched: Vec<Thread> = fetched.into_iter().flatten().collect();
+        for thread in &mut fetched {
+            if let Some(listed) = history.and_then(|h| h.get(&thread.id)) {
+                thread.history_id = listed.clone();
+            }
+        }
+        self.threads.lock().unwrap().extend(fetched.iter().map(|t| (cache_key(account, &t.id), t.clone())));
+        fetched
+    }
+
+    /// Fetches conversations `ids`, which a page of search results or of older messages came
+    /// without (`OlderPage::pending`): the UI asks for a few at a time, and stops once the page
+    /// isn't on screen any more. Those that can't be loaded are left out. These are the ones
+    /// that add up over a long session, so past THREADS_MAX the ones no folder shows are dropped
+    /// (the UI has what it was given).
+    pub async fn load_threads(&self, account: &str, ids: Vec<String>) -> Result<Vec<Thread>, String> {
+        let token = self.access_token(account).await?;
+        let fetched = self.fetch_threads(account, &token, ids, None).await;
+        self.trim_threads();
+        Ok(fetched)
+    }
+
+    /// Fetches conversation `id` to show, and keeps it for its row.
+    pub async fn get_thread(&self, account: &str, id: &str) -> Result<Thread, String> {
+        let token = self.access_token(account).await?;
+        let thread = gmail::get_thread(&self.http, &token, account, id).await?;
+        self.threads.lock().unwrap().insert(cache_key(account, id), thread.clone());
+        Ok(thread)
     }
 
     /// Fetches a message to show. The UI marks it read separately (`set_unread`).
@@ -681,46 +888,132 @@ impl AppState {
     pub async fn set_unread(&self, account: &str, id: &str, unread: bool) -> Result<(), String> {
         let token = self.access_token(account).await?;
         gmail::set_unread(&self.http, &token, id, unread).await?;
-        // The same message can be in several folders (Inbox and All Mail).
+        // The same message can be in several folders (Inbox and All Mail), and in its conversation.
         let key = cache_key(account, id);
-        for cache in self.cache.lock().unwrap().values_mut() {
-            if let Some(m) = cache.get_mut(&key) {
+        let thread = {
+            let mut caches = self.cache.lock().unwrap();
+            let mut thread = None;
+            for m in caches.values_mut().filter_map(|cache| cache.get_mut(&key)) {
                 m.unread = unread;
+                thread = Some(m.thread_id.clone());
+            }
+            thread
+        };
+        let mut threads = self.threads.lock().unwrap();
+        let conversations: Vec<&mut Thread> = match thread {
+            Some(thread) => threads.get_mut(&cache_key(account, &thread)).into_iter().collect(),
+            None => threads.values_mut().filter(|t| t.account == account).collect(),
+        };
+        for m in conversations.into_iter().flat_map(|t| t.messages.iter_mut()).filter(|m| m.id == id) {
+            m.unread = unread;
+        }
+        Ok(())
+    }
+
+    /// Archives conversation `thread`: none of its messages stays in the Inbox, as with Gmail's
+    /// Archive. Reports which were there, so Undo puts back just those.
+    pub async fn archive_thread(&self, account: &str, thread: &str) -> Result<ThreadMoved, String> {
+        let token = self.access_token(account).await?;
+        let moved = ThreadMoved::from_labels(&gmail::thread_labels(&self.http, &token, thread).await?);
+        gmail::modify_thread(&self.http, &token, thread, &[], &["INBOX"]).await?;
+        self.forget(account, &moved.ids, &[Folder::Inbox]);
+        self.edit_thread(account, thread, |t| relabel(t, None, &[], &["INBOX"]));
+        Ok(moved)
+    }
+
+    /// Moves conversation `thread` to Trash, every message of it, and reports which were in the
+    /// Inbox, in Sent and already in Trash, so Undo can put each back where it was.
+    pub async fn trash_thread(&self, account: &str, thread: &str) -> Result<ThreadMoved, String> {
+        let token = self.access_token(account).await?;
+        let moved = ThreadMoved::from_labels(&gmail::thread_labels(&self.http, &token, thread).await?);
+        gmail::trash_thread(&self.http, &token, thread).await?;
+        self.forget(account, &moved.ids, &[Folder::Inbox, Folder::Sent, Folder::All]);
+        self.edit_thread(account, thread, |t| relabel(t, None, &["TRASH"], &[]));
+        Ok(moved)
+    }
+
+    /// Move to Inbox in Trash: the messages of conversation `thread` that are in Trash leave it
+    /// (all of them do, so one request takes them out) for the Inbox (a draft among them only
+    /// leaves Trash: `to_inbox`); the rest of it stays where it is. Reports where they were, for
+    /// Undo.
+    pub async fn untrash_thread(&self, account: &str, thread: &str) -> Result<ThreadMoved, String> {
+        let token = self.access_token(account).await?;
+        let labels = gmail::thread_labels(&self.http, &token, thread).await?;
+        let moved = ThreadMoved::from_labels(&labels);
+        let emails = to_inbox(&labels, true);
+        gmail::untrash_thread(&self.http, &token, thread).await?;
+        gmail::modify_messages(&self.http, &token, &emails, &["INBOX"], &[]).await?;
+        self.forget(account, &moved.trash, &[Folder::Trash]);
+        self.edit_thread(account, thread, |t| {
+            relabel(t, None, &[], &["TRASH"]);
+            relabel(t, Some(&emails), &["INBOX"], &[]);
+        });
+        Ok(moved)
+    }
+
+    /// Move to Inbox in All Mail: the emails of conversation `thread` outside Trash and Spam go
+    /// to the Inbox, sent ones too, as with Gmail's own (`to_inbox`). Reports where its messages
+    /// were, so Undo takes out of the Inbox just the ones this put there.
+    pub async fn unarchive_thread(&self, account: &str, thread: &str) -> Result<ThreadMoved, String> {
+        let token = self.access_token(account).await?;
+        let labels = gmail::thread_labels(&self.http, &token, thread).await?;
+        let emails = to_inbox(&labels, false);
+        gmail::modify_messages(&self.http, &token, &emails, &["INBOX"], &[]).await?;
+        self.edit_thread(account, thread, |t| relabel(t, Some(&emails), &["INBOX"], &[]));
+        Ok(ThreadMoved::from_labels(&labels))
+    }
+
+    /// Puts a conversation's messages back where an action took them from (Undo): out of Trash
+    /// or into it, into the Inbox or out of it. What was in Trash before the action stays there,
+    /// and only the messages that moved leave the folders' caches.
+    pub async fn restore_thread(&self, account: &str, thread: &str, to: PutBack) -> Result<(), String> {
+        let token = self.access_token(account).await?;
+        self.move_trash(&token, thread, &to.untrash, false).await?;
+        self.move_trash(&token, thread, &to.trash, true).await?;
+        gmail::modify_messages(&self.http, &token, &to.inbox, &["INBOX"], &[]).await?;
+        gmail::modify_messages(&self.http, &token, &to.archive, &[], &["INBOX"]).await?;
+        self.forget(account, &to.untrash, &[Folder::Trash]);
+        self.forget(account, &to.trash, &[Folder::Inbox, Folder::Sent, Folder::All]);
+        self.forget(account, &to.archive, &[Folder::Inbox]);
+        self.edit_thread(account, thread, |t| {
+            relabel(t, Some(&to.untrash), &[], &["TRASH"]);
+            relabel(t, Some(&to.trash), &["TRASH"], &[]);
+            relabel(t, Some(&to.inbox), &["INBOX"], &[]);
+            relabel(t, Some(&to.archive), &[], &["INBOX"]);
+        });
+        Ok(())
+    }
+
+    /// Takes messages `ids` of conversation `thread` out of Trash, or moves them `into` it. One
+    /// request does it for a single message, and for the whole conversation where that comes to
+    /// the same (`whole_conversation`: nothing else of it is in Trash, or outside it), which is
+    /// the usual case and moves all of it or none. Otherwise each message takes a request of its
+    /// own, a few at a time; if one fails, others may have moved.
+    async fn move_trash(&self, token: &str, thread: &str, ids: &[String], into: bool) -> Result<(), String> {
+        async fn one(http: &reqwest::Client, token: &str, id: &str, into: bool) -> Result<(), String> {
+            match into {
+                true => gmail::trash_message(http, token, id).await,
+                false => gmail::untrash_message(http, token, id).await,
             }
         }
-        Ok(())
-    }
-
-    pub async fn archive(&self, account: &str, id: &str) -> Result<(), String> {
-        let token = self.access_token(account).await?;
-        gmail::archive(&self.http, &token, id).await?;
-        self.forget(account, id, &[Folder::Inbox]);
-        Ok(())
-    }
-
-    /// Moves to Trash and reports whether the message was in the Inbox, so Undo can put it back there.
-    pub async fn trash(&self, account: &str, id: &str) -> Result<Trashed, String> {
-        let token = self.access_token(account).await?;
-        let labels = gmail::labels(&self.http, &token, id).await?;
-        let was_in_inbox = labels.iter().any(|l| l == "INBOX");
-        let was_sent = labels.iter().any(|l| l == "SENT");
-        gmail::trash(&self.http, &token, id).await?;
-        self.forget(account, id, &[Folder::Inbox, Folder::Sent, Folder::All]);
-        Ok(Trashed { was_in_inbox, was_sent })
-    }
-
-    /// Undoes Archive or Delete, or restores from Trash: optionally takes the message out of
-    /// Trash, then optionally puts it back in the Inbox.
-    pub async fn restore(&self, account: &str, id: &str, from_trash: bool, to_inbox: bool) -> Result<(), String> {
-        let token = self.access_token(account).await?;
-        if from_trash {
-            gmail::untrash(&self.http, &token, id).await?;
-            self.forget(account, id, &[Folder::Trash]);
+        let http = &self.http;
+        match ids {
+            [] => return Ok(()),
+            [id] => return one(http, token, id, into).await,
+            _ => {}
         }
-        if to_inbox {
-            gmail::move_to_inbox(&self.http, &token, id).await?;
+        if whole_conversation(&gmail::thread_labels(http, token, thread).await?, ids, into) {
+            return match into {
+                true => gmail::trash_thread(http, token, thread).await,
+                false => gmail::untrash_thread(http, token, thread).await,
+            };
         }
-        Ok(())
+        let moved: Vec<Result<(), String>> = stream::iter(ids.to_vec())
+            .map(|id| async move { one(http, token, &id, into).await })
+            .buffer_unordered(MOVE_CONCURRENCY)
+            .collect()
+            .await;
+        moved.into_iter().collect()
     }
 
     /// Sends an email written in the app and returns its id. A draft saved in Gmail
@@ -729,12 +1022,19 @@ impl AppState {
     pub async fn send(&self, draft: Draft) -> Result<String, String> {
         let (account, draft_id) = (draft.account.clone(), draft.draft_id.clone());
         let (raw, thread, token) = self.write_email(draft, true).await?;
-        let Some(id) = draft_id else {
-            return gmail::send_email(&self.http, &token, &raw, thread.as_deref()).await;
+        let sent = match draft_id {
+            None => gmail::send_email(&self.http, &token, &raw, thread.as_deref()).await?,
+            Some(id) => {
+                let saved = gmail::save_draft(&self.http, &token, Some(&id), &raw, thread.as_deref()).await?;
+                let sent = gmail::send_draft(&self.http, &token, &saved.id).await?;
+                self.forget_draft(&account, &[&id, &saved.id]);
+                sent
+            }
         };
-        let saved = gmail::save_draft(&self.http, &token, Some(&id), &raw, thread.as_deref()).await?;
-        let sent = gmail::send_draft(&self.http, &token, &saved.id).await?;
-        self.forget_draft(&account, &[&id, &saved.id]);
+        // The conversation it answers has one more message: its row counts it at the next sync.
+        if let Some(thread) = thread {
+            self.threads.lock().unwrap().remove(&cache_key(&account, &thread));
+        }
         Ok(sent)
     }
 
@@ -869,14 +1169,58 @@ impl AppState {
             .collect()
     }
 
-    /// Drops a message from folders it just left. Folders it joined pick it up on their next sync.
-    fn forget(&self, account: &str, id: &str, folders: &[Folder]) {
-        let key = cache_key(account, id);
+    /// Drops messages `ids` from the caches of folders they just left. Folders they joined pick
+    /// them up on their next sync.
+    fn forget(&self, account: &str, ids: &[String], folders: &[Folder]) {
+        if ids.is_empty() {
+            return;
+        }
         for &folder in folders {
             self.edit_cache(folder, |cache| {
-                cache.remove(&key);
+                for id in ids {
+                    cache.remove(&cache_key(account, id));
+                }
             });
         }
+    }
+
+    /// Changes the copy kept of conversation `thread`, if there is one: an action notes there
+    /// what it did to the messages' labels (`relabel`), so the rows go on counting them rightly
+    /// until a sync fetches the conversation again (Gmail gave it a new history id).
+    fn edit_thread(&self, account: &str, thread: &str, edit: impl FnOnce(&mut Thread)) {
+        if let Some(thread) = self.threads.lock().unwrap().get_mut(&cache_key(account, thread)) {
+            edit(thread);
+        }
+    }
+
+    /// The keys of the conversations that the folders' messages are in.
+    fn shown_threads(&self) -> HashSet<String> {
+        let caches = self.cache.lock().unwrap();
+        caches.values().flat_map(|cache| cache.values()).map(|m| cache_key(&m.account, &m.thread_id)).collect()
+    }
+
+    /// Past THREADS_MAX conversations in memory, drops those the folders don't show: search
+    /// results' and older pages'.
+    fn trim_threads(&self) {
+        if self.threads.lock().unwrap().len() <= THREADS_MAX {
+            return;
+        }
+        let shown = self.shown_threads();
+        self.threads.lock().unwrap().retain(|key, _| shown.contains(key));
+    }
+
+    /// Writes the conversations of the folders' messages to disk, for the next launch's first
+    /// paint. Others stay in memory, until there are more than THREADS_MAX.
+    fn save_threads(&self) {
+        let shown = self.shown_threads();
+        let saved: Vec<Thread> = {
+            let mut threads = self.threads.lock().unwrap();
+            if threads.len() > THREADS_MAX {
+                threads.retain(|key, _| shown.contains(key));
+            }
+            threads.iter().filter(|(key, _)| shown.contains(*key)).map(|(_, t)| t.clone()).collect()
+        };
+        let _ = write_json(&self.dir.join(THREADS_FILE), &saved);
     }
 
     fn edit_cache(&self, folder: Folder, edit: impl FnOnce(&mut FolderCache)) {
@@ -990,6 +1334,69 @@ impl AppState {
 /// What a command for an account that needs signing in again says.
 fn expired_message(problem: &str, account: &str) -> String {
     format!("{problem} {account}. Click Reconnect above the message list to sign in again.")
+}
+
+impl ThreadMoved {
+    fn from_labels(messages: &[(String, Vec<String>)]) -> Self {
+        let with = |label: &str| messages.iter().filter(|(_, labels)| labels.iter().any(|l| l == label)).map(|(id, _)| id.clone()).collect();
+        Self { ids: messages.iter().map(|(id, _)| id.clone()).collect(), inbox: with("INBOX"), sent: with("SENT"), trash: with("TRASH") }
+    }
+}
+
+/// The messages of a conversation that Move to Inbox puts in the Inbox, given each one's labels:
+/// in Trash those there, elsewhere those outside Trash and Spam, sent ones too, as Gmail's does.
+/// Never its drafts, which `threads.modify` would label as well: a folder lists what has its
+/// label, so a draft with the Inbox's would be an email there (`leave_out_drafts`).
+fn to_inbox(messages: &[(String, Vec<String>)], in_trash: bool) -> Vec<String> {
+    let has = |labels: &[String], label: &str| labels.iter().any(|l| l == label);
+    messages
+        .iter()
+        .filter(|(_, labels)| !has(labels, "DRAFT"))
+        .filter(|(_, labels)| if in_trash { has(labels, "TRASH") } else { !has(labels, "TRASH") && !has(labels, "SPAM") })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Whether the copy of a conversation is behind a page that lists `listed` of its messages.
+/// Gmail lists the conversation with another history id than the copy's (`history`, when the
+/// page asked): something in it changed, such as an answer sent from a phone, an email deleted
+/// or read elsewhere. Or the copy lacks one of the messages (a new answer), or has one as a
+/// draft: a folder other than Drafts lists a draft's message once it's been sent, or while it
+/// has the folder's label; fetching the conversation again tells which, and `leave_out_drafts`
+/// takes the second out of the page.
+fn behind(thread: &Thread, listed: &[&str], history: Option<&str>) -> bool {
+    history.is_some_and(|id| id != thread.history_id)
+        || listed.iter().any(|id| !thread.messages.iter().any(|m| m.id == *id && !m.is_draft()))
+}
+
+/// Adds and removes Gmail labels in the copy of a conversation, on its messages `ids` (None:
+/// all of them): what an action just did at Gmail. Only the labels the copy keeps count.
+fn relabel(thread: &mut Thread, ids: Option<&[String]>, add: &[&str], remove: &[&str]) {
+    for m in thread.messages.iter_mut().filter(|m| ids.is_none_or(|ids| ids.contains(&m.id))) {
+        m.labels.retain(|l| !remove.contains(&l.as_str()));
+        for label in add {
+            if !m.labels.iter().any(|l| l == label) {
+                m.labels.push(label.to_string());
+            }
+        }
+    }
+}
+
+/// Whether taking messages `ids` of a conversation (`messages`, each with its labels) out of
+/// Trash, or moving them `into` it, comes to the same as doing that to the whole conversation:
+/// none of its other messages is in Trash, or outside it.
+fn whole_conversation(messages: &[(String, Vec<String>)], ids: &[String], into: bool) -> bool {
+    messages.iter().filter(|(_, labels)| labels.iter().any(|l| l == "TRASH") != into).all(|(id, _)| ids.contains(id))
+}
+
+/// Takes the drafts out of a folder's page of messages: a draft isn't one of the folder's
+/// emails, even with its label (Move to Inbox in Gmail on the web labels a conversation's draft
+/// too), and would show in its conversation as an email, counted and answered. `threads`, the
+/// conversations of the page's messages, tell which they are. Drafts are listed in Drafts.
+fn leave_out_drafts(messages: &mut Vec<MessageSummary>, threads: &[Thread]) {
+    let drafts: HashSet<&str> =
+        threads.iter().flat_map(|t| &t.messages).filter(|m| m.is_draft()).map(|m| m.id.as_str()).collect();
+    messages.retain(|m| !drafts.contains(m.id.as_str()));
 }
 
 fn cache_key(account: &str, id: &str) -> String {
@@ -1175,6 +1582,193 @@ mod tests {
         assert!(error.starts_with("The sign-in has expired for a@example.com"), "{error}");
         assert!(state.refresh_tokens.lock().unwrap().is_empty(), "the keychain wasn't read");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn undo_knows_where_a_conversation_was() {
+        let moved = ThreadMoved::from_labels(&[
+            ("a".into(), vec!["INBOX".into(), "UNREAD".into()]),
+            ("b".into(), vec!["SENT".into()]),
+            ("c".into(), vec!["INBOX".into(), "SENT".into()]),
+        ]);
+        assert_eq!(moved.ids, ["a", "b", "c"]);
+        assert_eq!(moved.inbox, ["a", "c"]);
+        assert_eq!(moved.sent, ["b", "c"]);
+        assert!(moved.trash.is_empty());
+    }
+
+    #[test]
+    fn move_to_inbox_leaves_drafts_alone() {
+        let message = |id: &str, labels: &[&str]| (id.to_string(), labels.iter().map(|l| l.to_string()).collect::<Vec<_>>());
+        let messages = [
+            message("received", &[]),
+            message("sent", &["SENT"]),
+            message("draft", &["DRAFT"]),
+            message("trashed", &["TRASH"]),
+            message("trashed-draft", &["TRASH", "DRAFT"]),
+            message("spam", &["SPAM"]),
+        ];
+        // From All Mail: the conversation's emails outside Trash and Spam, sent ones too.
+        assert_eq!(to_inbox(&messages, false), ["received", "sent"]);
+        // From Trash: its emails there.
+        assert_eq!(to_inbox(&messages, true), ["trashed"]);
+    }
+
+    #[test]
+    fn one_request_moves_a_conversation_when_all_of_it_moves() {
+        let message = |id: &str, labels: &[&str]| (id.to_string(), labels.iter().map(|l| l.to_string()).collect::<Vec<_>>());
+        let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        // Undo of Delete: all of it is in Trash, and all of it comes out.
+        let deleted = [message("a", &["TRASH"]), message("b", &["TRASH", "SENT"])];
+        assert!(whole_conversation(&deleted, &ids(&["a", "b"]), false));
+        // "a" was in Trash before the conversation was deleted, and stays there.
+        assert!(!whole_conversation(&deleted, &ids(&["b"]), false));
+        // Undo of Move to Inbox in Trash: all of it goes back, or a part of it does.
+        let restored = [message("a", &["INBOX"]), message("b", &["SENT"])];
+        assert!(whole_conversation(&restored, &ids(&["a", "b"]), true));
+        assert!(!whole_conversation(&restored, &ids(&["a"]), true));
+        // What's in Trash already doesn't have to be among those that go there.
+        let partly = [message("a", &["TRASH"]), message("b", &["INBOX"])];
+        assert!(whole_conversation(&partly, &ids(&["b"]), true));
+    }
+
+    #[test]
+    fn an_action_leaves_the_rest_of_a_conversation_where_it_is() {
+        let dir = scratch("forget");
+        let state = AppState::load(dir.clone());
+        let listed = |id: &str| MessageSummary {
+            account: "a@example.com".into(),
+            id: id.into(),
+            thread_id: "t1".into(),
+            from: String::new(),
+            to: None,
+            subject: String::new(),
+            snippet: String::new(),
+            date: 0,
+            unread: false,
+            draft: None,
+            has_files: Some(false),
+        };
+        let message = |id: &str, labels: &[&str]| gmail::ThreadMessage {
+            id: id.into(),
+            from: String::new(),
+            to: String::new(),
+            cc: String::new(),
+            subject: String::new(),
+            snippet: String::new(),
+            date: 0,
+            unread: false,
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+        };
+        let key = |id: &str| cache_key("a@example.com", id);
+        for folder in [Folder::Inbox, Folder::All] {
+            state.cache.lock().unwrap().get_mut(&folder).unwrap().extend([(key("m1"), listed("m1")), (key("m2"), listed("m2"))]);
+        }
+        let thread = Thread {
+            account: "a@example.com".into(),
+            id: "t1".into(),
+            history_id: "100".into(),
+            messages: vec![message("m1", &["INBOX"]), message("m2", &["INBOX", "SENT"])],
+        };
+        state.threads.lock().unwrap().insert(key("t1"), thread);
+
+        // Undo of Move to Inbox in Trash, where only m1 had been: it goes back there.
+        let back = ["m1".to_string()];
+        state.forget("a@example.com", &back, &[Folder::Inbox, Folder::Sent, Folder::All]);
+        state.edit_thread("a@example.com", "t1", |t| {
+            relabel(t, Some(&back), &["TRASH"], &[]);
+            relabel(t, Some(&back), &[], &["INBOX"]);
+        });
+        // The email that never left stays in the folders' caches, and the copy is kept.
+        let inbox: Vec<String> = state.cached(Folder::Inbox).into_iter().map(|m| m.id).collect();
+        assert_eq!(inbox, ["m2"]);
+        assert_eq!(state.cached(Folder::All).len(), 1);
+        let labels: Vec<Vec<String>> = state.cached_threads().remove(0).messages.into_iter().map(|m| m.labels).collect();
+        assert_eq!(labels, [vec!["TRASH"], vec!["INBOX", "SENT"]]);
+        // Every message of it, and a label that's there already isn't added twice.
+        state.edit_thread("a@example.com", "t1", |t| relabel(t, None, &["TRASH"], &["INBOX"]));
+        let labels: Vec<Vec<String>> = state.cached_threads().remove(0).messages.into_iter().map(|m| m.labels).collect();
+        assert_eq!(labels, [vec!["TRASH"], vec!["SENT", "TRASH"]]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_draft_with_a_folders_label_is_not_its_email() {
+        let message = |id: &str, labels: &[&str]| gmail::ThreadMessage {
+            id: id.into(),
+            from: String::new(),
+            to: String::new(),
+            cc: String::new(),
+            subject: String::new(),
+            snippet: String::new(),
+            date: 0,
+            unread: false,
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+        };
+        let thread = Thread {
+            account: "a@example.com".into(),
+            id: "t1".into(),
+            history_id: "100".into(),
+            messages: vec![message("m1", &["INBOX"]), message("m2", &["DRAFT", "INBOX"])],
+        };
+        // The copy has what the page lists.
+        assert!(!behind(&thread, &["m1"], None));
+        // A new answer.
+        assert!(behind(&thread, &["m1", "m3"], None));
+        // The page lists what the copy has as a draft: it's fetched again, in case it was sent.
+        assert!(behind(&thread, &["m1", "m2"], None));
+        // Gmail lists the conversation as it was when the copy was made, or as changed since:
+        // an answer sent from a phone, which the Inbox's page doesn't list.
+        assert!(!behind(&thread, &["m1"], Some("100")));
+        assert!(behind(&thread, &["m1"], Some("101")));
+
+        let listed = |id: &str| MessageSummary {
+            account: "a@example.com".into(),
+            id: id.into(),
+            thread_id: "t1".into(),
+            from: String::new(),
+            to: None,
+            subject: String::new(),
+            snippet: String::new(),
+            date: 0,
+            unread: false,
+            draft: None,
+            has_files: Some(false),
+        };
+        // Still a draft in the copy just fetched: the page leaves it out.
+        let mut page = vec![listed("m1"), listed("m2")];
+        leave_out_drafts(&mut page, &[thread]);
+        assert_eq!(page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m1"]);
+    }
+
+    #[test]
+    fn conversations_on_disk_are_the_folders_own() {
+        let dir = scratch("threads");
+        let state = AppState::load(dir.clone());
+        let listed = MessageSummary {
+            account: "a@example.com".into(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            from: String::new(),
+            to: None,
+            subject: String::new(),
+            snippet: String::new(),
+            date: 0,
+            unread: false,
+            draft: None,
+            has_files: Some(false),
+        };
+        state.cache.lock().unwrap().get_mut(&Folder::Inbox).unwrap().insert(cache_key("a@example.com", "m1"), listed);
+        let thread = |id: &str| {
+            let thread = Thread { account: "a@example.com".into(), id: id.into(), history_id: String::new(), messages: Vec::new() };
+            (cache_key("a@example.com", id), thread)
+        };
+        state.threads.lock().unwrap().extend([thread("t1"), thread("t2")]);
+        state.save_threads();
+        // A search's conversation (t2) stays in memory only.
+        let saved: Vec<String> = AppState::load(dir.clone()).threads.lock().unwrap().keys().cloned().collect();
+        assert_eq!(saved, ["a@example.com/t1"]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

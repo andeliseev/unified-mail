@@ -4,6 +4,9 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Conversations, as in Gmail: an email and the answers to it are now one row in the list, saying who wrote them and how many emails there are ("Anna, me 3"). Opening it shows the whole conversation, your own replies included: earlier emails as a line each (click one to read it), the newest and the unread ones in full. An answer you send appears in it, and so does one that arrives while you read.
+- Archive, Delete and Move to Inbox act on the whole conversation, as in Gmail, and Undo puts it back as it was. Reply, Reply all and Forward at the end, and R, A and F, answer its last email; the arrow next to any email's date answers that one.
+- The unread count on Inbox and on the app's icon counts conversations, as Gmail does.
 - Windows: the app's icon in the taskbar is now as big as other apps' icons.
 
 ## 0.2.12 (2026-11-12)

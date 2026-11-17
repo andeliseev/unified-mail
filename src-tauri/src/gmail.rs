@@ -48,6 +48,44 @@ pub struct MessageSummary {
     pub has_files: Option<bool>,
 }
 
+/// A conversation (Gmail's thread): its messages, oldest first, without their bodies. Its row
+/// counts them and names who wrote them; the reader lists them. Cached on disk with the folders.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Thread {
+    pub account: String,
+    pub id: String,
+    /// Gmail's history id of the conversation when this copy was made: it gets a new one
+    /// whenever anything in it changes (`thread_history`). Empty in copies saved without it.
+    #[serde(default)]
+    pub history_id: String,
+    pub messages: Vec<ThreadMessage>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMessage {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub cc: String,
+    pub subject: String,
+    pub snippet: String,
+    /// Milliseconds since the Unix epoch.
+    pub date: i64,
+    pub unread: bool,
+    /// Which of INBOX, SENT, DRAFT, TRASH and SPAM it has: drafts aren't shown in the
+    /// conversation, and what's in Trash shows only there.
+    pub labels: Vec<String>,
+}
+
+impl ThreadMessage {
+    /// A draft: a message of its conversation at Gmail, but not one of its emails yet.
+    pub fn is_draft(&self) -> bool {
+        self.labels.iter().any(|l| l == "DRAFT")
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FullMessage {
@@ -345,27 +383,147 @@ pub async fn get_full(http: &Client, token: &str, id: &str) -> Result<FullMessag
     Ok(message)
 }
 
-/// Labels currently on a message.
-pub async fn labels(http: &Client, token: &str, id: &str) -> Result<Vec<String>, String> {
+/// The labels of Gmail's that a conversation's messages keep (`ThreadMessage::labels`).
+const THREAD_LABELS: [&str; 5] = ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM"];
+
+/// Conversation `id` of `account`: every message in it, oldest first, without bodies.
+pub async fn get_thread(http: &Client, token: &str, account: &str, id: &str) -> Result<Thread, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Labels {
+    struct RawThread {
+        #[serde(default)]
+        history_id: String,
+        #[serde(default)]
+        messages: Vec<RawMessage>,
+    }
+    check_id(id)?;
+    let url = format!(
+        "{API}/threads/{id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc\
+         &metadataHeaders=Subject&fields=historyId,messages(id,labelIds,snippet,internalDate,payload/headers)"
+    );
+    let raw: RawThread = get_json(http, token, &url).await?;
+    let mut messages: Vec<ThreadMessage> = raw.messages.into_iter().map(thread_message).collect();
+    messages.sort_by_key(|m| m.date);
+    Ok(Thread { account: account.to_string(), id: id.to_string(), history_id: raw.history_id, messages })
+}
+
+/// The history ids of the newest conversations that have messages carrying all of `labels` (and
+/// matching the Gmail search `q`, if any), by conversation id. Gmail gives a conversation a new
+/// one whenever anything in it changes: a message arrives, is sent or deleted, read or labelled,
+/// here or anywhere else. So a copy made at another history id is behind (`Thread::history_id`).
+pub async fn thread_history(
+    http: &Client,
+    token: &str,
+    labels: &[&str],
+    include_spam_trash: bool,
+    q: Option<&str>,
+    max: u32,
+) -> Result<HashMap<String, String>, String> {
+    #[derive(Deserialize)]
+    struct List {
+        #[serde(default)]
+        threads: Vec<Listed>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Listed {
+        id: String,
+        #[serde(default)]
+        history_id: String,
+    }
+    let mut query: Vec<(&str, String)> = labels.iter().map(|l| ("labelIds", l.to_string())).collect();
+    query.push(("maxResults", max.to_string()));
+    query.push(("fields", "threads(id,historyId)".into()));
+    if include_spam_trash {
+        query.push(("includeSpamTrash", "true".into()));
+    }
+    if let Some(q) = q {
+        query.push(("q", q.to_string()));
+    }
+    let resp = send(http.get(format!("{API}/threads")).bearer_auth(token).query(&query)).await?;
+    let list: List = parse_json(resp).await?;
+    // One listed without its history id says nothing about its copy.
+    Ok(list.threads.into_iter().filter(|t| !t.history_id.is_empty()).map(|t| (t.id, t.history_id)).collect())
+}
+
+fn thread_message(raw: RawMessage) -> ThreadMessage {
+    let headers = raw.payload.map(|p| p.headers).unwrap_or_default();
+    ThreadMessage {
+        id: raw.id,
+        from: header(&headers, "From"),
+        to: header(&headers, "To"),
+        cc: header(&headers, "Cc"),
+        subject: header(&headers, "Subject"),
+        snippet: unescape_html(&raw.snippet),
+        date: parse_date(raw.internal_date.as_ref()),
+        unread: raw.label_ids.iter().any(|l| l == "UNREAD"),
+        labels: raw.label_ids.into_iter().filter(|l| THREAD_LABELS.contains(&l.as_str())).collect(),
+    }
+}
+
+/// The labels of each message of conversation `id`: which were in the Inbox, say.
+pub async fn thread_labels(http: &Client, token: &str, id: &str) -> Result<Vec<(String, Vec<String>)>, String> {
+    #[derive(Deserialize)]
+    struct RawThread {
+        #[serde(default)]
+        messages: Vec<Labelled>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Labelled {
+        id: String,
         #[serde(default)]
         label_ids: Vec<String>,
     }
     check_id(id)?;
-    let url = format!("{API}/messages/{id}?format=minimal&fields=labelIds");
-    Ok(get_json::<Labels>(http, token, &url).await?.label_ids)
+    let url = format!("{API}/threads/{id}?format=minimal&fields=messages(id,labelIds)");
+    let thread: RawThread = get_json(http, token, &url).await?;
+    Ok(thread.messages.into_iter().map(|m| (m.id, m.label_ids)).collect())
 }
 
-/// Removes the INBOX label, which is exactly what Gmail's Archive button does.
-pub async fn archive(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    modify(http, token, id, &[], &["INBOX"]).await
+/// Adds and removes labels on every message of conversation `id`: Archive removes INBOX from all
+/// of them, as Gmail's own Archive does.
+pub async fn modify_thread(http: &Client, token: &str, id: &str, add: &[&str], remove: &[&str]) -> Result<(), String> {
+    check_id(id)?;
+    let body = json!({ "addLabelIds": add, "removeLabelIds": remove });
+    send(http.post(format!("{API}/threads/{id}/modify")).bearer_auth(token).json(&body)).await?;
+    Ok(())
 }
 
-/// Adds the INBOX label: undoes Archive, and puts a message restored from Trash back in the Inbox.
-pub async fn move_to_inbox(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    modify(http, token, id, &["INBOX"], &[]).await
+/// Adds and removes labels on messages `ids`, in one call: Undo of Archive puts back in the
+/// Inbox only the messages that were there.
+pub async fn modify_messages(http: &Client, token: &str, ids: &[String], add: &[&str], remove: &[&str]) -> Result<(), String> {
+    for id in ids {
+        check_id(id)?;
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let body = json!({ "ids": ids, "addLabelIds": add, "removeLabelIds": remove });
+    send(http.post(format!("{API}/messages/batchModify")).bearer_auth(token).json(&body)).await?;
+    Ok(())
+}
+
+/// Moves message `id` to Trash: Undo of Move to Inbox puts back there only the messages that were.
+pub async fn trash_message(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/messages/{id}/trash"), id).await
+}
+
+/// Takes message `id` out of Trash: Undo of Delete leaves there the messages that already were.
+pub async fn untrash_message(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/messages/{id}/untrash"), id).await
+}
+
+/// Moves every message of conversation `id` to Trash, like Gmail's Delete button. Gmail purges
+/// Trash after 30 days.
+pub async fn trash_thread(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/threads/{id}/trash"), id).await
+}
+
+/// Takes every message of conversation `id` out of Trash, in one request: for a conversation
+/// whose messages in Trash all leave it.
+pub async fn untrash_thread(http: &Client, token: &str, id: &str) -> Result<(), String> {
+    post_empty(http, token, &format!("{API}/threads/{id}/untrash"), id).await
 }
 
 /// Adds or removes the UNREAD label.
@@ -375,17 +533,6 @@ pub async fn set_unread(http: &Client, token: &str, id: &str, unread: bool) -> R
     } else {
         modify(http, token, id, &[], &["UNREAD"]).await
     }
-}
-
-/// Moves to Trash, like Gmail's Delete button. Gmail purges Trash after 30 days.
-pub async fn trash(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    post_empty(http, token, &format!("{API}/messages/{id}/trash"), id).await
-}
-
-/// Takes a message out of Trash. Gmail doesn't document whether this restores the INBOX
-/// label, so callers that want the message back in the Inbox also call `move_to_inbox`.
-pub async fn untrash(http: &Client, token: &str, id: &str) -> Result<(), String> {
-    post_empty(http, token, &format!("{API}/messages/{id}/untrash"), id).await
 }
 
 async fn post_empty(http: &Client, token: &str, url: &str, id: &str) -> Result<(), String> {
@@ -1215,6 +1362,32 @@ mod tests {
         let numeric: RawMessage = serde_json::from_value(json!({ "id": "1", "internalDate": 1730000000000_i64 })).unwrap();
         assert_eq!(parse_date(numeric.internal_date.as_ref()), 1_730_000_000_000);
         assert!(numeric.label_ids.is_empty() && numeric.snippet.is_empty());
+    }
+
+    #[test]
+    fn reads_a_conversations_messages() {
+        let raw: RawMessage = serde_json::from_value(json!({
+            "id": "18c2f0a9b3e4d5f7",
+            "labelIds": ["UNREAD", "INBOX", "CATEGORY_UPDATES", "IMPORTANT", "Label_12"],
+            "snippet": "Sure &amp; thanks",
+            "internalDate": "1730000000000",
+            "payload": { "headers": [
+                { "name": "From", "value": "Anna <anna@example.com>" },
+                { "name": "To", "value": "me@example.com" },
+                { "name": "Subject", "value": "Re: Report" }
+            ] }
+        }))
+        .unwrap();
+        let m = thread_message(raw);
+        assert_eq!((m.from.as_str(), m.to.as_str(), m.cc.as_str()), ("Anna <anna@example.com>", "me@example.com", ""));
+        assert_eq!(m.snippet, "Sure & thanks");
+        assert_eq!(m.date, 1_730_000_000_000);
+        assert!(m.unread);
+        // Only the labels that say where it is.
+        assert_eq!(m.labels, ["INBOX"]);
+        let sent = thread_message(serde_json::from_value(json!({ "id": "1", "labelIds": ["SENT", "TRASH"] })).unwrap());
+        assert!(!sent.unread);
+        assert_eq!(sent.labels, ["SENT", "TRASH"]);
     }
 
     #[test]
