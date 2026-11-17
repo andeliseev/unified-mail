@@ -16,6 +16,7 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] macOS: scrolling the reader with `Space`, `PageDown` and the arrows after clicking into the email. `scrollMessage` scrolls only if WebKit didn't (80 ms later); Chromium was checked in the browser pane, WebKit not yet. Also wheel and trackpad scrolling over the email, now that the frame itself doesn't scroll
 - [ ] Windows: the file picker (`<input type="file">`) in WebView2, and `Ctrl+Enter`
 - [ ] macOS: the line under the pointer that says where a link goes (WebKit's private `_webView:mouseDidMoveOverElement:withFlags:userInfo:`, see [ui.md](ui.md#sandbox)) and links handed to the page to check (`email-link`). Checked in the browser pane, where the frame's own handlers run as on Windows; not yet in the app on macOS
+- [ ] macOS: the reader with several emails open, each in a frame of its own (conversations): the right-click menu in an email (`onEmailContextMenu` finds the frame by where the click was), keys (`onEmailKey` goes by the frame with the focus), the line that says where a link goes, and each frame's height (`watchHeight`). Checked in the browser pane, where the frames' own handlers run as on Windows; not on macOS at all
 - [ ] macOS: the sign-in hand-over across a real update (see [auth.md](auth.md#macos-keychain)). Checked with two builds of a test program on the login keychain, not yet from one release to the next: the first release with the hand-over still asks once per account, and the update after it shouldn't
 
 ## Gaps in current features
@@ -68,6 +69,14 @@ Nothing here is committed to; it's a list of things noticed while building v0.1.
 - [ ] Conversations: only a folder's newest page asks Gmail which of its conversations changed (`thread_history`). Rows of search results and of older pages keep their copies until the conversation is opened or the page lists a new email of it. And the open conversation only gets emails added after a sync: one deleted elsewhere stays on screen until it's opened again
 - [ ] Conversations: the closed emails' lines show no paperclip; their files show once opened
 - [ ] Conversations: a conversation that moves into or out of Trash in part (`move_trash`) takes a request per message, and a failure midway leaves it half moved until the next sync shows where things are
+- [ ] Conversations: nothing limits how many are fetched again when Gmail lists them with new history ids (`behind`). A change the copy doesn't keep counts too (a star, a category, another app's labels), and many at once mean as many requests at the next sync. A cap per sync would do, or giving up on history ids for the session when the fetches keep bringing nothing new
+- [ ] Conversations: deleting one while an answer to it is being written moves the answer's Gmail draft to Trash with it (`threads.trash`), but the answer stays here, in Drafts, and goes on saving to that draft. It could close with the conversation and come back with Undo
+- [ ] Conversations: the Inbox and the folder on screen sync at once, so both fetch a conversation that changed, and each writes `threads-cache.json` again. One fetch could serve both, and the file could wait for a quiet moment
+- [ ] Conversations: clicking the row of the open conversation, or a notification for it, opens it again from nothing: its emails are fetched again and the reader goes back to the top
+- [ ] Conversations: an email that's a line opens with a click only; the keyboard can't open one
+- [ ] Conversations: a draft with the Inbox's label is taken out of the Inbox's newest page only (`leave_out_drafts`). An older page comes without its conversations, so there it still shows as an email
+- [ ] Conversations: the UI's part (`conversations`, `threadMessages`, `perform`, `relabel`) has no tests. It was checked with a fake Gmail in the browser pane that isn't in the repository; kept in `scripts/`, it would make those checks repeatable
+- [ ] Conversations: two people with the same first name show as "Anna, Anna" in a row (`writers`), and one's own email sent from a Send-as address shows by name, not as "me", until Gmail's copy of the conversation is there
 - [ ] Sending from another Send-as address of the account
 - [ ] Gmail History API (`history.list`) for incremental sync: one call per account instead of three lists per folder, and it would name the conversations that changed
 

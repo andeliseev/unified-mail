@@ -80,6 +80,8 @@ The point of the app is to stay small. Current numbers on Windows x64:
 | `unified-mail.exe` release, with IMAP push | 4.2 MB |
 | `unified-mail.exe` release, with notifications and single instance (+230 KB) | 4.5 MB |
 | `unified-mail.exe` release, with the updater (+196 KB; with its default features it was +1.4 MB) | 4.7 MB |
+| `unified-mail.exe` release, 0.2.12: with writing and sending, drafts in Gmail and the phishing checks | 4.8 MB |
+| `unified-mail.exe` release, with conversations (about +110 KB, no new crate) | 4.9 MB |
 | NSIS installer (`...-setup.exe`) | 1.5 MB |
 | MSI installer | 2.0 MB |
 
