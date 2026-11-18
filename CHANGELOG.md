@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.3.1 (2026-11-18)
+
 - Settings → Startup: Unified Mail can open when you sign in to your computer, so new mail notifies you from the start, and start minimized (on macOS, hidden in the Dock).
 
 ## 0.3.0 (2026-11-17)
