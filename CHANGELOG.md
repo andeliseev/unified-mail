@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+## 0.3.2 (2026-11-18)
+
 - Start minimized is now an option of its own in Settings → Startup, and applies every time Unified Mail starts, not only when it opens at sign-in.
 
 ## 0.3.1 (2026-11-18)
