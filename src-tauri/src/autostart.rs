@@ -1,6 +1,5 @@
-//! Settings → Startup: the system opens the app when the user signs in to the computer. It starts
-//! it with `--autostart` (`ARG`), which is how the app tells that launch from one the user made:
-//! Start minimized applies only to it.
+//! Settings → Startup → Open when you sign in: the system opens the app when the user signs in
+//! to the computer. (Start minimized is a setting of the app's own, in `settings.json`.)
 //!
 //! The entry with the system is the only record of the choice, so turning it off outside the app
 //! (Task Manager's Startup apps on Windows) shows in Settings too.
@@ -11,14 +10,6 @@
 //! - macOS: a launch agent, `~/Library/LaunchAgents/<identifier>.plist`.
 
 use std::path::Path;
-
-/// What the system starts the app with at sign-in.
-pub const ARG: &str = "--autostart";
-
-/// True when the system started the app at sign-in.
-pub fn at_sign_in() -> bool {
-    std::env::args_os().skip(1).any(|arg| arg == ARG)
-}
 
 /// This app's entry with the system.
 pub struct Autostart {
@@ -51,7 +42,7 @@ impl Autostart {
 /// What the system runs: on Windows a command line, on macOS the launch agent.
 #[cfg(not(target_os = "macos"))]
 fn entry(_name: &str, exe: &Path) -> String {
-    format!("\"{}\" {ARG}", exe.display())
+    format!("\"{}\"", exe.display())
 }
 
 #[cfg(target_os = "macos")]
@@ -74,7 +65,6 @@ fn launch_agent(label: &str, exe: &Path) -> String {
 	<key>ProgramArguments</key>
 	<array>
 		<string>{}</string>
-		<string>{ARG}</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -197,7 +187,6 @@ mod tests {
         let plist = launch_agent("com.example.app", Path::new("/Applications/A & B <1>.app/Contents/MacOS/app"));
         assert!(plist.contains("<string>com.example.app</string>"));
         assert!(plist.contains("<string>/Applications/A &amp; B &lt;1&gt;.app/Contents/MacOS/app</string>"));
-        assert!(plist.contains("<string>--autostart</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>\n\t<true/>"));
     }
 
@@ -214,7 +203,7 @@ mod tests {
     #[test]
     fn command_quotes_the_path() {
         let exe = Path::new(r"C:\Users\A B\AppData\Local\Unified Mail\unified-mail.exe");
-        assert_eq!(entry("Unified Mail", exe), r#""C:\Users\A B\AppData\Local\Unified Mail\unified-mail.exe" --autostart"#);
+        assert_eq!(entry("Unified Mail", exe), r#""C:\Users\A B\AppData\Local\Unified Mail\unified-mail.exe""#);
     }
 
     /// Against keys of its own under HKCU\Software, not the real Run key.
@@ -230,9 +219,9 @@ mod tests {
         assert!(!is_on_in(&run, &approved, name));
         remove_in(&run, &approved, name).unwrap(); // nothing there: fine
 
-        write_in(&run, &approved, name, "\"app.exe\" --autostart").unwrap();
+        write_in(&run, &approved, name, "\"app.exe\"").unwrap();
         assert!(is_on_in(&run, &approved, name));
-        assert_eq!(CURRENT_USER.open(&run).unwrap().get_string(name).unwrap(), "\"app.exe\" --autostart");
+        assert_eq!(CURRENT_USER.open(&run).unwrap().get_string(name).unwrap(), "\"app.exe\"");
 
         // Task Manager turns it off, then on.
         let task_manager = CURRENT_USER.create(&approved).unwrap();
@@ -243,7 +232,7 @@ mod tests {
 
         // Turned on in the app after Task Manager turned it off: on everywhere.
         task_manager.set_bytes(name, Type::Bytes, &[3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-        write_in(&run, &approved, name, "\"app.exe\" --autostart").unwrap();
+        write_in(&run, &approved, name, "\"app.exe\"").unwrap();
         assert!(is_on_in(&run, &approved, name));
         assert!(task_manager.get_value(name).is_err());
 

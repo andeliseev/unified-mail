@@ -30,7 +30,7 @@ flowchart LR
 
 | Module | Responsibility |
 | --- | --- |
-| `main.rs` | Tauri setup (it creates the window, in the saved theme, and minimized when opened at sign-in with Start minimized), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
+| `main.rs` | Tauri setup (it creates the window, in the saved theme, and minimized with Start minimized), command handlers, starting push watchers at launch, notifications and the icon badge, and on macOS keeping the app running when the window is closed |
 | `state.rs` | `AppState`: OAuth client, account list, access-token cache, folder and conversation caches, file persistence, and on macOS handing the sign-ins over to an update |
 | `keychain.rs` | Sign-ins in the system keychain: the macOS keychain through the Security framework, saving each as a new item so updates read it without asking, and Windows Credential Manager through `keyring` (see [auth.md](auth.md#macos-keychain)) |
 | `gmail.rs` | Gmail REST calls (list, metadata, conversations, full message, archive, trash, mark read/unread, attachments, send, drafts), MIME body selection and the list of attachments |
@@ -38,7 +38,7 @@ flowchart LR
 | `files.rs` | Saving attachments: safe file names (no characters that hide the extension), never replacing a file, marking files as coming from email, showing them in Finder or File Explorer (see [ui.md](ui.md#attachments)) |
 | `oauth.rs` | Installed-app OAuth: system browser, loopback redirect, PKCE, token exchange, refresh |
 | `idle.rs` | One long-lived IMAP IDLE connection per account; emits `mail-changed` |
-| `autostart.rs` | Opening at sign-in: the Run value on Windows, a launch agent on macOS, and whether this launch came from it (see [Opening at sign-in](#opening-at-sign-in)) |
+| `autostart.rs` | Opening at sign-in: the Run value on Windows, a launch agent on macOS (see [Opening at sign-in](#opening-at-sign-in)) |
 | `macos.rs` | macOS only: passes links clicked in the email, the link under the pointer, right-clicks and keys in it on to the page, since WebKit doesn't run the page's handlers in the sandboxed frame (see [ui.md](ui.md#sandbox)). Tells the page when the window enters or leaves full screen (see [ui.md](ui.md#title-bar)). Gives saved attachments macOS's quarantine mark (see [ui.md](ui.md#attachments)). After an update, opens the app again once the old copy has quit (see [development.md](development.md#updates)) |
 | `build.rs` | Embeds the Google OAuth client at compile time (see [auth.md](auth.md)) |
 
@@ -120,13 +120,13 @@ The page hands `send_message` (and `save_draft`) a draft: `account`, `to`/`cc`/`
 
 ## Opening at sign-in
 
-Settings → Startup (`autostart.rs`). The system starts the app with `--autostart` when the user signs in. That argument is how the app tells this launch from one the user made, and Start minimized applies only to it.
+Settings → Startup has two separate options: Open when you sign in, an entry with the system (`autostart.rs`), and Start minimized, a setting of the app's own.
 
-- **Windows:** a string value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, `"<path>\unified-mail.exe" --autostart`, written through `windows-registry`, which reqwest's proxy lookup already builds. The value is named after the main window's title: in the app that's "Unified Mail", the product name, which the `.exe` installer's uninstaller removes from Run (Tauri's NSIS template does, though not on updates; the `.msi` leaves it). A unit test keeps the title and the product name the same. The test app's is "Unified Mail (test)", so it never replaces the installed app's entry.
+- **Windows:** a string value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, `"<path>\unified-mail.exe"`, written through `windows-registry`, which reqwest's proxy lookup already builds. The value is named after the main window's title: in the app that's "Unified Mail", the product name, which the `.exe` installer's uninstaller removes from Run (Tauri's NSIS template does, though not on updates; the `.msi` leaves it). A unit test keeps the title and the product name the same. The test app's is "Unified Mail (test)", so it never replaces the installed app's entry.
 - Task Manager's Startup apps turn an entry off without removing it, with a value of the same name in `…\Explorer\StartupApproved\Run` whose first byte is odd. The app counts that as off, and turning it on in Settings removes that mark.
-- **macOS:** a launch agent, `~/Library/LaunchAgents/<identifier>.plist`, that runs the app's executable with `--autostart` once at login (`RunAtLoad`; `ProcessType` `Interactive`, so launchd doesn't hold it back as a background job). macOS 13 and later says "Background Items Added" when it appears, and lists it in System Settings → General → Login Items, where turning it off isn't seen by the app (see [todo.md](todo.md)).
+- **macOS:** a launch agent, `~/Library/LaunchAgents/<identifier>.plist`, that runs the app's executable once at login (`RunAtLoad`; `ProcessType` `Interactive`, so launchd doesn't hold it back as a background job). macOS 13 and later says "Background Items Added" when it appears, and lists it in System Settings → General → Login Items, where turning it off isn't seen by the app (see [todo.md](todo.md)).
 - The entry is the only record of the choice: `get_autostart` reads it, so Settings shows what the system will do.
-- **Start minimized** (`start_minimized` in `settings.json`): when it's on and the app was started with `--autostart`, `main.rs` builds the window hidden. On macOS it stays hidden, the app in the Dock, as a login item's Hide does, and clicking the Dock icon shows it (`RunEvent::Reopen`). On Windows, where closing the window quits and there's no tray icon, it's then minimized while hidden and shown, so it appears on the taskbar only, without the window flashing up or taking the focus. Push runs as for a window minimized by hand.
+- **Start minimized** (`start_minimized` in `settings.json`): when it's on, `main.rs` builds the window hidden at every launch, at sign-in, opened by hand, and restarted after an update alike. A second launch while the app runs still brings the window forward. On macOS it stays hidden, the app in the Dock, as a login item's Hide does, and clicking the Dock icon shows it (`RunEvent::Reopen`). On Windows, where closing the window quits and there's no tray icon, it's then minimized while hidden and shown, so it appears on the taskbar only, without the window flashing up or taking the focus. Push runs as for a window minimized by hand.
 
 ## Storage
 

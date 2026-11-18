@@ -470,7 +470,7 @@ fn set_autostart(autostart: State<'_, Autostart>, on: bool) -> Result<(), String
     autostart.set(on)
 }
 
-/// Settings → Startup → Start minimized, for when the system opens the app at sign-in.
+/// Settings → Startup → Start minimized: every launch, the window starts minimized (hidden on macOS).
 #[tauri::command]
 fn set_start_minimized(state: State<'_, AppState>, on: bool) -> Result<(), String> {
     state.save_start_minimized(on)
@@ -544,13 +544,12 @@ fn main() {
             // title bar on Windows.
             let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("No main window in tauri.conf.json")?;
             app.manage(Autostart::new(&config.title, &app.config().identifier));
-            // Opened by the system at sign-in, with Start minimized: the window starts hidden. On
-            // macOS it stays hidden, the app in the Dock, as a login item's Hide does. Elsewhere
-            // it's minimized to the taskbar below, since there's no tray icon to bring it back.
-            let minimized = start_minimized && autostart::at_sign_in();
+            // Start minimized, however the app was opened: the window starts hidden. On macOS it
+            // stays hidden, the app in the Dock, as a login item's Hide does. Elsewhere it's
+            // minimized to the taskbar below, since there's no tray icon to bring it back.
             let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
                 .theme(window_theme(theme))
-                .visible(config.visible && !minimized);
+                .visible(config.visible && !start_minimized);
             // The UI draws its own title bar, so the app's name appears once, in the sidebar
             // (docs/ui.md#title-bar). On Windows the window has no system title bar, and the UI
             // also draws the window buttons. Tauri keeps resizing at the edges.
@@ -580,7 +579,7 @@ fn main() {
             // Minimized while hidden, then shown: it appears on the taskbar only, without the
             // window flashing up first.
             #[cfg(not(target_os = "macos"))]
-            if minimized {
+            if start_minimized {
                 let _ = window.minimize();
                 let _ = window.show();
             }

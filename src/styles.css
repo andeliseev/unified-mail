@@ -693,13 +693,11 @@ input {
   padding: 8px 10px;
 }
 input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-/* A checkbox and its text on one line (Settings → Startup); `.sub` depends on the one above. */
+/* A checkbox and its text on one line (Settings → Startup). */
 label.check { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 400; font-size: inherit; width: fit-content; }
 label.check input { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: var(--accent); }
 label.check input:focus { outline: none; }
 label.check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-label.check.sub { margin-left: 23px; }
-label.check:has(input:disabled) { color: var(--muted); }
 .form-row { display: flex; align-items: center; gap: 12px; }
 
 #account-list { list-style: none; padding: 0; margin: 0 0 12px; }

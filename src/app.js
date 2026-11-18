@@ -167,7 +167,7 @@ const state = {
   configured: false,
   theme: 'system',       // Settings → Appearance: system, light or dark
   autostart: false,      // Settings → Startup: the system opens the app at sign-in
-  startMinimized: false, // and then the window starts minimized (hidden on macOS)
+  startMinimized: false, // Settings → Startup: every launch, the window starts minimized (hidden on macOS)
   full: null,            // the open conversation's last email in full, once loaded: what Reply answers
   originalColors: false, // dark mode: show the open emails in their original light colors
   accounts: [],
@@ -4003,11 +4003,9 @@ async function setStartMinimized(on) {
   renderStartup();
 }
 
-/** Start minimized only applies when the system opens the app, so it waits for that. */
 function renderStartup() {
   $('#autostart').checked = state.autostart;
   $('#start-minimized').checked = state.startMinimized;
-  $('#start-minimized').disabled = !state.autostart;
 }
 
 function renderSettingsAccounts() {

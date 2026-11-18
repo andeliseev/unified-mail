@@ -78,8 +78,8 @@ pub struct Setup {
     pub theme: Theme,
     /// The message list's width in px, set by dragging its edge; None for the default.
     pub list_width: Option<u32>,
-    /// Settings → Startup → Start minimized: when the system opens the app at sign-in, the window
-    /// starts minimized (hidden on macOS).
+    /// Settings → Startup → Start minimized: every launch, the window starts minimized (hidden on
+    /// macOS).
     pub start_minimized: bool,
 }
 
