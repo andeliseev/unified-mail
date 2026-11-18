@@ -45,6 +45,11 @@ security-framework = "3"
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 
+# Opening at sign-in, a value in the Run key (autostart.rs). reqwest's system-proxy already
+# builds this crate to read the proxy settings, so it adds no new code.
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+
 # Size-focused release build: https://v2.tauri.app/concept/size/
 [profile.release]
 codegen-units = 1

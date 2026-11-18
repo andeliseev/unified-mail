@@ -1,7 +1,8 @@
 //! Accounts, tokens and the per-folder message caches.
 //!
 //! Files in the app data dir: `client.json` (OAuth client), `accounts.json` (emails),
-//! `settings.json` (appearance), `<folder>-cache.json` (last snapshot of each folder).
+//! `settings.json` (appearance, list width, start minimized), `<folder>-cache.json` (last snapshot
+//! of each folder).
 //! Refresh tokens live in the OS keychain (keychain.rs). On macOS an update passes them to the
 //! new version in `sign-ins-for-update.json`, for a moment (`AppState::hand_over_sign_ins`).
 
@@ -77,6 +78,9 @@ pub struct Setup {
     pub theme: Theme,
     /// The message list's width in px, set by dragging its edge; None for the default.
     pub list_width: Option<u32>,
+    /// Settings → Startup → Start minimized: when the system opens the app at sign-in, the window
+    /// starts minimized (hidden on macOS).
+    pub start_minimized: bool,
 }
 
 /// Settings → Appearance.
@@ -96,6 +100,7 @@ pub enum Theme {
 struct Settings {
     theme: Theme,
     list_width: Option<u32>,
+    start_minimized: bool,
 }
 
 /// A mail list the app shows, unified across accounts.
@@ -406,6 +411,7 @@ impl AppState {
             accounts: self.accounts.lock().unwrap().clone(),
             theme: settings.theme,
             list_width: settings.list_width,
+            start_minimized: settings.start_minimized,
         }
     }
 
@@ -418,6 +424,12 @@ impl AppState {
     pub fn save_list_width(&self, width: Option<u32>) -> Result<(), String> {
         let mut settings = self.settings.lock().unwrap();
         settings.list_width = width;
+        write_json(&self.dir.join(SETTINGS_FILE), &*settings)
+    }
+
+    pub fn save_start_minimized(&self, on: bool) -> Result<(), String> {
+        let mut settings = self.settings.lock().unwrap();
+        settings.start_minimized = on;
         write_json(&self.dir.join(SETTINGS_FILE), &*settings)
     }
 

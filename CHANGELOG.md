@@ -4,6 +4,8 @@ What changed in each version of Unified Mail. The newest is at the top; each rel
 
 ## Unreleased
 
+- Settings → Startup: Unified Mail can open when you sign in to your computer, so new mail notifies you from the start, and start minimized (on macOS, hidden in the Dock).
+
 ## 0.3.0 (2026-11-17)
 
 - Conversations, as in Gmail: an email and the answers to it are now one row in the list, saying who wrote them and how many emails there are ("Anna, me 3"). Opening it shows the whole conversation, your own replies included: earlier emails as a line each (click one to read it), the newest and the unread ones in full. An answer you send appears in it, and so does one that arrives while you read.

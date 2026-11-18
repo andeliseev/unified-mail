@@ -1,6 +1,7 @@
 // Hide the console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod files;
 mod gmail;
 mod idle;
@@ -11,6 +12,7 @@ mod mime;
 mod oauth;
 mod state;
 
+use autostart::Autostart;
 use gmail::{FullMessage, MessageSummary};
 use state::{AppState, ClientCreds, Draft, Folder, FolderResult, OlderPage, PutBack, Setup, Theme, ThreadMoved};
 use futures_util::future::{AbortHandle, Abortable};
@@ -456,6 +458,24 @@ fn set_theme(window: WebviewWindow, state: State<'_, AppState>, theme: Theme) ->
     state.save_theme(theme)
 }
 
+/// Settings → Startup: whether the system opens the app at sign-in. Asked every time Settings
+/// opens, since it can also be turned off outside the app.
+#[tauri::command]
+fn get_autostart(autostart: State<'_, Autostart>) -> bool {
+    autostart.is_on()
+}
+
+#[tauri::command]
+fn set_autostart(autostart: State<'_, Autostart>, on: bool) -> Result<(), String> {
+    autostart.set(on)
+}
+
+/// Settings → Startup → Start minimized, for when the system opens the app at sign-in.
+#[tauri::command]
+fn set_start_minimized(state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    state.save_start_minimized(on)
+}
+
 /// None follows the system.
 fn window_theme(theme: Theme) -> Option<tauri::Theme> {
     match theme {
@@ -518,12 +538,19 @@ fn main() {
             // or the webview starts, move what that identifier left.
             state::move_earlier_data(&app.config().identifier, &dir, &webview_dirs(app));
             let state = AppState::load(dir);
-            let Setup { accounts, theme, .. } = state.setup();
+            let Setup { accounts, theme, start_minimized, .. } = state.setup();
             // The window is created here, not from tauri.conf.json ("create": false), so it starts
             // in the chosen theme. Setting a theme on a window that already exists misses its
             // title bar on Windows.
             let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("No main window in tauri.conf.json")?;
-            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.theme(window_theme(theme));
+            app.manage(Autostart::new(&config.title, &app.config().identifier));
+            // Opened by the system at sign-in, with Start minimized: the window starts hidden. On
+            // macOS it stays hidden, the app in the Dock, as a login item's Hide does. Elsewhere
+            // it's minimized to the taskbar below, since there's no tray icon to bring it back.
+            let minimized = start_minimized && autostart::at_sign_in();
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                .theme(window_theme(theme))
+                .visible(config.visible && !minimized);
             // The UI draws its own title bar, so the app's name appears once, in the sidebar
             // (docs/ui.md#title-bar). On Windows the window has no system title bar, and the UI
             // also draws the window buttons. Tauri keeps resizing at the edges.
@@ -550,8 +577,13 @@ fn main() {
             // macOS: right-clicks and keys in the email reach the page (macos.rs).
             #[cfg(target_os = "macos")]
             macos::install(&window);
+            // Minimized while hidden, then shown: it appears on the taskbar only, without the
+            // window flashing up first.
             #[cfg(not(target_os = "macos"))]
-            let _ = window;
+            if minimized {
+                let _ = window.minimize();
+                let _ = window.show();
+            }
             app.manage(state);
             app.manage(idle::Watchers::default());
             for account in &accounts {
@@ -604,6 +636,9 @@ fn main() {
             install_update,
             set_theme,
             set_list_width,
+            get_autostart,
+            set_autostart,
+            set_start_minimized,
             open_external,
         ])
         .build(tauri::generate_context!())

@@ -166,6 +166,8 @@ const state = {
   builtInClient: false,  // OAuth client compiled into the app; Settings hides that section
   configured: false,
   theme: 'system',       // Settings → Appearance: system, light or dark
+  autostart: false,      // Settings → Startup: the system opens the app at sign-in
+  startMinimized: false, // and then the window starts minimized (hidden on macOS)
   full: null,            // the open conversation's last email in full, once loaded: what Reply answers
   originalColors: false, // dark mode: show the open emails in their original light colors
   accounts: [],
@@ -421,8 +423,10 @@ async function init() {
   state.configured = setup.builtInClient || Boolean(setup.clientId);
   state.accounts = setup.accounts;
   state.theme = setup.theme;
+  state.startMinimized = setup.startMinimized;
   setListWidth(setup.listWidth);
   renderTheme();
+  loadAutostart();
   $('#client-section').hidden = setup.builtInClient;
   $('#client-id').value = setup.clientId || '';
   getVersion().then((version) => { $('#app-version').textContent = version; });
@@ -625,6 +629,12 @@ function bindEvents() {
   for (const button of document.querySelectorAll('#theme button')) {
     button.addEventListener('click', () => setTheme(button.dataset.theme));
   }
+  if (IS_MAC) {
+    $('#autostart-label').textContent = 'Open at login';
+    $('#start-minimized-label').textContent = 'Start hidden, in the Dock';
+  }
+  $('#autostart').addEventListener('change', (e) => setAutostart(e.target.checked));
+  $('#start-minimized').addEventListener('change', (e) => setStartMinimized(e.target.checked));
   $('#client-form').addEventListener('submit', saveClient);
   $('#client-id').addEventListener('paste', pasteClientJson);
 
@@ -3938,6 +3948,7 @@ function openSettings() {
   $('#close-settings').hidden = !state.configured;
   $('#client-secret').placeholder = state.configured ? 'Saved (enter again to change)' : 'GOCSPX-…';
   renderSettingsAccounts();
+  loadAutostart();
   if (!state.configured) $('#client-id').focus();
 }
 
@@ -3964,6 +3975,39 @@ function renderTheme() {
   for (const button of document.querySelectorAll('#theme button')) {
     button.setAttribute('aria-checked', String(button.dataset.theme === state.theme));
   }
+}
+
+/** Asks the system, every time Settings opens: it can also be turned off outside the app. */
+async function loadAutostart() {
+  state.autostart = await invoke('get_autostart');
+  renderStartup();
+}
+
+async function setAutostart(on) {
+  try {
+    await invoke('set_autostart', { on });
+    state.autostart = on;
+  } catch (e) {
+    toast(String(e));
+  }
+  renderStartup();
+}
+
+async function setStartMinimized(on) {
+  try {
+    await invoke('set_start_minimized', { on });
+    state.startMinimized = on;
+  } catch (e) {
+    toast(String(e));
+  }
+  renderStartup();
+}
+
+/** Start minimized only applies when the system opens the app, so it waits for that. */
+function renderStartup() {
+  $('#autostart').checked = state.autostart;
+  $('#start-minimized').checked = state.startMinimized;
+  $('#start-minimized').disabled = !state.autostart;
 }
 
 function renderSettingsAccounts() {

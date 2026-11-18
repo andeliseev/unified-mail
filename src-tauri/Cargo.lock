@@ -4659,6 +4659,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "url",
+ "windows-registry",
 ]
 
 [[package]]

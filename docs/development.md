@@ -82,6 +82,7 @@ The point of the app is to stay small. Current numbers on Windows x64:
 | `unified-mail.exe` release, with the updater (+196 KB; with its default features it was +1.4 MB) | 4.7 MB |
 | `unified-mail.exe` release, 0.2.12: with writing and sending, drafts in Gmail and the phishing checks | 4.8 MB |
 | `unified-mail.exe` release, with conversations (about +110 KB, no new crate) | 4.9 MB |
+| `unified-mail.exe` release, with opening at sign-in (+9 KB; `windows-registry` was already built for the proxy settings) | 4.9 MB |
 | NSIS installer (`...-setup.exe`) | 1.5 MB |
 | MSI installer | 2.0 MB |
 
@@ -289,6 +290,7 @@ To test in the **real WebView2**, including the release CSP, without touching yo
 - [ ] With the app in the background, send mail to a test account: a notification with a sound (Windows: the Mail sound; macOS: the default notification sound); clicking it brings the window forward and opens the message. With the app in front: no notification
 - [ ] The taskbar / Dock icon shows the unread count, and it clears when everything is read
 - [ ] Launch the app a second time: the open window comes forward, and no second copy starts
+- [ ] Settings → Startup: turn on **Open when you sign in**, sign out of Windows and back in (macOS: log out and in): the app opens. With **Start minimized** on it's only on the taskbar (macOS: in the Dock, with no window, and a click on the Dock icon shows it), and new mail to a test account still notifies. Opening the app yourself always shows the window. Turn it off in Task Manager's Startup apps: Settings shows it off; on again in Settings: Task Manager shows it enabled. Turning it off removes the entry (`Unified Mail` in `HKCU\…\Run`; macOS: the plist in `~/Library/LaunchAgents`)
 - [ ] macOS: no grey title bar; the window buttons sit above the sidebar's name, on one line with the list header and the message's buttons, with no empty strip above those. The window drags by the sidebar's top, the list header and the empty part of the message's button row, also on the first click while another app is in front; a double-click there zooms. The top half of each button there clicks too
 - [ ] macOS: close the window (`Cmd+W`): the app stays in the Dock, and mail sent to a test account still notifies. Clicking the Dock icon brings the window back, and `Cmd+Q` quits. The same with the window in full screen
 - [ ] With an older release open, publish a newer one: opening Settings shows the orange **Update to X**, and the Settings button gets a dot; clicking it updates without installer pages, restarts the app, and keeps accounts

@@ -366,6 +366,10 @@ Clicking a notification while it's on screen brings the window forward and sends
   - The window's theme decides the macOS title bar and what the page's `prefers-color-scheme` reports. On Windows Tauri passes it on to WebView2; on macOS the page follows the window. So the CSS dark palette follows it as is.
   - At launch Rust creates the window itself, already in the saved theme (`"create": false` in the config). A theme set on a window that already exists reaches the page but not the Windows title bar. That was the reason; since the app draws its own title bar on Windows, it also builds the window without one there (see [Title bar](#title-bar)).
   - The email frame stays white either way.
+- **Startup:** **Open when you sign in to Windows** (macOS: **Open at login**, wording set in `bindEvents`) and under it **Start minimized** (macOS: **Start hidden, in the Dock**), greyed out while the first is off, since it only applies to that launch.
+  - `get_autostart` asks the system once at launch and every time Settings opens (`loadAutostart`): the entry can also be turned off outside the app, in Task Manager's Startup apps.
+  - `set_autostart` adds or removes the entry; `set_start_minimized` saves the other box in `settings.json`. A failure shows a toast and the box goes back (`renderStartup`).
+  - How the entry and the minimized start work: [architecture.md](architecture.md#opening-at-sign-in).
 
 - With a built-in client, the OAuth section is hidden. First run shows the empty list with an **Add Gmail account** button.
 - Without one, Settings opens on first run and can't be closed until a client is saved. Pasting the downloaded client JSON into the Client ID field fills both fields.
